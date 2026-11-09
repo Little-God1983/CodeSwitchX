@@ -1099,24 +1099,26 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// </summary>
     public static string? DroppedWorkspacePath(IReadOnlyList<string>? paths) => paths is [var path] && WorkspaceProbe.LooksProbeable(path) ? path : null;
 
-    /// <summary>The panel a click on a pill opens with every open item of its kind; null when closed. Another pill replaces it.</summary>
-    [ObservableProperty] private GitHubListViewModel? _gitHubList;
+    /// <summary>The panel a repository line or a pill opens with the repository's open pull requests and issues; null when closed. Another opening replaces it.</summary>
+    [ObservableProperty] private GitHubPanelViewModel? _gitHubPanel;
 
-    /// <summary>A click on a pill opens the repository's full list over the Yard. Without the readers (tests, no gh) it does nothing.</summary>
+    /// <summary>A click on a pill opens the repository's panel over the Yard, on that pill's tab. Without the readers (tests, no gh) it does nothing.</summary>
     [RelayCommand]
-    private void OpenGitHubList(GitHubPill pill)
+    private void OpenGitHubList(GitHubPill pill) => OpenPanel(pill.Activity, pill.Kind);
+
+    private void OpenPanel(RepoActivity activity, GitHubItemKind kind)
     {
         if (_gitHub is null || _gitHubReader is null || _gitHubBrowsers is null)
         {
             return;
         }
 
-        GitHubList?.CloseCommand.Execute(null);
-        var list = new GitHubListViewModel(pill, _gitHubReader, _gitHub, _gitHubBrowsers, _clipboard, _ui, _time, _logger,
-            closed => { if (ReferenceEquals(GitHubList, closed)) { GitHubList = null; } });
-        GitHubList = list;
+        GitHubPanel?.CloseCommand.Execute(null);
+        var panel = new GitHubPanelViewModel(activity, kind, _gitHubReader, _gitHub, _gitHubBrowsers, _clipboard, _ui, _time, _logger,
+            closed => { if (ReferenceEquals(GitHubPanel, closed)) { GitHubPanel = null; } });
+        GitHubPanel = panel;
         // Not on the UI thread: the load starts its first gh before its first await.
-        _ = Task.Run(() => list.LoadAsync(_gitHubStop.Token));
+        _ = Task.Run(() => panel.LoadAsync(_gitHubStop.Token));
     }
 
     /// <summary>A refresh the button asked for is running.</summary>
@@ -1388,6 +1390,6 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
         _subscriptions.Clear();
         // Last: it runs the UI's close logic, and a subscriber that throws there must not skip the cleanup above.
-        GitHubList?.CloseCommand.Execute(null);
+        GitHubPanel?.CloseCommand.Execute(null);
     }
 }

@@ -528,7 +528,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         // with old rows, and Settings can change the browser it names. It is opened again from a pill.
         if (newValue != ShellMode.Yard)
         {
-            Yard.GitHubList?.CloseCommand.Execute(null);
+            Yard.GitHubPanel?.CloseCommand.Execute(null);
         }
 
         if (oldValue == ShellMode.Settings && newValue != ShellMode.Settings)

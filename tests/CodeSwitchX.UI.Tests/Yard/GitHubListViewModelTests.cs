@@ -32,7 +32,7 @@ public class GitHubListViewModelTests
     private readonly FakeGh _gh = new();
     private readonly FakeClipboard _clipboard = new();
     private readonly List<ProcessStartInfo> _started = [];
-    private readonly List<GitHubListViewModel> _closedLists = [];
+    private readonly List<GitHubPanelViewModel> _closedLists = [];
     private Func<ProcessStartInfo, bool> _start;
 
     private sealed class FakeGh : IGhCli
@@ -62,6 +62,9 @@ public class GitHubListViewModelTests
 
         public int ListThread { get; private set; }
 
+        /// <summary>The kind of each list read, in the order they reached gh: "issue" or "pr".</summary>
+        public List<string> Asked { get; } = [];
+
         /// <summary>The token the last list read was given.</summary>
         public CancellationToken ListToken { get; private set; }
 
@@ -76,6 +79,11 @@ public class GitHubListViewModelTests
             if (arguments[0] == "api")
             {
                 return Task.FromResult<string?>(Graphql);
+            }
+
+            lock (Asked)
+            {
+                Asked.Add(arguments[0]);
             }
 
             ListThread = Environment.CurrentManagedThreadId;
@@ -93,6 +101,19 @@ public class GitHubListViewModelTests
     private static string ListOf(int count) => "[" + string.Join(",", Enumerable.Range(1, count).Select(n =>
         $$"""{"number":{{n}},"title":"Item {{n}}","url":"https://github.com/acme/app/issues/{{n}}","updatedAt":"2026-09-23T06:00:00Z","labels":[]}""")) + "]";
 
+    private static string PullRequestsOf(int count) => "[" + string.Join(",", Enumerable.Range(1, count).Select(n =>
+        $$$"""{"number":{{{n}}},"title":"Pull {{{n}}}","url":"https://github.com/acme/app/pull/{{{n}}}","updatedAt":"2026-09-23T06:00:00Z","labels":[],"headRefName":"b{{{n}}}","author":{"login":"me"}}""")) + "]";
+
+    private static async Task Eventually(Func<bool> condition)
+    {
+        var until = DateTime.UtcNow.AddSeconds(10);
+        while (!condition())
+        {
+            DateTime.UtcNow.ShouldBeLessThan(until, "the condition never came true");
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+    }
+
     private GitHubBrowsers Browsers(Func<ProcessStartInfo, bool>? start = null) =>
         new(new BrowserCatalog(new FakeSource()), Substitute.For<ISettingsStore>(), start ?? (info => _start(info)), NullLogger<GitHubBrowsers>.Instance);
 
@@ -105,14 +126,15 @@ public class GitHubListViewModelTests
         return (activity, new GitHubPill(activity.ForFolder("app")!, kind));
     }
 
-    private GitHubListViewModel List(GitHubActivity activity, GitHubPill pill, GitHubBrowsers? browsers = null) =>
-        new(pill, new GitHubReader(_gh), activity, browsers ?? Browsers(), _clipboard, new ImmediateDispatcher(), _time, NullLogger.Instance, _closedLists.Add);
+    private GitHubPanelViewModel Open(GitHubActivity activity, GitHubPill pill, GitHubBrowsers? browsers = null) =>
+        new(pill.Activity, pill.Kind, new GitHubReader(_gh), activity, browsers ?? Browsers(), _clipboard, new ImmediateDispatcher(), _time, NullLogger.Instance, _closedLists.Add);
 
     [Fact]
     public async Task Opening_shows_last_known_rows_at_once_then_the_fresh_list()
     {
         var (activity, pill) = await PillAsync();
-        var list = List(activity, pill);
+        var model = Open(activity, pill);
+        var list = model.Shown;
 
         list.Rows.Select(r => r.NumberText).ShouldBe(["#1"]);
 
@@ -127,16 +149,191 @@ public class GitHubListViewModelTests
     }
 
     [Fact]
-    public async Task Heading_names_the_repo_and_count()
+    public async Task Heading_names_the_repo()
     {
         var (activity, pill) = await PillAsync();
+
+        Open(activity, pill).Heading.ShouldBe("app");
+    }
+
+    [Fact]
+    public async Task A_pill_opens_its_own_tab()
+    {
+        var (activity, pill) = await PillAsync();
+
+        var model = Open(activity, new GitHubPill(pill.Activity, GitHubItemKind.PullRequest));
+
+        model.Shown.ShouldBeSameAs(model.PullRequests);
+        model.IsPullRequestsShown.ShouldBeTrue();
+        Open(activity, pill).Shown.Kind.ShouldBe(GitHubItemKind.Issue);
+    }
+
+    [Fact]
+    public async Task The_default_tab_is_pull_requests_when_any_are_open_else_issues()
+    {
+        var (_, pill) = await PillAsync();
+
+        GitHubPanelViewModel.DefaultKind(pill.Activity).ShouldBe(GitHubItemKind.PullRequest);
+        GitHubPanelViewModel.DefaultKind(pill.Activity with { OpenPullRequests = 0 }).ShouldBe(GitHubItemKind.Issue);
+    }
+
+    [Fact]
+    public async Task Tabs_name_their_kind_and_count()
+    {
+        var (activity, pill) = await PillAsync();
+        var model = Open(activity, pill);
+        model.PullRequests.TabText.ShouldBe("Pull requests 1");
+        model.Issues.TabText.ShouldBe("Issues 12");
         _gh.List.SetResult(ListOf(19));
 
-        var issues = List(activity, pill);
-        await issues.LoadAsync(TestContext.Current.CancellationToken);
+        await model.Issues.LoadAsync(TestContext.Current.CancellationToken);
 
-        List(activity, new GitHubPill(pill.Activity, GitHubItemKind.PullRequest)).Heading.ShouldBe("app: 1 open pull request");
-        issues.Heading.ShouldBe("app: 19 open issues");
+        model.Issues.TabText.ShouldBe("Issues 19");
+    }
+
+    [Fact]
+    public async Task Show_switches_the_shown_list()
+    {
+        var (activity, pill) = await PillAsync();
+        var model = Open(activity, new GitHubPill(pill.Activity, GitHubItemKind.PullRequest));
+
+        model.ShowCommand.Execute(GitHubItemKind.Issue);
+
+        model.Shown.ShouldBeSameAs(model.Issues);
+        model.IsPullRequestsShown.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task The_shown_kind_is_read_first_then_the_other()
+    {
+        var (activity, pill) = await PillAsync();
+        var model = Open(activity, pill);
+        var load = model.LoadAsync(TestContext.Current.CancellationToken);
+        _gh.Asked.ShouldBe(["issue"], "the other list waits for the shown one");
+
+        _gh.List.SetResult(ListOf(3));
+        _gh.PullRequestList.SetResult(PullRequestsOf(2));
+        await load;
+
+        _gh.Asked.ShouldBe(["issue", "pr"]);
+    }
+
+    [Fact]
+    public async Task Both_reads_update_the_tile()
+    {
+        var (activity, pill) = await PillAsync();
+        var model = Open(activity, pill);
+        _gh.List.SetResult(ListOf(4));
+        _gh.PullRequestList.SetResult(PullRequestsOf(2));
+
+        await model.LoadAsync(TestContext.Current.CancellationToken);
+
+        activity.ForFolder("app")!.OpenIssues.ShouldBe(4);
+        activity.ForFolder("app")!.OpenPullRequests.ShouldBe(2);
+        model.PullRequests.TabText.ShouldBe("Pull requests 2");
+    }
+
+    [Fact]
+    public async Task A_failed_second_read_only_marks_its_own_tab()
+    {
+        var (activity, pill) = await PillAsync();
+        var model = Open(activity, pill);
+        _gh.List.SetResult(ListOf(3));
+        _gh.PullRequestList.SetResult(null);
+
+        await model.LoadAsync(TestContext.Current.CancellationToken);
+
+        model.Issues.LoadMessage.ShouldBeNull();
+        model.PullRequests.LoadMessage.ShouldBe("Couldn't load the latest list. Showing what was last read.");
+    }
+
+    [Fact]
+    public async Task Closing_during_the_second_read_cancels_it_and_changes_nothing()
+    {
+        var (activity, pill) = await PillAsync();
+        var model = Open(activity, pill);
+        var load = model.LoadAsync(TestContext.Current.CancellationToken);
+        _gh.List.SetResult(ListOf(3));
+        await Eventually(() => _gh.Asked.Count == 2);
+
+        model.CloseCommand.Execute(null);
+        _gh.ListToken.IsCancellationRequested.ShouldBeTrue();
+        _gh.PullRequestList.SetResult(PullRequestsOf(5)); // an answer that was already on its way
+        await load;
+
+        model.PullRequests.Rows.Count.ShouldBe(1);
+        activity.ForFolder("app")!.OpenPullRequests.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task The_arrow_opens_all_pull_requests_or_issues_on_github()
+    {
+        var (activity, pill) = await PillAsync();
+        var model = Open(activity, pill);
+
+        model.OpenOnGitHubCommand.Execute(GitHubItemKind.PullRequest);
+        model.OpenOnGitHubCommand.Execute(GitHubItemKind.Issue);
+
+        _started.Select(s => s.FileName).ShouldBe(["https://github.com/acme/app/pulls", "https://github.com/acme/app/issues"]);
+        model.OpenMessage.ShouldBeNull();
+        _closedLists.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task An_arrow_the_browser_cannot_open_shows_its_line()
+    {
+        var (activity, pill) = await PillAsync();
+        var browsers = Browsers();
+        browsers.SetChoice("me", "firefox|alpha");
+        _start = _ => false;
+        var model = Open(activity, pill, browsers);
+
+        model.OpenOnGitHubCommand.Execute(GitHubItemKind.PullRequest);
+
+        model.OpenMessage.ShouldBe("Couldn't open Firefox (alpha). Pick another browser in Settings, GitHub.");
+    }
+
+    [Fact]
+    public async Task An_empty_tab_says_so_once_loaded()
+    {
+        var (activity, pill) = await PillAsync();
+        var model = Open(activity, new GitHubPill(pill.Activity, GitHubItemKind.PullRequest));
+        var load = model.PullRequests.LoadAsync(TestContext.Current.CancellationToken);
+        model.PullRequests.EmptyText.ShouldBeNull("still loading");
+
+        _gh.PullRequestList.SetResult("[]");
+        await load;
+
+        model.PullRequests.EmptyText.ShouldBe("No open pull requests.");
+        model.Issues.EmptyText.ShouldBeNull("it has rows");
+    }
+
+    [Fact]
+    public async Task Copy_all_links_copies_the_shown_tab()
+    {
+        var (activity, pill) = await PillAsync();
+        var model = Open(activity, pill);
+
+        model.ShowCommand.Execute(GitHubItemKind.PullRequest);
+        model.CopyAllLinksCommand.Execute(null);
+
+        _clipboard.Text.ShouldBe("https://github.com/acme/app/pull/9");
+    }
+
+    [Fact]
+    public async Task The_tabs_and_arrows_are_tab_stops_in_order()
+    {
+        var (activity, pill) = await PillAsync();
+        var model = Open(activity, pill);
+
+        await StaThread.RunAsync(() =>
+        {
+            var names = TabStops(PanelView(model).Children.OfType<Border>().Single()).Select(AutomationProperties.GetName).ToList();
+
+            names.Take(7).ShouldBe(["Close the list", "Open acme/app on GitHub", "Show pull requests", "Open all pull requests on GitHub", "Show issues",
+                "Open all issues on GitHub", "Copy all links"]);
+            names.Skip(7).ShouldBe(["Open #1"]);
+        });
     }
 
     [Fact]
@@ -146,14 +343,15 @@ public class GitHubListViewModelTests
         var browsers = Browsers();
         browsers.SetChoice("me", "firefox|alpha");
 
-        List(activity, pill, browsers).AccountLine.ShouldBe("Read with me. Opens in Firefox (alpha).");
+        Open(activity, pill, browsers).AccountLine.ShouldBe("Read with me. Opens in Firefox (alpha).");
     }
 
     [Fact]
     public async Task A_fresh_list_updates_the_tile_count()
     {
         var (activity, pill) = await PillAsync();
-        var list = List(activity, pill);
+        var model = Open(activity, pill);
+        var list = model.Shown;
         _gh.List.SetResult(ListOf(4));
 
         await list.LoadAsync(TestContext.Current.CancellationToken);
@@ -165,7 +363,8 @@ public class GitHubListViewModelTests
     public async Task A_failed_load_keeps_the_rows_and_says_so()
     {
         var (activity, pill) = await PillAsync();
-        var list = List(activity, pill);
+        var model = Open(activity, pill);
+        var list = model.Shown;
         _gh.List.SetResult(null);
 
         await list.LoadAsync(TestContext.Current.CancellationToken);
@@ -179,12 +378,13 @@ public class GitHubListViewModelTests
     public async Task Clicking_a_row_opens_it_and_keeps_the_panel_open()
     {
         var (activity, pill) = await PillAsync();
-        var list = List(activity, pill);
+        var model = Open(activity, pill);
+        var list = model.Shown;
 
-        list.OpenRowCommand.Execute(list.Rows[0]);
+        model.OpenRowCommand.Execute(list.Rows[0]);
 
         _started.ShouldHaveSingleItem().FileName.ShouldBe("https://github.com/acme/app/issues/1");
-        list.OpenMessage.ShouldBeNull();
+        model.OpenMessage.ShouldBeNull();
         _closedLists.ShouldBeEmpty();
     }
 
@@ -192,17 +392,18 @@ public class GitHubListViewModelTests
     public async Task Clicking_the_heading_opens_the_repository_and_keeps_the_panel_open()
     {
         var (activity, pill) = await PillAsync();
-        var list = List(activity, pill);
+        var model = Open(activity, pill);
+        var list = model.Shown;
 
         await StaThread.RunAsync(() =>
         {
-            var heading = Descendants(Panel(list)).OfType<Button>().Single(b => AutomationProperties.GetName(b) == "Open acme/app on GitHub");
+            var heading = Descendants(PanelView(model)).OfType<Button>().Single(b => AutomationProperties.GetName(b) == "Open acme/app on GitHub");
 
             heading.Command.Execute(heading.CommandParameter);
         });
 
         _started.ShouldHaveSingleItem().FileName.ShouldBe("https://github.com/acme/app");
-        list.OpenMessage.ShouldBeNull();
+        model.OpenMessage.ShouldBeNull();
         _closedLists.ShouldBeEmpty();
     }
 
@@ -213,11 +414,12 @@ public class GitHubListViewModelTests
         var browsers = Browsers();
         browsers.SetChoice("me", "firefox|alpha");
         _start = _ => false;
-        var list = List(activity, pill, browsers);
+        var model = Open(activity, pill, browsers);
+        var list = model.Shown;
 
-        list.OpenRepositoryCommand.Execute(null);
+        model.OpenRepositoryCommand.Execute(null);
 
-        list.OpenMessage.ShouldBe("Couldn't open Firefox (alpha). Pick another browser in Settings, GitHub.");
+        model.OpenMessage.ShouldBe("Couldn't open Firefox (alpha). Pick another browser in Settings, GitHub.");
         _closedLists.ShouldBeEmpty();
     }
 
@@ -225,11 +427,12 @@ public class GitHubListViewModelTests
     public async Task The_close_button_stays_the_panel_s_first_stop()
     {
         var (activity, pill) = await PillAsync();
-        var list = List(activity, pill);
+        var model = Open(activity, pill);
+        var list = model.Shown;
 
         await StaThread.RunAsync(() =>
         {
-            var first = TabStops(Panel(list))[0].ShouldBeOfType<Button>();
+            var first = TabStops(PanelView(model))[0].ShouldBeOfType<Button>();
 
             AutomationProperties.GetName(first).ShouldBe("Close the list");
         });
@@ -242,11 +445,12 @@ public class GitHubListViewModelTests
         var browsers = Browsers();
         browsers.SetChoice("me", "firefox|alpha");
         _start = _ => false;
-        var list = List(activity, pill, browsers);
+        var model = Open(activity, pill, browsers);
+        var list = model.Shown;
 
-        list.OpenRowCommand.Execute(list.Rows[0]);
+        model.OpenRowCommand.Execute(list.Rows[0]);
 
-        list.OpenMessage.ShouldBe("Couldn't open Firefox (alpha). Pick another browser in Settings, GitHub.");
+        model.OpenMessage.ShouldBe("Couldn't open Firefox (alpha). Pick another browser in Settings, GitHub.");
         _closedLists.ShouldBeEmpty();
     }
 
@@ -256,15 +460,16 @@ public class GitHubListViewModelTests
         var (activity, pill) = await PillAsync();
         var browsers = Browsers();
         browsers.SetChoice("me", "firefox|alpha");
-        var list = List(activity, pill, browsers);
+        var model = Open(activity, pill, browsers);
+        var list = model.Shown;
         _start = _ => false;
-        list.OpenRowCommand.Execute(list.Rows[0]);
-        list.OpenMessage.ShouldNotBeNull();
+        model.OpenRowCommand.Execute(list.Rows[0]);
+        model.OpenMessage.ShouldNotBeNull();
 
         _start = info => { _started.Add(info); return true; };
-        list.OpenRowCommand.Execute(list.Rows[0]);
+        model.OpenRowCommand.Execute(list.Rows[0]);
 
-        list.OpenMessage.ShouldBeNull();
+        model.OpenMessage.ShouldBeNull();
     }
 
     [Fact]
@@ -273,14 +478,15 @@ public class GitHubListViewModelTests
         var (activity, pill) = await PillAsync();
         var browsers = Browsers();
         browsers.SetChoice("me", "firefox|alpha");
-        var list = List(activity, pill, browsers);
+        var model = Open(activity, pill, browsers);
+        var list = model.Shown;
         _gh.List.SetResult(null);
         _start = _ => false;
 
-        list.OpenRowCommand.Execute(list.Rows[0]);
+        model.OpenRowCommand.Execute(list.Rows[0]);
         await list.LoadAsync(TestContext.Current.CancellationToken);
 
-        list.OpenMessage.ShouldStartWith("Couldn't open");
+        model.OpenMessage.ShouldStartWith("Couldn't open");
         list.LoadMessage.ShouldBe("Couldn't load the latest list. Showing what was last read.");
     }
 
@@ -290,33 +496,35 @@ public class GitHubListViewModelTests
         var (activity, pill) = await PillAsync();
         var browsers = Browsers();
         browsers.SetChoice("me", "firefox|alpha");
-        var list = List(activity, pill, browsers);
+        var model = Open(activity, pill, browsers);
+        var list = model.Shown;
         _start = _ => false;
-        list.OpenRowCommand.Execute(list.Rows[0]);
+        model.OpenRowCommand.Execute(list.Rows[0]);
         _gh.List.SetResult(ListOf(3));
 
         await list.LoadAsync(TestContext.Current.CancellationToken);
 
         list.LoadMessage.ShouldBeNull();
-        list.OpenMessage.ShouldStartWith("Couldn't open");
+        model.OpenMessage.ShouldStartWith("Couldn't open");
     }
 
     [Fact]
     public async Task Closing_while_loading_cancels_the_read_and_changes_nothing()
     {
         var (activity, pill) = await PillAsync();
-        var list = List(activity, pill);
+        var model = Open(activity, pill);
+        var list = model.Shown;
         var load = list.LoadAsync(TestContext.Current.CancellationToken);
         _gh.ListToken.IsCancellationRequested.ShouldBeFalse();
 
-        list.CloseCommand.Execute(null);
+        model.CloseCommand.Execute(null);
         _gh.ListToken.IsCancellationRequested.ShouldBeTrue("the gh run is not left to run out its timeout");
         _gh.List.SetResult(ListOf(3)); // an answer that was already on its way
         await load;
 
-        _closedLists.ShouldBe([list]);
+        _closedLists.ShouldBe([model]);
         list.Rows.Count.ShouldBe(1);
-        list.Heading.ShouldBe("app: 12 open issues");
+        list.TabText.ShouldBe("Issues 12");
         activity.ForFolder("app")!.OpenIssues.ShouldBe(12, "a late result after the close does not exist");
     }
 
@@ -326,7 +534,7 @@ public class GitHubListViewModelTests
         var (activity, pill) = await PillAsync();
         var yard = NewYard(activity);
         yard.OpenGitHubListCommand.Execute(pill);
-        var first = yard.GitHubList.ShouldNotBeNull();
+        var first = yard.GitHubPanel.ShouldNotBeNull();
         _gh.ListAsked.Wait(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken).ShouldBeTrue();
         var token = _gh.ListToken;
 
@@ -345,8 +553,8 @@ public class GitHubListViewModelTests
             var gh = new FakeGh();
             var activity = new GitHubActivity(gh, new GitHubReader(gh), (_, _) => Task.FromResult(new OriginLookup("https://github.com/acme/app.git")), NullLogger<GitHubActivity>.Instance);
             await activity.RefreshAsync(["app"], TestContext.Current.CancellationToken);
-            var list = new GitHubListViewModel(new GitHubPill(activity.ForFolder("app")!, GitHubItemKind.Issue), new GitHubReader(gh), activity, Browsers(),
-                _clipboard, new ImmediateDispatcher(), _time, NullLogger.Instance, _closedLists.Add);
+            var list = new GitHubPanelViewModel(activity.ForFolder("app")!, GitHubItemKind.Issue, new GitHubReader(gh), activity, Browsers(),
+                _clipboard, new ImmediateDispatcher(), _time, NullLogger.Instance, _closedLists.Add).Shown;
             list.LoadingMessage.ShouldBe("Loading the full list...");
 
             var load = list.LoadAsync(TestContext.Current.CancellationToken);
@@ -362,7 +570,8 @@ public class GitHubListViewModelTests
     public async Task A_cancelled_read_stops_saying_it_is_loading()
     {
         var (activity, pill) = await PillAsync();
-        var list = List(activity, pill);
+        var model = Open(activity, pill);
+        var list = model.Shown;
         using var stop = new CancellationTokenSource();
         var load = list.LoadAsync(stop.Token);
 
@@ -377,7 +586,8 @@ public class GitHubListViewModelTests
     public async Task A_list_that_a_newer_result_overtook_shows_its_own_total_and_the_tile_keeps_the_newer_one()
     {
         var (activity, pill) = await PillAsync();
-        var list = List(activity, pill);
+        var model = Open(activity, pill);
+        var list = model.Shown;
         var load = list.LoadAsync(TestContext.Current.CancellationToken);
         _gh.IssueTotal = 20;
         await activity.RefreshAsync(["app"], TestContext.Current.CancellationToken); // a round stores a newer result while the list is read
@@ -385,7 +595,7 @@ public class GitHubListViewModelTests
         await load;
 
         list.Rows.Select(r => r.NumberText).ShouldBe(["#1", "#2", "#3"]);
-        list.Heading.ShouldBe("app: 3 open issues");
+        list.TabText.ShouldBe("Issues 3");
         activity.ForFolder("app")!.OpenIssues.ShouldBe(20);
         activity.ForFolder("app")!.NewestIssues.Count.ShouldBe(1);
     }
@@ -394,7 +604,8 @@ public class GitHubListViewModelTests
     public async Task A_cancelled_load_changes_nothing_and_throws_nothing()
     {
         var (activity, pill) = await PillAsync();
-        var list = List(activity, pill);
+        var model = Open(activity, pill);
+        var list = model.Shown;
         using var stop = new CancellationTokenSource();
         var load = list.LoadAsync(stop.Token);
 
@@ -411,7 +622,8 @@ public class GitHubListViewModelTests
     public async Task A_reader_that_throws_shows_the_failed_load_line()
     {
         var (activity, pill) = await PillAsync();
-        var list = List(activity, pill);
+        var model = Open(activity, pill);
+        var list = model.Shown;
         _gh.List.SetException(new InvalidOperationException("boom"));
 
         await list.LoadAsync(TestContext.Current.CancellationToken);
@@ -426,19 +638,19 @@ public class GitHubListViewModelTests
         var (activity, pill) = await PillAsync();
         var yard = NewYard(activity);
         yard.OpenGitHubListCommand.Execute(pill);
-        var first = yard.GitHubList;
+        var first = yard.GitHubPanel;
         first.ShouldNotBeNull();
 
         yard.OpenGitHubListCommand.Execute(new GitHubPill(pill.Activity, GitHubItemKind.PullRequest));
 
-        var second = yard.GitHubList;
+        var second = yard.GitHubPanel;
         second.ShouldNotBeNull().ShouldNotBeSameAs(first);
-        second.Heading.ShouldBe("app: 1 open pull request");
+        second.Shown.TabText.ShouldBe("Pull requests 1");
         // The earlier load finishes now and finds its panel gone.
         _gh.List.SetResult(ListOf(3));
         await first.Loaded;
-        yard.GitHubList.ShouldBeSameAs(second);
-        first.Rows.Count.ShouldBe(1);
+        yard.GitHubPanel.ShouldBeSameAs(second);
+        first.Shown.Rows.Count.ShouldBe(1);
     }
 
     [Fact]
@@ -447,14 +659,14 @@ public class GitHubListViewModelTests
         var (activity, pill) = await PillAsync();
         var yard = NewYard(activity);
         yard.OpenGitHubListCommand.Execute(pill);
-        var list = yard.GitHubList.ShouldNotBeNull();
+        var list = yard.GitHubPanel.ShouldNotBeNull();
 
         yard.Dispose();
         _gh.List.SetResult(ListOf(3));
         await list.Loaded;
 
-        yard.GitHubList.ShouldBeNull();
-        list.Rows.Count.ShouldBe(1, "a load that finishes later leaves the closed list alone");
+        yard.GitHubPanel.ShouldBeNull();
+        list.Shown.Rows.Count.ShouldBe(1, "a load that finishes later leaves the closed list alone");
     }
 
     [Fact]
@@ -465,7 +677,7 @@ public class GitHubListViewModelTests
 
         yard.OpenGitHubListCommand.Execute(pill);
 
-        yard.GitHubList.ShouldBeNull();
+        yard.GitHubPanel.ShouldBeNull();
     }
 
     [Fact]
@@ -508,10 +720,10 @@ public class GitHubListViewModelTests
             Escape().ShouldBeFalse("no list open: the key belongs to whoever else wants it");
 
             yard.OpenGitHubListCommand.Execute(pill);
-            yard.GitHubList.ShouldNotBeNull();
+            yard.GitHubPanel.ShouldNotBeNull();
 
             Escape().ShouldBeTrue();
-            yard.GitHubList.ShouldBeNull();
+            yard.GitHubPanel.ShouldBeNull();
             Escape().ShouldBeFalse("closed again");
         });
     }
@@ -712,7 +924,7 @@ public class GitHubListViewModelTests
     /// The list panel as the Yard shows it: its markup from the file, on the application's resources, with the list as the context
     /// of the Yard.
     /// </summary>
-    private static Grid Panel(GitHubListViewModel? list)
+    private static Grid PanelView(GitHubPanelViewModel? model)
     {
         XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
         var root = YardViewXaml();
@@ -721,7 +933,7 @@ public class GitHubListViewModelTests
         var grid = new XElement(Wpf + "Grid", root.Attributes().Where(a => a.IsNamespaceDeclaration),
             new XElement(Wpf + "Grid.Resources", GitPillsXamlTests.AppResourcesXaml()), markup);
         var panel = (Grid)XamlReader.Parse(GitPillsXamlTests.AssemblyQualified(grid.ToString()));
-        panel.Children.OfType<Border>().Single().DataContext = new { GitHubList = list };
+        panel.Children.OfType<Border>().Single().DataContext = new { GitHubPanel = model };
         // a size of its own: in a window that sizes to its content, a list of a thousand rows would be as tall as all of them
         panel.Width = 560;
         panel.Height = 600;
@@ -758,16 +970,18 @@ public class GitHubListViewModelTests
     public async Task Each_row_is_one_tab_stop()
     {
         var (activity, pill) = await PillAsync();
-        var list = List(activity, pill);
+        var model = Open(activity, pill);
+        var list = model.Shown;
         _gh.List.SetResult(ListOf(3));
         await list.LoadAsync(TestContext.Current.CancellationToken);
 
         await StaThread.RunAsync(() =>
         {
-            var stops = TabStops(Panel(list).Children.OfType<Border>().Single());
+            var stops = TabStops(PanelView(model).Children.OfType<Border>().Single());
 
-            // the close button, the heading, copy all, then one button a row
-            stops.Select(s => s.GetType().Name).ShouldBe(["Button", "Button", "Button", "Button", "Button", "Button"]);
+            // the close button, the heading, each tab and its arrow, copy all, then one button a row
+            stops.Select(s => s.GetType().Name).ShouldBe(Enumerable.Repeat("Button", 10).ToList());
+            stops.Skip(7).Select(s => ((FrameworkElement)s).DataContext).ShouldBe(list.Rows);
         });
     }
 
@@ -777,18 +991,19 @@ public class GitHubListViewModelTests
         var (activity, pill) = await PillAsync();
         var browsers = Browsers();
         browsers.SetChoice("me", "firefox|alpha");
-        var list = List(activity, pill, browsers);
+        var model = Open(activity, pill, browsers);
+        var list = model.Shown;
         _start = _ => false;
 
         await StaThread.RunAsync(() =>
         {
-            var panel = Panel(list);
+            var panel = PanelView(model);
             // the failure lines are the amber ones
             List<TextBlock> Lines() => Descendants(panel).OfType<TextBlock>().Where(t => t.Visibility == Visibility.Visible && t.Foreground is SolidColorBrush b && b.Color == Color.FromRgb(0xF0, 0xC6, 0x74)).ToList();
 
             Lines().ShouldBe([], "nothing to say, nothing shown");
 
-            list.OpenRowCommand.Execute(list.Rows[0]);
+            model.OpenRowCommand.Execute(list.Rows[0]);
             panel.UpdateLayout();
 
             var shown = Lines();
@@ -797,9 +1012,9 @@ public class GitHubListViewModelTests
     }
 
     /// <summary>The panel as the Yard has it, with its focus handling, under a window of its own, and the keyboard on the first row.</summary>
-    private static (Grid Grid, Border Panel, HwndSource Source) FocusedPanel(GitHubListViewModel list)
+    private static (Grid Grid, Border Panel, HwndSource Source) FocusedPanel(GitHubPanelViewModel model)
     {
-        var grid = Panel(list);
+        var grid = PanelView(model);
         var source = new HwndSource(new HwndSourceParameters("test") { WindowStyle = 0 }) { RootVisual = grid };
         var panel = grid.Children.OfType<Border>().Single();
         _ = new GitHubPanelFocus(grid, panel, () => { });
@@ -810,18 +1025,19 @@ public class GitHubListViewModelTests
     [Fact]
     public async Task A_panel_that_appears_puts_the_keyboard_on_a_stop_inside_it_and_Shift_Tab_stays_there()
     {
-        var list = await ListWithRowsAsync(40);
+        var model = await ListWithRowsAsync(40);
+        var list = model.Shown;
 
         await StaThread.RunAsync(() =>
         {
-            var grid = Panel(null);
+            var grid = PanelView(null);
             using var source = new HwndSource(new HwndSourceParameters("test") { WindowStyle = 0 }) { RootVisual = grid };
             var panel = grid.Children.OfType<Border>().Single();
             _ = new GitHubPanelFocus(grid, panel, () => { });
             var outside = new Button();
             grid.Children.Add(outside); // what the keyboard could fall to when it leaves the panel
 
-            panel.DataContext = new { GitHubList = list }; // the list opens: the panel appears
+            panel.DataContext = new { GitHubPanel = model }; // the list opens: the panel appears
             panel.UpdateLayout();
             Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
 
@@ -842,13 +1058,14 @@ public class GitHubListViewModelTests
     public async Task A_swap_of_the_rows_keeps_the_keyboard_in_the_panel()
     {
         var (activity, pill) = await PillAsync();
-        var list = List(activity, pill);
+        var model = Open(activity, pill);
+        var list = model.Shown;
         _gh.List.SetResult(ListOf(3));
         await list.LoadAsync(TestContext.Current.CancellationToken);
 
         await StaThread.RunAsync(() =>
         {
-            var (_, panel, source) = FocusedPanel(list);
+            var (_, panel, source) = FocusedPanel(model);
             using var _ = source;
             panel.IsKeyboardFocusWithin.ShouldBeTrue();
 
@@ -864,13 +1081,14 @@ public class GitHubListViewModelTests
     public async Task A_keyboard_that_is_nowhere_without_a_swap_is_not_pulled_back()
     {
         var (activity, pill) = await PillAsync();
-        var list = List(activity, pill);
+        var model = Open(activity, pill);
+        var list = model.Shown;
         _gh.List.SetResult(ListOf(3));
         await list.LoadAsync(TestContext.Current.CancellationToken);
 
         await StaThread.RunAsync(() =>
         {
-            var (_, _, source) = FocusedPanel(list);
+            var (_, _, source) = FocusedPanel(model);
             using var _ = source;
 
             Keyboard.ClearFocus(); // as the app losing the activation leaves it
@@ -885,12 +1103,13 @@ public class GitHubListViewModelTests
     {
         _gh.IssueTotal = 1500;
         var (activity, pill) = await PillAsync();
-        var list = List(activity, pill);
+        var model = Open(activity, pill);
+        var list = model.Shown;
         _gh.List.SetResult(ListOf(GitHubList.Limit));
 
         await list.LoadAsync(TestContext.Current.CancellationToken);
 
-        list.Heading.ShouldBe("app: 1500 open issues");
+        list.TabText.ShouldBe("Issues 1500");
         list.CutShortMessage.ShouldBe("Showing the newest 1000 of 1500. The rest are on GitHub.");
         list.Rows.Count.ShouldBe(1000);
         activity.ForFolder("app")!.OpenIssues.ShouldBe(1500);
@@ -901,12 +1120,13 @@ public class GitHubListViewModelTests
     {
         _gh.IssueTotal = 1000;
         var (activity, pill) = await PillAsync();
-        var list = List(activity, pill);
+        var model = Open(activity, pill);
+        var list = model.Shown;
         _gh.List.SetResult(ListOf(GitHubList.Limit));
 
         await list.LoadAsync(TestContext.Current.CancellationToken);
 
-        list.Heading.ShouldBe("app: 1000 open issues");
+        list.TabText.ShouldBe("Issues 1000");
         list.CutShortMessage.ShouldBeNull();
     }
 
@@ -915,12 +1135,13 @@ public class GitHubListViewModelTests
     {
         _gh.IssueTotal = 1000;
         var (activity, pill) = await PillAsync();
-        var list = List(activity, pill);
+        var model = Open(activity, pill);
+        var list = model.Shown;
         _gh.List.SetResult(ListOf(GitHubList.Limit).Replace("\"number\":2,", "\"number\":\"2\",", StringComparison.Ordinal));
 
         await list.LoadAsync(TestContext.Current.CancellationToken);
 
-        list.Heading.ShouldBe("app: 1000 open issues");
+        list.TabText.ShouldBe("Issues 1000");
         list.CutShortMessage.ShouldBeNull();
         list.SkippedMessage.ShouldBe("1 row could not be shown.");
     }
@@ -929,12 +1150,13 @@ public class GitHubListViewModelTests
     public async Task A_list_below_the_limit_sets_the_count_and_says_nothing()
     {
         var (activity, pill) = await PillAsync();
-        var list = List(activity, pill);
+        var model = Open(activity, pill);
+        var list = model.Shown;
         _gh.List.SetResult(ListOf(999));
 
         await list.LoadAsync(TestContext.Current.CancellationToken);
 
-        list.Heading.ShouldBe("app: 999 open issues");
+        list.TabText.ShouldBe("Issues 999");
         list.CutShortMessage.ShouldBeNull();
         activity.ForFolder("app")!.OpenIssues.ShouldBe(999);
     }
@@ -943,13 +1165,14 @@ public class GitHubListViewModelTests
     public async Task A_skipped_row_still_counts()
     {
         var (activity, pill) = await PillAsync();
-        var list = List(activity, pill);
+        var model = Open(activity, pill);
+        var list = model.Shown;
         _gh.List.SetResult(ListOf(3).Replace("\"number\":2,", "\"number\":\"2\",", StringComparison.Ordinal));
 
         await list.LoadAsync(TestContext.Current.CancellationToken);
 
         list.Rows.Select(r => r.NumberText).ShouldBe(["#1", "#3"]);
-        list.Heading.ShouldBe("app: 3 open issues", "gh returned every row, the odd one included: that is the count");
+        list.TabText.ShouldBe("Issues 3", "gh returned every row, the odd one included: that is the count");
         list.CutShortMessage.ShouldBeNull();
         list.SkippedMessage.ShouldBe("1 row could not be shown.");
         activity.ForFolder("app")!.OpenIssues.ShouldBe(3);
@@ -959,26 +1182,28 @@ public class GitHubListViewModelTests
     public async Task Several_skipped_rows_are_counted_in_one_line_and_none_is_no_line()
     {
         var (activity, pill) = await PillAsync();
-        var list = List(activity, pill);
+        var model = Open(activity, pill);
+        var list = model.Shown;
         _gh.List.SetResult(ListOf(4).Replace("\"number\":2,", "\"number\":\"2\",", StringComparison.Ordinal).Replace("\"number\":3,", "\"number\":\"3\",", StringComparison.Ordinal));
 
         await list.LoadAsync(TestContext.Current.CancellationToken);
 
         list.SkippedMessage.ShouldBe("2 rows could not be shown.");
 
-        var clean = List(activity, pill);
+        var clean = Open(activity, pill).Shown;
         clean.SkippedMessage.ShouldBeNull();
     }
 
     /// <summary>A panel with that many rows, measured and arranged.</summary>
-    private async Task<GitHubListViewModel> ListWithRowsAsync(int rows)
+    private async Task<GitHubPanelViewModel> ListWithRowsAsync(int rows)
     {
         _gh.IssueTotal = rows;
         var (activity, pill) = await PillAsync();
-        var list = List(activity, pill);
+        var model = Open(activity, pill);
+        var list = model.Shown;
         _gh.List.SetResult(ListOf(rows));
         await list.LoadAsync(TestContext.Current.CancellationToken);
-        return list;
+        return model;
     }
 
     private static List<Button> RowButtons(DependencyObject panel) => Descendants(panel).OfType<Button>().Where(b => b.DataContext is GitHubRow && b.Focusable).ToList();
@@ -986,11 +1211,12 @@ public class GitHubListViewModelTests
     [Fact]
     public async Task A_thousand_rows_build_far_fewer_row_containers()
     {
-        var list = await ListWithRowsAsync(1000);
+        var model = await ListWithRowsAsync(1000);
+        var list = model.Shown;
 
         await StaThread.RunAsync(() =>
         {
-            var built = RowButtons(Panel(list)).Count;
+            var built = RowButtons(PanelView(model)).Count;
 
             built.ShouldBeGreaterThan(0);
             built.ShouldBeLessThan(100);
@@ -1000,11 +1226,12 @@ public class GitHubListViewModelTests
     [Fact]
     public async Task Tab_past_the_visible_rows_scrolls_to_the_next_row_and_stays_in_the_panel()
     {
-        var list = await ListWithRowsAsync(1000);
+        var model = await ListWithRowsAsync(1000);
+        var list = model.Shown;
 
         await StaThread.RunAsync(() =>
         {
-            var (_, panel, source) = FocusedPanel(list);
+            var (_, panel, source) = FocusedPanel(model);
             using var _ = source;
             var visible = RowButtons(panel).Count;
             visible.ShouldBeInRange(1, 99); // the rows in view only, so that the loop below goes past them
@@ -1024,11 +1251,12 @@ public class GitHubListViewModelTests
     [Fact]
     public async Task Shift_Tab_from_the_close_button_lands_on_a_row_of_the_panel()
     {
-        var list = await ListWithRowsAsync(1000);
+        var model = await ListWithRowsAsync(1000);
+        var list = model.Shown;
 
         await StaThread.RunAsync(() =>
         {
-            var (_, panel, source) = FocusedPanel(list);
+            var (_, panel, source) = FocusedPanel(model);
             using var _ = source;
             var close = Descendants(panel).OfType<Button>().Single(b => AutomationProperties.GetName(b) == "Close the list");
             Keyboard.Focus(close);
@@ -1049,11 +1277,12 @@ public class GitHubListViewModelTests
     [Fact]
     public async Task The_down_arrow_past_the_visible_rows_scrolls_to_the_next_row()
     {
-        var list = await ListWithRowsAsync(1000);
+        var model = await ListWithRowsAsync(1000);
+        var list = model.Shown;
 
         await StaThread.RunAsync(() =>
         {
-            var (_, panel, source) = FocusedPanel(list);
+            var (_, panel, source) = FocusedPanel(model);
             using var _ = source;
             var visible = RowButtons(panel).Count;
             visible.ShouldBeInRange(1, 99);
@@ -1101,83 +1330,90 @@ public class GitHubListViewModelTests
     public async Task A_row_s_copy_button_puts_its_link_on_the_clipboard_and_opens_nothing()
     {
         var (activity, pill) = await PillAsync();
-        var list = List(activity, pill);
+        var model = Open(activity, pill);
+        var list = model.Shown;
 
-        list.CopyRowLinkCommand.Execute(list.Rows[0]);
+        model.CopyRowLinkCommand.Execute(list.Rows[0]);
 
         _clipboard.Text.ShouldBe("https://github.com/acme/app/issues/1");
-        list.CopyMessage.ShouldBe("Copied the link to #1.");
+        model.CopyMessage.ShouldBe("Copied the link to #1.");
         _started.ShouldBeEmpty();
     }
 
     [Fact]
     public async Task Copy_all_puts_every_link_on_the_clipboard_one_to_a_line_in_the_list_s_order()
     {
-        var list = await ListWithRowsAsync(3);
+        var model = await ListWithRowsAsync(3);
+        var list = model.Shown;
 
-        list.CopyAllLinksCommand.Execute(null);
+        model.CopyAllLinksCommand.Execute(null);
 
         _clipboard.Text.ShouldBe(string.Join(Environment.NewLine,
             "https://github.com/acme/app/issues/1", "https://github.com/acme/app/issues/2", "https://github.com/acme/app/issues/3"));
-        list.CopyMessage.ShouldBe("Copied 3 links.");
+        model.CopyMessage.ShouldBe("Copied 3 links.");
     }
 
     [Fact]
     public async Task One_link_copied_is_said_in_the_singular()
     {
-        var list = await ListWithRowsAsync(1);
+        var model = await ListWithRowsAsync(1);
+        var list = model.Shown;
 
-        list.CopyAllLinksCommand.Execute(null);
+        model.CopyAllLinksCommand.Execute(null);
 
         _clipboard.Text.ShouldBe("https://github.com/acme/app/issues/1");
-        list.CopyMessage.ShouldBe("Copied 1 link.");
+        model.CopyMessage.ShouldBe("Copied 1 link.");
     }
 
     [Fact]
     public async Task Copying_all_while_the_list_still_loads_says_it_is_not_all_of_them()
     {
         var (activity, pill) = await PillAsync();
-        var list = List(activity, pill);
+        var model = Open(activity, pill);
+        var list = model.Shown;
 
-        list.CopyAllLinksCommand.Execute(null);
+        model.CopyAllLinksCommand.Execute(null);
 
-        list.CopyMessage.ShouldBe("Copied 1 link. The full list is still loading.");
+        model.CopyMessage.ShouldBe("Copied 1 link. The full list is still loading.");
     }
 
     [Fact]
     public async Task Copying_all_of_a_list_cut_short_says_the_rest_are_not_in_it()
     {
-        var list = await ListCutShortAsync();
+        var model = await ListCutShortAsync();
+        var list = model.Shown;
 
-        list.CopyAllLinksCommand.Execute(null);
+        model.CopyAllLinksCommand.Execute(null);
 
-        list.CopyMessage.ShouldBe("Copied the newest 1000 links. The rest are on GitHub.");
+        model.CopyMessage.ShouldBe("Copied the newest 1000 links. The rest are on GitHub.");
     }
 
     [Fact]
     public async Task Copying_all_after_a_failed_load_says_it_is_not_all_of_them()
     {
         var (activity, pill) = await PillAsync();
-        var list = List(activity, pill);
+        var model = Open(activity, pill);
+        var list = model.Shown;
         _gh.List.SetResult(null);
         await list.LoadAsync(TestContext.Current.CancellationToken);
 
-        list.CopyAllLinksCommand.Execute(null);
+        model.CopyAllLinksCommand.Execute(null);
 
-        list.CopyMessage.ShouldBe("Copied 1 link. The full list could not be loaded.");
+        model.CopyMessage.ShouldBe("Copied 1 link. The full list could not be loaded.");
     }
 
     [Fact]
     public async Task Copying_all_of_a_list_with_skipped_rows_says_they_are_missing()
     {
         var (activity, pill) = await PillAsync();
-        var list = List(activity, pill);
+        var model = Open(activity, pill);
+        var list = model.Shown;
         _gh.List.SetResult(ListOf(3).Replace("\"number\":2,", "\"number\":\"2\",", StringComparison.Ordinal));
         await list.LoadAsync(TestContext.Current.CancellationToken);
 
-        list.CopyAllLinksCommand.Execute(null);
+        model.CopyAllLinksCommand.Execute(null);
 
-        list.CopyMessage.ShouldBe("Copied 2 links. 1 row could not be shown.");
+        model.CopyMessage.ShouldBe("Copied 2 links. 1 row could not be shown.");
     }
 
     /// <summary>Runs what is posted only when asked, as a busy UI thread does.</summary>
@@ -1203,51 +1439,55 @@ public class GitHubListViewModelTests
     {
         var (activity, pill) = await PillAsync();
         var ui = new QueueDispatcher();
-        var list = new GitHubListViewModel(pill, new GitHubReader(_gh), activity, Browsers(), _clipboard, ui, _time, NullLogger.Instance, _closedLists.Add);
-        list.CopyRowLinkCommand.Execute(list.Rows[0]);
+        var model = new GitHubPanelViewModel(pill.Activity, pill.Kind, new GitHubReader(_gh), activity, Browsers(), _clipboard, ui, _time, NullLogger.Instance, _closedLists.Add);
+        var list = model.Shown;
+        model.CopyRowLinkCommand.Execute(list.Rows[0]);
 
-        _time.Advance(GitHubListViewModel.CopyMessageLifetime); // its clear is posted, the UI thread is in the next copy: a held clipboard takes it up to a second
+        _time.Advance(GitHubPanelViewModel.CopyMessageLifetime); // its clear is posted, the UI thread is in the next copy: a held clipboard takes it up to a second
         _clipboard.Works = false;
-        list.CopyRowLinkCommand.Execute(list.Rows[0]);
+        model.CopyRowLinkCommand.Execute(list.Rows[0]);
         ui.Run();
 
-        list.CopyMessage.ShouldBe("Couldn't reach the clipboard. Try again.");
+        model.CopyMessage.ShouldBe("Couldn't reach the clipboard. Try again.");
     }
 
-    private async Task<GitHubListViewModel> ListCutShortWithASkippedRowAsync()
+    private async Task<GitHubPanelViewModel> ListCutShortWithASkippedRowAsync()
     {
         _gh.IssueTotal = 1500;
         var (activity, pill) = await PillAsync();
-        var list = List(activity, pill);
+        var model = Open(activity, pill);
+        var list = model.Shown;
         _gh.List.SetResult(ListOf(GitHubList.Limit).Replace("\"number\":2,", "\"number\":\"2\",", StringComparison.Ordinal));
         await list.LoadAsync(TestContext.Current.CancellationToken);
-        return list;
+        return model;
     }
 
     [Fact]
     public async Task Copying_all_of_a_list_cut_short_with_a_skipped_row_says_both()
     {
-        var list = await ListCutShortWithASkippedRowAsync();
+        var model = await ListCutShortWithASkippedRowAsync();
+        var list = model.Shown;
 
-        list.CopyAllLinksCommand.Execute(null);
+        model.CopyAllLinksCommand.Execute(null);
 
-        list.CopyMessage.ShouldBe("Copied the newest 999 links. The rest are on GitHub. 1 row could not be shown.");
+        model.CopyMessage.ShouldBe("Copied the newest 999 links. The rest are on GitHub. 1 row could not be shown.");
     }
 
     [Fact]
     public async Task On_a_narrow_panel_a_long_copy_line_does_not_move_the_rows_under_the_pointer()
     {
-        var list = await ListCutShortWithASkippedRowAsync();
+        var model = await ListCutShortWithASkippedRowAsync();
+        var list = model.Shown;
 
         await StaThread.RunAsync(() =>
         {
-            var panel = Panel(list);
+            var panel = PanelView(model);
             panel.Children.OfType<Border>().Single().Width = 300; // the panel gives way to a narrow Yard
             panel.UpdateLayout();
             double FirstRowTop() => RowButtons(panel)[0].TranslatePoint(new Point(0, 0), panel).Y;
             var before = FirstRowTop();
 
-            list.CopyAllLinksCommand.Execute(null);
+            model.CopyAllLinksCommand.Execute(null);
             panel.UpdateLayout();
 
             FirstRowTop().ShouldBe(before);
@@ -1257,52 +1497,56 @@ public class GitHubListViewModelTests
     [Fact]
     public async Task An_empty_list_has_nothing_to_copy()
     {
-        var list = await ListWithRowsAsync(0);
+        var model = await ListWithRowsAsync(0);
+        var list = model.Shown;
 
-        list.CopyAllLinksCommand.CanExecute(null).ShouldBeFalse();
+        model.CopyAllLinksCommand.CanExecute(null).ShouldBeFalse();
     }
 
     [Fact]
     public async Task A_clipboard_another_program_holds_says_so()
     {
         var (activity, pill) = await PillAsync();
-        var list = List(activity, pill);
+        var model = Open(activity, pill);
+        var list = model.Shown;
         _clipboard.Works = false;
 
-        list.CopyRowLinkCommand.Execute(list.Rows[0]);
+        model.CopyRowLinkCommand.Execute(list.Rows[0]);
 
-        list.CopyMessage.ShouldBe("Couldn't reach the clipboard. Try again.");
+        model.CopyMessage.ShouldBe("Couldn't reach the clipboard. Try again.");
     }
 
     [Fact]
     public async Task The_copy_line_goes_away_after_a_moment_counted_from_the_last_copy()
     {
         var (activity, pill) = await PillAsync();
-        var list = List(activity, pill);
-        list.CopyRowLinkCommand.Execute(list.Rows[0]);
+        var model = Open(activity, pill);
+        var list = model.Shown;
+        model.CopyRowLinkCommand.Execute(list.Rows[0]);
 
-        _time.Advance(GitHubListViewModel.CopyMessageLifetime - TimeSpan.FromSeconds(1));
-        list.CopyAllLinksCommand.Execute(null);
+        _time.Advance(GitHubPanelViewModel.CopyMessageLifetime - TimeSpan.FromSeconds(1));
+        model.CopyAllLinksCommand.Execute(null);
         _time.Advance(TimeSpan.FromSeconds(1));
-        list.CopyMessage.ShouldNotBeNull("the second copy's line has its own time");
+        model.CopyMessage.ShouldNotBeNull("the second copy's line has its own time");
 
-        _time.Advance(GitHubListViewModel.CopyMessageLifetime);
-        list.CopyMessage.ShouldBeNull();
+        _time.Advance(GitHubPanelViewModel.CopyMessageLifetime);
+        model.CopyMessage.ShouldBeNull();
     }
 
     [Fact]
     public async Task The_panel_has_a_copy_button_on_each_row_and_one_for_all_with_the_row_still_one_tab_stop()
     {
-        var list = await ListWithRowsAsync(3);
+        var model = await ListWithRowsAsync(3);
+        var list = model.Shown;
 
         await StaThread.RunAsync(() =>
         {
-            var panel = Panel(list);
+            var panel = PanelView(model);
             var buttons = Descendants(panel).OfType<Button>().ToList();
 
-            buttons.Single(b => AutomationProperties.GetName(b) == "Copy all links").Command.ShouldBe(list.CopyAllLinksCommand);
+            buttons.Single(b => AutomationProperties.GetName(b) == "Copy all links").Command.ShouldBe(model.CopyAllLinksCommand);
             var copy = buttons.Single(b => AutomationProperties.GetName(b) == "Copy the link to #2");
-            copy.Command.ShouldBe(list.CopyRowLinkCommand);
+            copy.Command.ShouldBe(model.CopyRowLinkCommand);
             copy.CommandParameter.ShouldBe(list.Rows[1]);
             copy.Focusable.ShouldBeFalse("the row stays one stop, and a click leaves the keyboard where it was");
             copy.Visibility.ShouldBe(Visibility.Visible);
@@ -1313,29 +1557,31 @@ public class GitHubListViewModelTests
     [Fact]
     public async Task A_copy_line_does_not_move_the_rows_under_the_pointer()
     {
-        var list = await ListWithRowsAsync(3);
+        var model = await ListWithRowsAsync(3);
+        var list = model.Shown;
 
         await StaThread.RunAsync(() =>
         {
-            var panel = Panel(list);
+            var panel = PanelView(model);
             double FirstRowTop() => RowButtons(panel)[0].TranslatePoint(new Point(0, 0), panel).Y;
             var before = FirstRowTop();
 
-            list.CopyRowLinkCommand.Execute(list.Rows[0]);
+            model.CopyRowLinkCommand.Execute(list.Rows[0]);
             panel.UpdateLayout();
 
             FirstRowTop().ShouldBe(before);
         });
     }
 
-    private async Task<GitHubListViewModel> ListCutShortAsync()
+    private async Task<GitHubPanelViewModel> ListCutShortAsync()
     {
         _gh.IssueTotal = 1500;
         var (activity, pill) = await PillAsync();
-        var list = List(activity, pill);
+        var model = Open(activity, pill);
+        var list = model.Shown;
         _gh.List.SetResult(ListOf(GitHubList.Limit));
         await list.LoadAsync(TestContext.Current.CancellationToken);
-        return list;
+        return model;
     }
 
     private sealed class FakeClipboard : ITextClipboard
