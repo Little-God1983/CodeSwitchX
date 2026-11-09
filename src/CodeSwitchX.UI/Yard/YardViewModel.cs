@@ -289,9 +289,12 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         IEventBus bus, IUiDispatcher ui, TimeProvider time, ILogger<YardViewModel> logger, IVsCodeOpenTabs? openTabs = null,
         Func<string, TabConversation?>? writtenInAt = null, Func<IReadOnlyDictionary<string, bool>>? runningTabs = null,
         Func<CancellationToken, Task<IReadOnlyDictionary<Guid, DateTimeOffset>>>? storedLastUse = null, GitHubActivity? gitHub = null,
-        GitHubReader? gitHubReader = null, GitHubBrowsers? gitHubBrowsers = null, ITextClipboard? clipboard = null, IChatRowMenu? rowMenu = null)
+        GitHubReader? gitHubReader = null, GitHubBrowsers? gitHubBrowsers = null, ITextClipboard? clipboard = null, IChatRowMenu? rowMenu = null,
+        GitPuller? puller = null)
     {
         RowMenu = rowMenu;
+        GitJobs = new YardGitJobs(puller ?? new GitPuller(), ui, time, logger);
+        GitJobs.Ended += OnGitJobEnded;
         _gitHub = gitHub;
         _gitHubReader = gitHubReader;
         _gitHubBrowsers = gitHubBrowsers;
@@ -769,7 +772,11 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         var lines = await GitLinesAsync(tile, info, ct).ConfigureAwait(false);
         paths.AddRange(lines.Where(HasRepository).Select(l => l.Path).OfType<string>());
         // The pills are taken from the GitHub side when the tile shows the lines, not before: a result stored meanwhile is not overwritten by an older one.
-        _ui.Post(() => tile.ShowGit(lines.Select(WithGitHub).ToList()));
+        _ui.Post(() =>
+        {
+            tile.ShowGit(lines.Select(WithGitHub).ToList());
+            FollowPanelBranch();
+        });
 
         // A worktree added next to the repository after the registration is a child root from here on, so the chat started
         // in it lands on this tile within one refresh; a removed one stops being one. Git that fails to answer changes nothing.
@@ -819,7 +826,12 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
     /// <summary>A click on the failure line puts it away; only another press can bring it back.</summary>
     [RelayCommand]
-    private void DismissRefreshMessage() => RefreshMessage = null;
+    private void DismissRefreshMessage()
+    {
+        RefreshMessage = null;
+        JobMessage = null;
+        _jobMessageCheckout = null;
+    }
 
     /// <summary>One repository that cannot be read is no failure of GitHub, and "any pills": a gh that never answered has read none.</summary>
     private static string? FailureLine(GitHubRoundResult round)
@@ -884,7 +896,37 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         {
             tile.ShowGit(tile.GitLines.Select(WithGitHub).ToList());
         }
+
+        FollowPanelBranch();
     });
+
+    /// <summary>The open panel's Pull names what a press does now: its line's branch as last read (review of #407).</summary>
+    private void FollowPanelBranch()
+    {
+        if (GitHubPanel?.CheckoutPath is { } path && LinesOf(path).FirstOrDefault() is { } line)
+        {
+            GitHubPanel.FollowBranch(line.Branch);
+        }
+    }
+
+    /// <summary>Every tile's line of the checkout: a folder can be on the tiles of several workspaces.</summary>
+    private IEnumerable<GitLine> LinesOf(string path)
+    {
+        var key = YardGitJobs.Key(path);
+        return Tiles.SelectMany(t => t.GitLines).Where(l => l.Path is { } p && YardGitJobs.Key(p) == key);
+    }
+
+    /// <summary>
+    /// A chat working in the checkout, or waiting mid-turn for an answer (a permission, a question), on any tile with a line of the folder
+    /// or of the same GitHub repository (a workspace on a subfolder of it): the Yard never switches a branch under one (#407). By tile,
+    /// not by chat folder, and another clone of the repository counts too: it errs on the careful side.
+    /// </summary>
+    private bool ChatIsWorkingIn(string path, GitHubRepo repo)
+    {
+        var key = YardGitJobs.Key(path);
+        return Tiles.Any(t => (t.IsWorking || t.NeedsAttention)
+            && t.GitLines.Any(l => (l.Path is { } p && YardGitJobs.Key(p) == key) || l.GitHub?.Repo == repo));
+    }
 
     /// <summary>
     /// A line for the root folder, and one more for each other repository the tile's workspace file lists a folder of
@@ -1102,9 +1144,16 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// <summary>The panel a repository line or a pill opens with the repository's open pull requests and issues; null when closed. Another opening replaces it.</summary>
     [ObservableProperty] private GitHubPanelViewModel? _gitHubPanel;
 
-    /// <summary>A click on a pill opens the repository's panel over the Yard, on that pill's tab. Without the readers (tests, no gh) it does nothing.</summary>
+    /// <summary>The pulls the panel starts (#407): they outlive the panel.</summary>
+    public YardGitJobs GitJobs { get; }
+
+    /// <summary>A click on a pill opens the repository's panel over the Yard, on that pill's tab: it is still a click on its line (#406). Without the readers (tests, no gh) it does nothing.</summary>
     [RelayCommand]
-    private void OpenGitHubList(GitHubPill pill) => OpenPanel(pill.Activity, pill.Kind);
+    private void OpenGitHubList(GitHubPill pill)
+    {
+        var line = Tiles.SelectMany(t => t.GitLines).FirstOrDefault(l => ReferenceEquals(l.Issues, pill) || ReferenceEquals(l.PullRequests, pill));
+        OpenPanel(pill.Activity, pill.Kind, line);
+    }
 
     /// <summary>
     /// A click on a tile's repository line opens its panel (#406), on pull requests when any are open; a line with nothing open opens
@@ -1116,11 +1165,12 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     {
         if (line?.GitHub is { } activity)
         {
-            OpenPanel(activity, GitHubPanelViewModel.DefaultKind(activity));
+            OpenPanel(activity, GitHubPanelViewModel.DefaultKind(activity), line);
         }
     }
 
-    private void OpenPanel(RepoActivity activity, GitHubItemKind kind)
+    /// <param name="line">The line the panel was opened from: where its Pull acts (#407). Null when it is gone; then the panel has no Pull.</param>
+    private void OpenPanel(RepoActivity activity, GitHubItemKind kind, GitLine? line)
     {
         if (_gitHub is null || _gitHubReader is null || _gitHubBrowsers is null)
         {
@@ -1128,11 +1178,52 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
 
         GitHubPanel?.CloseCommand.Execute(null);
+        var checkout = line?.Path is { } path ? new PanelCheckout(path, line.Branch, () => ChatIsWorkingIn(path, activity.Repo), GitJobs) : null;
         var panel = new GitHubPanelViewModel(activity, kind, _gitHubReader, _gitHub, _gitHubBrowsers, _clipboard, _ui, _time, _logger,
-            closed => { if (ReferenceEquals(GitHubPanel, closed)) { GitHubPanel = null; } });
+            closed => { if (ReferenceEquals(GitHubPanel, closed)) { GitHubPanel = null; } }, checkout);
         GitHubPanel = panel;
         // Not on the UI thread: the load starts its first gh before its first await.
         _ = Task.Run(() => panel.LoadAsync(_gitHubStop.Token));
+    }
+
+    /// <summary>
+    /// A pull ended (#407): the lines are read again, so the branch shows what git did. A failure no panel showed goes on the failure line,
+    /// so a panel closed while it ran does not hide it.
+    /// </summary>
+    private void OnGitJobEnded(GitJobOutcome outcome, bool taken)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        // A later pull of the same checkout says the last word on it, whatever it came to.
+        var key = YardGitJobs.Key(outcome.Checkout);
+        if (_jobMessageCheckout == key)
+        {
+            JobMessage = null;
+            _jobMessageCheckout = null;
+        }
+
+        if (!taken && !outcome.Succeeded)
+        {
+            JobMessage = $"{outcome.Name}: {outcome.Message}";
+            _jobMessageCheckout = key;
+        }
+
+        _ = RefreshGitAfterJobAsync();
+    }
+
+    private async Task RefreshGitAfterJobAsync()
+    {
+        try
+        {
+            await RefreshGitAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "The git refresh after a pull failed");
+        }
     }
 
     /// <summary>A refresh the button asked for is running.</summary>
@@ -1143,7 +1234,23 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     public string RefreshButtonText => IsRefreshing ? "Refreshing…" : "Refresh";
 
     /// <summary>Says what could not be read when the button asked. A round that reads everything takes it away, the button's or the timer's, and so does a click on it.</summary>
-    [ObservableProperty] private string? _refreshMessage;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(FailureLineText))]
+    private string? _refreshMessage;
+
+    /// <summary>
+    /// A pull's failure no panel showed (#407), named after its repository: kept apart from <see cref="RefreshMessage"/>, so the rounds
+    /// neither take it away nor start saying what they found because of it (review of #407). A later pull of that checkout takes it away.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(FailureLineText))]
+    private string? _jobMessage;
+
+    /// <summary>The checkout <see cref="JobMessage"/> is about, by <see cref="YardGitJobs.Key"/>. UI thread.</summary>
+    private string? _jobMessageCheckout;
+
+    /// <summary>What the failure line on the top bar says: a pull's failure, then the round's, one to a line; null hides it.</summary>
+    public string? FailureLineText => JobMessage is null ? RefreshMessage : RefreshMessage is null ? JobMessage : $"{JobMessage}\n{RefreshMessage}";
 
     /// <summary>
     /// The button on the Yard's top bar (#382): the git info of every tile, then the GitHub pills of the lines that gives, without waiting
@@ -1386,6 +1493,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         {
             _gitHub.Changed -= OnGitHubChanged;
         }
+
+        GitJobs.Ended -= OnGitJobEnded;
 
         // Not disposed: the source has no timer or registration that needs it, and Dispose may run twice.
         _gitHubStop.Cancel();

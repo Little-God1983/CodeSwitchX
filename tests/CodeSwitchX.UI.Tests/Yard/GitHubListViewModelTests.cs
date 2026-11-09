@@ -26,7 +26,7 @@ using NSubstitute;
 namespace CodeSwitchX.UI.Tests.Yard;
 
 [Collection(KeyboardFocusCollection.Name)]
-public class GitHubListViewModelTests
+public partial class GitHubListViewModelTests
 {
     private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 9, 23, 12, 0, 0, TimeSpan.Zero));
     private readonly FakeGh _gh = new();

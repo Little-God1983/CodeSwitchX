@@ -22,6 +22,7 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     private readonly IUiDispatcher _ui;
     private readonly TimeProvider _time;
     private readonly Action<GitHubPanelViewModel> _closed;
+    private readonly PanelCheckout? _checkout;
     // Ends a read a tab starts later, when the panel has closed by then. No timer and no wait handle is taken from it.
     private readonly CancellationTokenSource _stop = new();
     // The tab the panel opened on, read by LoadAsync; the other is read when it is first shown.
@@ -44,9 +45,29 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     /// <summary>How long <see cref="CopyMessage"/> stays.</summary>
     internal static readonly TimeSpan CopyMessageLifetime = TimeSpan.FromSeconds(4);
 
+    /// <summary>The checkout's branch: as the line has it (the Yard keeps it up to date, <see cref="FollowBranch"/>), and the default branch once a pull has gone through.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(PullText))]
+    [NotifyPropertyChangedFor(nameof(PullAutomationName))]
+    private string? _branch;
+
+    /// <summary>A pull of the checkout runs, from this panel or an earlier one.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(PullText))]
+    [NotifyPropertyChangedFor(nameof(PullAutomationName))]
+    private bool _isPulling;
+
+    /// <summary>What the last pull came to, or why it was refused; none before the first press.</summary>
+    [ObservableProperty] private string? _actionMessage;
+
+    /// <summary><see cref="ActionMessage"/> is a refusal or a failure, not progress or success.</summary>
+    [ObservableProperty] private bool _isActionFailed;
+
     public GitHubPanelViewModel(RepoActivity repo, GitHubItemKind shown, GitHubReader reader, GitHubActivity activity, GitHubBrowsers browsers,
-        ITextClipboard clipboard, IUiDispatcher ui, TimeProvider time, ILogger logger, Action<GitHubPanelViewModel> closed)
+        ITextClipboard clipboard, IUiDispatcher ui, TimeProvider time, ILogger logger, Action<GitHubPanelViewModel> closed, PanelCheckout? checkout = null)
     {
+        _checkout = checkout;
+        _branch = checkout?.Branch;
         _repo = repo;
         _browsers = browsers;
         _clipboard = clipboard;
@@ -61,7 +82,26 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
         Issues.PropertyChanged += OnListChanged;
         // Worked out once: the browser's name is read from the registry and files, which a binding would repeat.
         AccountLine = $"Read with {repo.Account}. Opens in {browsers.NameFor(repo.Account)}.";
+        if (checkout is not null)
+        {
+            checkout.Jobs.Changed += OnJobChanged;
+            // A job started from an earlier panel of this line: still running, or ended while no panel was open (#407). Its branch is not
+            // taken from such an outcome: the line, read again since, knows better.
+            ShowJob(opening: true);
+        }
     }
+
+    /// <summary>
+    /// The button above the tabs (#407): "Switch to main and pull", or "Pull main" when the checkout is on it, with the branch GitHub calls
+    /// the default; "Pulling main…" while a pull runs. Null, and no button, when the panel has no checkout or the repository has no default branch.
+    /// </summary>
+    public string? PullText => _checkout is null || _repo.DefaultBranch is not { } main ? null
+        : IsPulling ? $"Pulling {main}…"
+        : Branch == main ? $"Pull {main}"
+        : $"Switch to {main} and pull";
+
+    /// <summary>A screen reader hears what the button does and where.</summary>
+    public string? PullAutomationName => PullText is { } text ? $"{text} in {_repo.Repo.Name}" : null;
 
     public GitHubListViewModel PullRequests { get; }
 
@@ -117,9 +157,74 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
         }
     }
 
+    /// <summary>The checkout's folder, for the Yard to keep <see cref="Branch"/> up to date; null when the panel has none.</summary>
+    public string? CheckoutPath => _checkout?.Path;
+
+    /// <summary>The line was read again: the button names what a press does now, not what it did when the panel opened.</summary>
+    public void FollowBranch(string? branch) => Branch = branch;
+
+    /// <summary>
+    /// Switches the line's checkout to the default branch and pulls (#407), in the Yard's jobs, so closing the panel lets it finish. A chat
+    /// working in the workspace refuses it: the Yard never switches a branch under a working chat. A press while a pull runs does nothing;
+    /// the button stays enabled for it, as Refresh does: WPF would drop the keyboard to the window from a button it disables while focused.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanPull))]
+    private void Pull()
+    {
+        if (_checkout is null || _repo.DefaultBranch is not { } main || IsPulling)
+        {
+            return;
+        }
+
+        if (_checkout.ChatIsWorking())
+        {
+            ShowAction("A chat is working here. Pull when it is done.", failed: true);
+            return;
+        }
+
+        ActionMessage = null;
+        _ = _checkout.Jobs.PullAsync(_checkout.Path, main, _repo.Repo.Name, _checkout.ChatIsWorking);
+    }
+
+    private bool CanPull() => _checkout is not null && _repo.DefaultBranch is not null;
+
+    private void OnJobChanged(string key)
+    {
+        if (_checkout is not null && key == YardGitJobs.Key(_checkout.Path))
+        {
+            ShowJob(opening: false);
+        }
+    }
+
+    /// <summary>The checkout's job as it is now: running, or its outcome, which this panel takes so no other shows it again.</summary>
+    private void ShowJob(bool opening)
+    {
+        var jobs = _checkout!.Jobs;
+        IsPulling = jobs.IsRunning(_checkout.Path);
+        if (!IsPulling && jobs.TakeOutcome(_checkout.Path) is { } outcome)
+        {
+            ShowAction(outcome.Message, failed: !outcome.Succeeded);
+            if (outcome.Succeeded && !opening)
+            {
+                Branch = _repo.DefaultBranch;
+            }
+        }
+    }
+
+    private void ShowAction(string message, bool failed)
+    {
+        ActionMessage = message;
+        IsActionFailed = failed;
+    }
+
     [RelayCommand]
     private void Close()
     {
+        if (_checkout is not null)
+        {
+            _checkout.Jobs.Changed -= OnJobChanged;
+        }
+
         _stop.Cancel();
         PullRequests.Stop();
         Issues.Stop();

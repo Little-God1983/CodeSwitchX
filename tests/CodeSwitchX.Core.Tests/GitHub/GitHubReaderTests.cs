@@ -75,6 +75,20 @@ public class GitHubReaderTests
         gh.Asked.ShouldBe(["acme"]);
     }
 
+    [Theory]
+    [InlineData("\"defaultBranchRef\":{\"name\":\"develop\"},", "develop")]
+    [InlineData("\"defaultBranchRef\":null,", null)]
+    [InlineData("", null)]
+    public async Task The_default_branch_is_read_with_the_counts_and_an_empty_repository_has_none(string field, string? branch)
+    {
+        var gh = Fake(["acme"], new() { ["acme"] = Graphql("ADMIN").Replace("\"viewerPermission\"", field + "\"viewerPermission\"", StringComparison.Ordinal) });
+
+        var activity = await Read(gh);
+
+        activity.ShouldNotBeNull().DefaultBranch.ShouldBe(branch);
+        gh.Commands[0].ShouldContain(a => a.Contains("defaultBranchRef{name}", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task Otherwise_the_highest_permission_reads_it()
     {

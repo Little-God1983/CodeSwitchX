@@ -12,7 +12,7 @@ using NSubstitute;
 
 namespace CodeSwitchX.UI.Tests.Yard;
 
-public class YardGitHubTests : IDisposable
+public partial class YardGitHubTests : IDisposable
 {
     private readonly string _tempRoot = Path.Combine(Path.GetTempPath(), "csx-yardgh-" + Guid.NewGuid().ToString("N"));
     private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 9, 23, 12, 0, 0, TimeSpan.Zero));
@@ -88,7 +88,7 @@ public class YardGitHubTests : IDisposable
                 return null;
             }
 
-            return "{\"data\":{\"repository\":{\"viewerPermission\":\"ADMIN\","
+            return "{\"data\":{\"repository\":{\"viewerPermission\":\"ADMIN\",\"defaultBranchRef\":{\"name\":\"main\"},"
                 + "\"issues\":{\"totalCount\":" + Issues + ",\"nodes\":[]},"
                 + "\"pullRequests\":{\"totalCount\":" + PullRequests + ",\"nodes\":[]}}}}";
         }
@@ -214,7 +214,8 @@ public class YardGitHubTests : IDisposable
         _activity = withGitHub
             ? new GitHubActivity(_gh, new GitHubReader(_gh), (path, _) => Task.FromResult(_originOf(path)), NullLogger<GitHubActivity>.Instance)
             : null;
-        var yard = new YardViewModel(_store, registry, engine, pricing, git, _bus, ui, _time, NullLogger<YardViewModel>.Instance, gitHub: _activity);
+        var yard = new YardViewModel(_store, registry, engine, pricing, git, _bus, ui, _time, NullLogger<YardViewModel>.Instance, gitHub: _activity,
+            gitHubReader: withGitHub ? new GitHubReader(_gh) : null, gitHubBrowsers: withGitHub ? Browsers() : null, puller: new GitPuller(_pullGit.RunAsync));
         _yards.Add(yard);
         return yard;
     }
