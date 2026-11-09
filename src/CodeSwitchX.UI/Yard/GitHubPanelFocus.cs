@@ -1,5 +1,4 @@
 using System.Windows;
-using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
@@ -86,8 +85,7 @@ internal sealed class GitHubPanelFocus
                 {
                     // A strip's button closed the strip under itself: the keyboard goes back to that row's Merge button (review of #408).
                     var merge = _stripRow is { } number
-                        ? Descendants(_panel).OfType<Button>().FirstOrDefault(b => b.IsVisible && b.DataContext is GitHubRow row && row.Item.Number == number
-                            && AutomationProperties.GetName(b) == $"Merge {row.NumberText}")
+                        ? Descendants(_panel).OfType<Button>().FirstOrDefault(b => b.IsVisible && b.Name == "MergeButton" && b.DataContext is GitHubRow row && row.Item.Number == number)
                         : null;
                     _stripRow = null;
                     if (merge is null || !merge.Focus())

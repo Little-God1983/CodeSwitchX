@@ -1213,8 +1213,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
         _ = RefreshGitAfterJobAsync();
 
-        // A merge changes the repository's open pull requests: its pills and counts are read now, not at the next ten minutes (#408).
-        if (outcome.Merged is not null && _gitHub is not null)
+        // A merge changes the repository's open pull requests: its pills and counts are read now, not at the next ten minutes (#408). Whatever
+        // it came to: one gh ran out of time on may have gone through.
+        if (outcome.FromMerge && _gitHub is not null)
         {
             _ = RefreshGitHubAsync([outcome.Checkout]);
         }

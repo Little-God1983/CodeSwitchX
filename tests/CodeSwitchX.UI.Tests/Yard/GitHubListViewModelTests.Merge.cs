@@ -164,6 +164,49 @@ public partial class GitHubListViewModelTests
     }
 
     [Fact]
+    public async Task A_full_list_read_before_the_merge_does_not_bring_the_merged_row_back()
+    {
+        var model = await OpenForMerge("b");
+        var load = model.PullRequests.LoadAsync(TestContext.Current.CancellationToken);
+        model.OpenMergeCommand.Execute(Row(model));
+        model.MergeOnlyCommand.Execute(null);
+        await Eventually(() => !model.IsBusy && model.ActionMessage is not null);
+
+        _gh.PullRequestList.SetResult(PullRequestsOf(3).Replace("\"number\":3", "\"number\":9", StringComparison.Ordinal));
+        await load;
+
+        model.PullRequests.Rows.Select(r => r.NumberText).ShouldBe(["#1", "#2"]);
+        model.PullRequests.TabText.ShouldBe("Pull requests 2");
+    }
+
+    [Fact]
+    public async Task A_branch_change_closes_an_open_strip()
+    {
+        var model = await OpenForMerge("b");
+        model.OpenMergeCommand.Execute(Row(model));
+
+        model.FollowBranch("b");
+        model.MergeStrip.ShouldNotBeNull("the same branch keeps it");
+        model.FollowBranch("feature/y");
+
+        model.MergeStrip.ShouldBeNull("its choices were worked out from the branch the checkout left");
+    }
+
+    [Fact]
+    public async Task A_merge_that_ran_out_of_time_still_ends_as_a_merge_job()
+    {
+        _merge.Answer = new GhAnswer(null, TimedOut: true);
+        var jobs = MergingJobs();
+        var ended = new List<GitJobOutcome>();
+        jobs.Ended += (outcome, _) => ended.Add(outcome);
+
+        await jobs.MergeAsync(@"C:\app", "app", new GitHubRepo("acme", "app"), "me", 9, "main", null, () => false);
+
+        ended.ShouldHaveSingleItem().FromMerge.ShouldBeTrue("the Yard reads GitHub again: it may have merged");
+        ended[0].Merged.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task A_pull_closes_an_open_strip()
     {
         var model = await OpenForMerge("b");

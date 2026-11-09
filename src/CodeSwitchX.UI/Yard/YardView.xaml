@@ -463,7 +463,7 @@
                           </Style.Triggers>
                         </Style>
                       </Border.Style>
-                      <Button Content="Merge" Padding="8,1" Command="{Binding DataContext.OpenMergeCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                      <Button x:Name="MergeButton" Content="Merge" Padding="8,1" Command="{Binding DataContext.OpenMergeCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                               CommandParameter="{Binding}" AutomationProperties.Name="{Binding NumberText, StringFormat='Merge {0}'}"
                               ToolTip="Asks first: a merge cannot be undone" />
                     </Border>

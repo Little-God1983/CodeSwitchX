@@ -165,7 +165,16 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     public string? CheckoutPath => _checkout?.Path;
 
     /// <summary>The line was read again: the button names what a press does now, not what it did when the panel opened.</summary>
-    public void FollowBranch(string? branch) => Branch = branch;
+    public void FollowBranch(string? branch)
+    {
+        // An open strip worked out its choices from the branch the checkout was on (review of #408).
+        if (branch != Branch)
+        {
+            MergeStrip = null;
+        }
+
+        Branch = branch;
+    }
 
     /// <summary>
     /// Switches the line's checkout to the default branch and pulls (#407), in the Yard's jobs, so closing the panel lets it finish. A chat

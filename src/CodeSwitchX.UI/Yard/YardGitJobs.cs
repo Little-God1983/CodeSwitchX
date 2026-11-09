@@ -11,7 +11,8 @@ namespace CodeSwitchX.UI.Yard;
 /// <param name="Name">The repository's name, for a line that is not in its panel.</param>
 /// <param name="Merged">The pull request a merge job merged (#408), whatever the pull after it came to; null when nothing was merged.</param>
 /// <param name="Pulled">The checkout is on the default branch and up to date: a pull, or the pull after a merge, went through.</param>
-public sealed record GitJobOutcome(string Checkout, string Name, bool Succeeded, string Message, int? Merged = null, bool Pulled = false);
+/// <param name="FromMerge">A merge job's: GitHub may have changed even when the outcome cannot say so (gh ran out of time).</param>
+public sealed record GitJobOutcome(string Checkout, string Name, bool Succeeded, string Message, int? Merged = null, bool Pulled = false, bool FromMerge = false);
 
 /// <summary>
 /// The pulls (#407) and merges (#408) the GitHub panel starts, kept at the Yard's level so they outlive the panel. A job once started is
@@ -110,12 +111,13 @@ public sealed class YardGitJobs
             return pull.Succeeded
                 ? new GitJobOutcome(checkout, name, true, $"{merged}. {pull.Text}", number, Pulled: true)
                 : new GitJobOutcome(checkout, name, false, $"{merged}, but didn't switch: {pull.Text}", number);
-        }, $"#{number} may or may not be merged: something went wrong. See the log and GitHub.");
+        }, $"#{number} may or may not be merged: something went wrong. See the log and GitHub.", fromMerge: true);
     }
 
     /// <param name="what">"A pull", "A merge": for the log, which names no repository.</param>
     /// <param name="failed">What the panel says when the job threw.</param>
-    private Task Run(string checkout, string name, string running, string what, Func<Task<GitJobOutcome>> work, string failed)
+    /// <param name="fromMerge">A merge job: its outcome says so, whatever it came to.</param>
+    private Task Run(string checkout, string name, string running, string what, Func<Task<GitJobOutcome>> work, string failed, bool fromMerge = false)
     {
         var key = Key(checkout);
         if (!_running.TryAdd(key, running))
@@ -132,13 +134,13 @@ public sealed class YardGitJobs
             GitJobOutcome outcome;
             try
             {
-                outcome = await work().ConfigureAwait(false);
+                outcome = await work().ConfigureAwait(false) with { FromMerge = fromMerge };
             }
             catch (Exception ex)
             {
                 // The type only: a message could carry a path, a branch or a repository's name.
                 _logger.LogWarning("{Job} from the Yard failed: {ExceptionType}", what, ex.GetType().Name);
-                outcome = new GitJobOutcome(checkout, name, false, failed);
+                outcome = new GitJobOutcome(checkout, name, false, failed, FromMerge: fromMerge);
             }
 
             _logger.LogInformation("{Job} from the Yard ended: {Succeeded}", what, outcome.Succeeded);
