@@ -227,6 +227,13 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
             return;
         }
 
+        // While the list is read again after a refused move, the rows still hold the old head: a Merge now would be refused again (review of #414).
+        if (PullRequests.IsRereading)
+        {
+            ShowAction("Reading the pull requests again. Merge when the list is there.", failed: false);
+            return;
+        }
+
         var item = row.Item;
         var main = _repo.DefaultBranch;
         var into = item.BaseBranch ?? main ?? "its base branch";
@@ -253,6 +260,10 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     [RelayCommand]
     private void CancelMerge() => MergeStrip = null;
 
+    /// <summary>The head the panel holds for the pull request now: the full list may have replaced the row the strip opened on.</summary>
+    private string? HeadNow(GitHubRow row) =>
+        PullRequests.Rows.FirstOrDefault(r => r.Item.Number == row.Item.Number)?.Item.HeadSha ?? row.Item.HeadSha;
+
     private void Merge(bool pull)
     {
         if (_checkout is null || MergeStrip is not { } strip || IsBusy)
@@ -261,9 +272,18 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
         }
 
         MergeStrip = null;
+        // The merge goes for the head the strip was opened on, what the user looked at (#414). A list that has read another head since says
+        // the pull request moved: refused here, as GitHub would refuse it, without merging a commit nobody looked at (review of #414).
+        var opened = strip.Row.Item.HeadSha;
+        if (opened is not null && HeadNow(strip.Row) is { } now && now != opened)
+        {
+            ShowAction($"Can't merge {strip.Row.NumberText}: it changed since you opened Merge. Look at it, then merge again.", failed: true);
+            return;
+        }
+
         ActionMessage = null;
         _ = _checkout.Jobs.MergeAsync(_checkout.Path, _repo.Repo.Name, _repo.Repo, _repo.Account, strip.Row.Item.Number, strip.BaseBranch,
-            pull && strip.OffersPull ? _repo.DefaultBranch : null, _checkout.ChatIsWorking, _checkout.Key, _checkout.Tree);
+            pull && strip.OffersPull ? _repo.DefaultBranch : null, _checkout.ChatIsWorking, _checkout.Key, _checkout.Tree, opened);
     }
 
     private void OnJobChanged(string key)
@@ -292,6 +312,14 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
             if (outcome.Pulled && !opening)
             {
                 Branch = _repo.DefaultBranch;
+            }
+
+            // A pull request that moved since it was read: the list is read again, so the next Merge goes for its new head (#414).
+            // Only in a panel that was open for it, and only a tab read before: a panel opened later, and a tab shown for the first time, read
+            // their lists afresh anyway, and a tab not looked at costs no read (#406).
+            if (outcome.Reread && !opening && PullRequests.HasStarted)
+            {
+                _ = PullRequests.RereadAsync(_stop.Token);
             }
 
             // The merged row leaves the list at once; the Yard reads the repository again for the counts and pills.

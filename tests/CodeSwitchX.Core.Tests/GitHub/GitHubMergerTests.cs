@@ -26,7 +26,7 @@ public class GitHubMergerTests
     {
         var gh = new FakeGh(new GhAnswer(string.Empty));
 
-        var outcome = await new GitHubMerger(gh).MergeAsync(Repo, "reader", 405, "main", CancellationToken.None);
+        var outcome = await new GitHubMerger(gh).MergeAsync(Repo, "reader", 405, "main", null, CancellationToken.None);
 
         outcome.ShouldBe(new MergeOutcome(true));
         gh.Runs.ShouldHaveSingleItem().Login.ShouldBe("reader");
@@ -34,11 +34,65 @@ public class GitHubMergerTests
     }
 
     [Fact]
+    public async Task It_merges_only_the_head_the_panel_read()
+    {
+        var gh = new FakeGh(new GhAnswer(string.Empty));
+
+        await new GitHubMerger(gh).MergeAsync(Repo, "reader", 405, "main", "abc123", CancellationToken.None);
+
+        gh.Runs[0].Arguments.ShouldBe(["pr", "merge", "405", "-R", "acme/tool", "--merge", "--match-head-commit", "abc123"]);
+    }
+
+    [Fact]
+    public async Task A_branch_that_moved_since_the_read_is_refused_and_says_so()
+    {
+        var gh = new FakeGh(new GhAnswer(null, ErrorOutput: "GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)\n"));
+
+        var outcome = await new GitHubMerger(gh).MergeAsync(Repo, "reader", 405, "main", "abc123", CancellationToken.None);
+
+        outcome.ShouldBe(new MergeOutcome(false, "it changed since the panel read it. Look at it, then merge again.", Moved: true));
+    }
+
+    [Fact]
+    public async Task A_base_branch_that_moved_is_no_moved_head()
+    {
+        var gh = new FakeGh(new GhAnswer(null, ErrorOutput: "GraphQL: Base branch was modified. Review and try the merge again. (mergePullRequest)\n"));
+
+        var outcome = await new GitHubMerger(gh).MergeAsync(Repo, "reader", 405, "main", "abc123", CancellationToken.None);
+
+        outcome.Moved.ShouldBeFalse();
+        outcome.Text.ShouldBe("GraphQL: Base branch was modified. Review and try the merge again. (mergePullRequest)");
+    }
+
+    [Theory]
+    // what gh prints without a terminal: its strategy warning when it queues, and its warning for one queued before
+    [InlineData("! The merge strategy for main is set by the merge queue\n")]
+    [InlineData("! Pull request acme/tool#405 is already queued to merge\n")]
+    public async Task A_merge_GitHub_only_queued_is_no_merge(string printed)
+    {
+        var gh = new FakeGh(new GhAnswer(string.Empty, ErrorOutput: printed));
+
+        var outcome = await new GitHubMerger(gh).MergeAsync(Repo, "reader", 405, "main", null, CancellationToken.None);
+
+        outcome.Queued.ShouldBeTrue();
+        outcome.Merged.ShouldBeFalse();
+        outcome.Text.ShouldBe(printed.Contains("already", StringComparison.Ordinal) ? "is already in the merge queue." : "will be added to the merge queue.");
+    }
+
+    [Fact]
+    public async Task On_a_queue_repository_the_strategy_warning_is_no_reason()
+    {
+        var gh = new FakeGh(new GhAnswer(null, ErrorOutput: "! The merge strategy for main is set by the merge queue\nGraphQL: Resource not accessible by integration (enqueuePullRequest)\n"));
+
+        (await new GitHubMerger(gh).MergeAsync(Repo, "reader", 9, "main", null, CancellationToken.None)).Text.ShouldBe("GraphQL: Resource not accessible by integration (enqueuePullRequest)");
+    }
+
+    [Fact]
     public async Task A_refusal_gives_GitHubs_reason_in_short()
     {
         var gh = new FakeGh(new GhAnswer(null, ErrorOutput: "X Pull request acme/tool#399 is not mergeable: the merge commit cannot be cleanly created.\nTo have the pull request merged after all the requirements have been met, add the `--auto` flag.\n"));
 
-        var outcome = await new GitHubMerger(gh).MergeAsync(Repo, "reader", 399, "develop", CancellationToken.None);
+        var outcome = await new GitHubMerger(gh).MergeAsync(Repo, "reader", 399, "develop", null, CancellationToken.None);
 
         outcome.ShouldBe(new MergeOutcome(false, "it has conflicts with develop."));
     }
@@ -48,7 +102,7 @@ public class GitHubMergerTests
     {
         var gh = new FakeGh(new GhAnswer(null, ErrorOutput: "X Pull request acme/tool#9 was already merged\n"));
 
-        (await new GitHubMerger(gh).MergeAsync(Repo, "reader", 9, "main", CancellationToken.None)).ShouldBe(new MergeOutcome(true, AlreadyMerged: true));
+        (await new GitHubMerger(gh).MergeAsync(Repo, "reader", 9, "main", null, CancellationToken.None)).ShouldBe(new MergeOutcome(true, AlreadyMerged: true));
     }
 
     [Fact]
@@ -56,7 +110,7 @@ public class GitHubMergerTests
     {
         var gh = new FakeGh(new GhAnswer(null, FailureOutput: "X Pull request acme/tool#9 is not mergeable: the base branch policy prohibits the merge.\n", ErrorOutput: string.Empty));
 
-        (await new GitHubMerger(gh).MergeAsync(Repo, "reader", 9, "main", CancellationToken.None)).Text.ShouldBe("the base branch policy prohibits the merge.");
+        (await new GitHubMerger(gh).MergeAsync(Repo, "reader", 9, "main", null, CancellationToken.None)).Text.ShouldBe("the base branch policy prohibits the merge.");
     }
 
     [Fact]
@@ -64,7 +118,7 @@ public class GitHubMergerTests
     {
         var gh = new FakeGh(new GhAnswer(null, TimedOut: true));
 
-        (await new GitHubMerger(gh).MergeAsync(Repo, "reader", 1, "main", CancellationToken.None)).Text.ShouldContain("Check the pull request on GitHub");
+        (await new GitHubMerger(gh).MergeAsync(Repo, "reader", 1, "main", null, CancellationToken.None)).Text.ShouldContain("Check the pull request on GitHub");
     }
 
     [Theory]

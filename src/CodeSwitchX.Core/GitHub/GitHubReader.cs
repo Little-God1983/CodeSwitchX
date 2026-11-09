@@ -21,7 +21,7 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
     private const string QueryTemplate = """
         query($owner:String!,$name:String!){repository(owner:$owner,name:$name){viewerPermission defaultBranchRef{name}
          issues(states:OPEN,first:PREVIEW,orderBy:{field:CREATED_AT,direction:DESC}){totalCount nodes{number title url updatedAt labels(first:10){nodes{name color}}}}
-         pullRequests(states:OPEN,first:PREVIEW,orderBy:{field:CREATED_AT,direction:DESC}){totalCount nodes{number title url updatedAt headRefName baseRefName isCrossRepository author{login} labels(first:10){nodes{name color}}}}}}
+         pullRequests(states:OPEN,first:PREVIEW,orderBy:{field:CREATED_AT,direction:DESC}){totalCount nodes{number title url updatedAt headRefName headRefOid baseRefName isCrossRepository author{login} labels(first:10){nodes{name color}}}}}}
         """;
 
     private static readonly string Query = QueryTemplate.Replace("PREVIEW", RepoActivity.PreviewCount.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal);
@@ -82,7 +82,7 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
         var answer = await gh.ListAsAsync(account,
         [
             isPullRequest ? "pr" : "issue", "list", "-R", repo.Slug, "--state", "open", "--limit", GitHubList.Limit.ToString(CultureInfo.InvariantCulture),
-            "--json", isPullRequest ? "number,title,url,updatedAt,labels,headRefName,baseRefName,isCrossRepository,author" : "number,title,url,updatedAt,labels",
+            "--json", isPullRequest ? "number,title,url,updatedAt,labels,headRefName,headRefOid,baseRefName,isCrossRepository,author" : "number,title,url,updatedAt,labels",
         ], ct).ConfigureAwait(false);
         if (answer.Output is not { } output)
         {
@@ -219,6 +219,7 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
             string? author = null;
             string? baseBranch = null;
             var fromFork = false;
+            string? headSha = null;
             if (isPullRequest)
             {
                 var head = row.GetProperty("headRefName");
@@ -231,6 +232,7 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
                 // Read where given; a missing or odd one leaves the row as it is, without the merge's details (#408).
                 baseBranch = row.TryGetProperty("baseRefName", out var b) && b.ValueKind == JsonValueKind.String ? b.GetString() : null;
                 fromFork = row.TryGetProperty("isCrossRepository", out var f) && f.ValueKind == JsonValueKind.True;
+                headSha = row.TryGetProperty("headRefOid", out var h) && h.ValueKind == JsonValueKind.String ? h.GetString() : null;
                 if (row.TryGetProperty("author", out var a) && a.ValueKind == JsonValueKind.Object)
                 {
                     // gh pr list can give an author without a login, and spells a bot app/name where GraphQL says name.
@@ -254,7 +256,7 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
                 return null;
             }
 
-            return new GitHubItem(number, title.GetString() ?? "", url.GetString()!, updatedAt, labels, branch, author, baseBranch, fromFork);
+            return new GitHubItem(number, title.GetString() ?? "", url.GetString()!, updatedAt, labels, branch, author, baseBranch, fromFork, headSha);
         }
         catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException or FormatException)
         {

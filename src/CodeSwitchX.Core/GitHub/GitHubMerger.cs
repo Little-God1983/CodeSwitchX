@@ -7,7 +7,9 @@ namespace CodeSwitchX.Core.GitHub;
 /// <param name="Text">Why it was not merged, in short ("it has conflicts with main."); empty when it was.</param>
 /// <param name="AlreadyMerged">GitHub says it was merged before: merged all the same, so the row leaves and a pull may follow (review of #408).</param>
 /// <param name="Unknown">gh ran out of time: it may have merged or not.</param>
-public sealed record MergeOutcome(bool Merged, string Text = "", bool AlreadyMerged = false, bool Unknown = false);
+/// <param name="Queued">GitHub put it in the merge queue, or had it there already (#414): not merged yet, so nothing is pulled and the row stays. <paramref name="Text"/> says which.</param>
+/// <param name="Moved">The branch moved since the row was read (#414): GitHub refused, and the list is read again before another try.</param>
+public sealed record MergeOutcome(bool Merged, string Text = "", bool AlreadyMerged = false, bool Unknown = false, bool Queued = false, bool Moved = false);
 
 /// <summary>
 /// Merges a pull request on GitHub with a merge commit, as the account that reads the repository, without switching gh's active one
@@ -23,13 +25,30 @@ public sealed class GitHubMerger
     }
 
     /// <param name="baseBranch">The branch it merges into, for the conflict's reason.</param>
-    public async Task<MergeOutcome> MergeAsync(GitHubRepo repo, string account, int number, string baseBranch, CancellationToken ct)
+    /// <param name="headSha">The head commit the panel read (#414): GitHub merges only that, and refuses once the branch has moved. Null merges whatever is there.</param>
+    public async Task<MergeOutcome> MergeAsync(GitHubRepo repo, string account, int number, string baseBranch, string? headSha, CancellationToken ct)
     {
+        IReadOnlyList<string> arguments = ["pr", "merge", number.ToString(CultureInfo.InvariantCulture), "-R", repo.Slug, "--merge"];
+        if (headSha is { Length: > 0 })
+        {
+            arguments = [.. arguments, "--match-head-commit", headSha];
+        }
+
         // The long run's timeout: a merge killed midway may have merged or not, and nobody can tell from here.
-        var answer = await _gh.ListAsAsync(account, ["pr", "merge", number.ToString(CultureInfo.InvariantCulture), "-R", repo.Slug, "--merge"], ct).ConfigureAwait(false);
+        var answer = await _gh.ListAsAsync(account, arguments, ct).ConfigureAwait(false);
         if (answer.Output is not null)
         {
-            return new MergeOutcome(true);
+            // gh exits 0 when it only queued it. Without a terminal it prints no "will be added to the merge queue"; what reaches here is its
+            // warning "The merge strategy for main is set by the merge queue", or "is already queued to merge" (#414, review).
+            var said = $"{answer.Output}\n{answer.ErrorOutput}";
+            if (said.Contains("queued to merge", StringComparison.OrdinalIgnoreCase))
+            {
+                return new MergeOutcome(false, "is already in the merge queue.", Queued: true);
+            }
+
+            return said.Contains("merge queue", StringComparison.OrdinalIgnoreCase)
+                ? new MergeOutcome(false, "will be added to the merge queue.", Queued: true)
+                : new MergeOutcome(true);
         }
 
         if (answer.TimedOut)
@@ -41,6 +60,13 @@ public sealed class GitHubMerger
         if (printed.Contains("was already merged", StringComparison.OrdinalIgnoreCase))
         {
             return new MergeOutcome(true, AlreadyMerged: true);
+        }
+
+        // GitHub's answer to --match-head-commit when the branch moved: "Head branch was modified. Review and try the merge again." Not its
+        // "Base branch was modified", which says nothing of the head (review of #414).
+        if (headSha is { Length: > 0 } && printed.Contains("Head branch was modified", StringComparison.OrdinalIgnoreCase))
+        {
+            return new MergeOutcome(false, "it changed since the panel read it. Look at it, then merge again.", Moved: true);
         }
 
         // Each on its own: an empty stderr must not hide the reason gh printed to stdout (review of #408).
@@ -63,7 +89,9 @@ public sealed class GitHubMerger
             return $"it has conflicts with {baseBranch}.";
         }
 
-        var first = printed.Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.Length > 0);
+        // gh's warning on a repository with a merge queue comes first and is no reason (review of #414).
+        var first = printed.Split('\n').Select(l => l.Trim())
+            .FirstOrDefault(l => l.Length > 0 && !l.Contains("is set by the merge queue", StringComparison.OrdinalIgnoreCase));
         if (first is null)
         {
             return null;
