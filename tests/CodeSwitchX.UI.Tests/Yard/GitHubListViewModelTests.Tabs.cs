@@ -1,0 +1,93 @@
+using System.Windows;
+using System.Windows.Automation;
+using System.Windows.Controls;
+using CodeSwitchX.Core.GitHub;
+using CodeSwitchX.UI.Tests.Infrastructure;
+using CodeSwitchX.UI.Yard;
+
+namespace CodeSwitchX.UI.Tests.Yard;
+
+/// <summary>The panel's two tabs (#410): one template, names with count and state, a count that does not push the other tab.</summary>
+public partial class GitHubListViewModelTests
+{
+    [Fact]
+    public async Task Each_tab_is_named_with_its_count_and_whether_it_is_in_front()
+    {
+        var (activity, pill) = await PillAsync();
+        var model = Open(activity, new GitHubPill(pill.Activity, GitHubItemKind.PullRequest));
+
+        model.PullRequests.TabAutomationName.ShouldBe("Pull requests, 1 open, shown");
+        model.Issues.TabAutomationName.ShouldBe("Issues, 12 open, not shown");
+
+        model.ShowCommand.Execute(GitHubItemKind.Issue);
+
+        model.PullRequests.TabAutomationName.ShouldBe("Pull requests, 1 open, not shown");
+        model.Issues.TabAutomationName.ShouldBe("Issues, 12 open, shown");
+        model.Tabs.ShouldBe([model.PullRequests, model.Issues]);
+    }
+
+    [Fact]
+    public async Task A_new_count_renames_the_tab()
+    {
+        var (activity, pill) = await PillAsync();
+        var model = Open(activity, pill);
+        var changed = new List<string?>();
+        model.Issues.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+        _gh.List.SetResult(ListOf(19));
+
+        await model.Issues.LoadAsync(TestContext.Current.CancellationToken);
+
+        model.Issues.TabAutomationName.ShouldBe("Issues, 19 open, shown");
+        changed.ShouldContain(nameof(GitHubListViewModel.TabAutomationName));
+    }
+
+    [Fact]
+    public async Task The_issues_tab_stays_where_it_is_when_the_pull_request_count_gains_a_digit()
+    {
+        var (activity, pill) = await PillAsync();
+        var model = Open(activity, pill);
+
+        await StaThread.RunAsync(() =>
+        {
+            var view = PanelView(model);
+            double IssuesTabX() => Descendants<Button>(view).Single(b => AutomationProperties.GetName(b).StartsWith("Issues,", StringComparison.Ordinal))
+                .TranslatePoint(new Point(0, 0), view).X;
+            var before = IssuesTabX();
+
+            model.PullRequests.Count = 12;
+            view.UpdateLayout();
+
+            IssuesTabX().ShouldBe(before);
+        });
+    }
+
+    [Fact]
+    public async Task The_tab_in_front_has_its_pill_colours_and_the_other_none()
+    {
+        var (activity, pill) = await PillAsync();
+        var model = Open(activity, new GitHubPill(pill.Activity, GitHubItemKind.PullRequest));
+
+        await StaThread.RunAsync(() =>
+        {
+            var view = PanelView(model);
+            Border TabOf(string name) => (Border)Ancestors(Descendants<Button>(view).Single(b => AutomationProperties.GetName(b).StartsWith(name, StringComparison.Ordinal)))
+                .First(e => e is Border { CornerRadius.TopLeft: 6 });
+
+            ((System.Windows.Media.SolidColorBrush)TabOf("Pull requests,").Background).Color.ToString().ShouldBe("#FF2D464B");
+            ((System.Windows.Media.SolidColorBrush)TabOf("Issues,").Background).Color.A.ShouldBe((byte)0);
+
+            model.ShowCommand.Execute(GitHubItemKind.Issue);
+            view.UpdateLayout();
+
+            ((System.Windows.Media.SolidColorBrush)TabOf("Issues,").Background).Color.ToString().ShouldBe("#FF3A4250");
+        });
+    }
+
+    private static IEnumerable<DependencyObject> Ancestors(DependencyObject element)
+    {
+        for (var at = System.Windows.Media.VisualTreeHelper.GetParent(element); at is not null; at = System.Windows.Media.VisualTreeHelper.GetParent(at))
+        {
+            yield return at;
+        }
+    }
+}

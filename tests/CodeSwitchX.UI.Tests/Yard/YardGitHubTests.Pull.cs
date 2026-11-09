@@ -121,7 +121,8 @@ public partial class YardGitHubTests
         again.PullCommand.Execute(null);
 
         await Eventually(() => again.ActionMessage == "app is on main, 3 new commits.");
-        yard.JobMessage.ShouldBeNull();
+        // The panel shows the outcome a moment before the Yard hears of it: the job's thread runs both, in that order.
+        await Eventually(() => yard.JobMessage is null);
     }
 
     [Fact]

@@ -413,9 +413,11 @@
             <Setter Property="Foreground" Value="#B0B0B0" />
           </Style>
           <!-- A tab's rows. A large repository has up to a thousand rows: only the ones in view are built (#363). Each tab has a list of its
-               own, so it keeps its scroll position and a tab shown starts at its top (review of #406). -->
+               own, so it keeps its scroll position and a tab shown starts at its top (review of #406). The list's tab is the Tag: it shows the
+               rows while it is in front (#410), and its kind says whether a row has Merge. -->
           <Style x:Key="GitHubRows" TargetType="ItemsControl">
             <Setter Property="Focusable" Value="False" />
+            <Setter Property="Visibility" Value="Collapsed" />
             <Setter Property="ScrollViewer.CanContentScroll" Value="True" />
             <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True" />
             <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling" />
@@ -455,7 +457,7 @@
                           <Style.Triggers>
                             <MultiDataTrigger>
                               <MultiDataTrigger.Conditions>
-                                <Condition Binding="{Binding Tag, RelativeSource={RelativeSource AncestorType=ItemsControl}}" Value="PullRequests" />
+                                <Condition Binding="{Binding Tag.Kind, RelativeSource={RelativeSource AncestorType=ItemsControl}}" Value="{x:Static github:GitHubItemKind.PullRequest}" />
                                 <Condition Binding="{Binding DataContext.CanMerge, RelativeSource={RelativeSource AncestorType=ItemsControl}}" Value="True" />
                               </MultiDataTrigger.Conditions>
                               <Setter Property="Visibility" Value="Visible" />
@@ -498,6 +500,11 @@
                 </DataTemplate>
               </Setter.Value>
             </Setter>
+            <Style.Triggers>
+              <DataTrigger Binding="{Binding Tag.IsShown, RelativeSource={RelativeSource Self}}" Value="True">
+                <Setter Property="Visibility" Value="Visible" />
+              </DataTrigger>
+            </Style.Triggers>
           </Style>
           <!-- a tab's name and its arrow: plain text on the tab, each a Tab stop of its own -->
           <Style x:Key="GitHubTabButton" TargetType="Button">
@@ -566,64 +573,57 @@
             </TextBlock.Style>
           </TextBlock>
         </StackPanel>
-        <!-- The tabs (#406): a tab's name shows its list, its arrow opens all of that kind on GitHub. The tab in front has its pill's colours. -->
+        <!-- The tabs (#406, #410): one template over the two lists. A tab's name shows its list, its arrow opens all of that kind on GitHub.
+             The tab in front has its pill's colours; a screen reader hears its count and whether it is in front. The count keeps a width of
+             its own, so the tab beside it does not move when it gains a digit. -->
         <Border DockPanel.Dock="Top" Margin="16,0,16,8" BorderThickness="0,0,0,1" BorderBrush="#40FFFFFF">
-          <StackPanel Orientation="Horizontal">
-            <Border CornerRadius="6,6,0,0" Margin="0,0,4,0">
-              <Border.Style>
-                <Style TargetType="Border">
-                  <Setter Property="Background" Value="Transparent" />
-                  <Style.Triggers>
-                    <DataTrigger Binding="{Binding IsPullRequestsShown}" Value="True">
-                      <Setter Property="Background" Value="#2D464B" />
-                    </DataTrigger>
-                  </Style.Triggers>
-                </Style>
-              </Border.Style>
-              <Border.Resources>
-                <Style TargetType="Button" BasedOn="{StaticResource GitHubTabButton}">
-                  <Style.Triggers>
-                    <DataTrigger Binding="{Binding IsPullRequestsShown}" Value="True">
-                      <Setter Property="Foreground" Value="#A6E3E9" />
-                    </DataTrigger>
-                  </Style.Triggers>
-                </Style>
-              </Border.Resources>
-              <StackPanel Orientation="Horizontal">
-                <Button Content="{Binding PullRequests.TabText}" Command="{Binding ShowCommand}" CommandParameter="{x:Static github:GitHubItemKind.PullRequest}"
-                        AutomationProperties.Name="Show pull requests" />
-                <Button Content="&#x2197;" Command="{Binding OpenOnGitHubCommand}" CommandParameter="{x:Static github:GitHubItemKind.PullRequest}" Padding="2,4,8,4"
-                        ToolTip="Open all pull requests on GitHub" AutomationProperties.Name="Open all pull requests on GitHub" />
-              </StackPanel>
-            </Border>
-            <Border CornerRadius="6,6,0,0" Margin="0,0,4,0">
-              <Border.Style>
-                <Style TargetType="Border">
-                  <Setter Property="Background" Value="Transparent" />
-                  <Style.Triggers>
-                    <DataTrigger Binding="{Binding IsPullRequestsShown}" Value="False">
-                      <Setter Property="Background" Value="#3A4250" />
-                    </DataTrigger>
-                  </Style.Triggers>
-                </Style>
-              </Border.Style>
-              <Border.Resources>
-                <Style TargetType="Button" BasedOn="{StaticResource GitHubTabButton}">
-                  <Style.Triggers>
-                    <DataTrigger Binding="{Binding IsPullRequestsShown}" Value="False">
-                      <Setter Property="Foreground" Value="#B9CDF0" />
-                    </DataTrigger>
-                  </Style.Triggers>
-                </Style>
-              </Border.Resources>
-              <StackPanel Orientation="Horizontal">
-                <Button Content="{Binding Issues.TabText}" Command="{Binding ShowCommand}" CommandParameter="{x:Static github:GitHubItemKind.Issue}"
-                        AutomationProperties.Name="Show issues" />
-                <Button Content="&#x2197;" Command="{Binding OpenOnGitHubCommand}" CommandParameter="{x:Static github:GitHubItemKind.Issue}" Padding="2,4,8,4"
-                        ToolTip="Open all issues on GitHub" AutomationProperties.Name="Open all issues on GitHub" />
-              </StackPanel>
-            </Border>
-          </StackPanel>
+          <ItemsControl ItemsSource="{Binding Tabs}" Focusable="False">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate>
+                <StackPanel Orientation="Horizontal" />
+              </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+              <DataTemplate>
+                <Border CornerRadius="6,6,0,0" Margin="0,0,4,0">
+                  <Border.Style>
+                    <Style TargetType="Border">
+                      <Setter Property="Background" Value="Transparent" />
+                      <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsShown}" Value="True">
+                          <Setter Property="Background" Value="{Binding ShownBackground, Converter={StaticResource HexBrush}}" />
+                        </DataTrigger>
+                      </Style.Triggers>
+                    </Style>
+                  </Border.Style>
+                  <Border.Resources>
+                    <Style TargetType="Button" BasedOn="{StaticResource GitHubTabButton}">
+                      <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsShown}" Value="True">
+                          <Setter Property="Foreground" Value="{Binding ShownForeground, Converter={StaticResource HexBrush}}" />
+                        </DataTrigger>
+                      </Style.Triggers>
+                    </Style>
+                  </Border.Resources>
+                  <StackPanel Orientation="Horizontal">
+                    <Button Command="{Binding DataContext.ShowCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding Kind}"
+                            AutomationProperties.Name="{Binding TabAutomationName}">
+                      <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="{Binding TabName}" />
+                        <!-- room for three digits, the same width each: a hidden "000" in the same font holds the width, also under text scaling -->
+                        <Grid Margin="4,0,0,0">
+                          <TextBlock Text="000" Visibility="Hidden" Typography.NumeralAlignment="Tabular" />
+                          <TextBlock Text="{Binding Count}" Typography.NumeralAlignment="Tabular" />
+                        </Grid>
+                      </StackPanel>
+                    </Button>
+                    <Button Content="&#x2197;" Command="{Binding DataContext.OpenOnGitHubCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                            CommandParameter="{Binding Kind}" Padding="2,4,8,4" ToolTip="{Binding OpenAllText}" AutomationProperties.Name="{Binding OpenAllText}" />
+                  </StackPanel>
+                </Border>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
         </Border>
         <!-- Always there, so a copy line does not move the rows under the pointer. -->
         <DockPanel DockPanel.Dock="Top" Margin="16,0,16,8">
@@ -640,29 +640,8 @@
         <TextBlock Style="{StaticResource GitHubDimLine}" Text="{Binding Shown.EmptyText}" />
         <!-- the tab in front shows its rows; the other keeps its list, scrolled where it was -->
         <Grid>
-          <ItemsControl ItemsSource="{Binding PullRequests.Rows}" Tag="PullRequests">
-            <ItemsControl.Style>
-              <Style TargetType="ItemsControl" BasedOn="{StaticResource GitHubRows}">
-                <Setter Property="Visibility" Value="Collapsed" />
-                <Style.Triggers>
-                  <DataTrigger Binding="{Binding IsPullRequestsShown}" Value="True">
-                    <Setter Property="Visibility" Value="Visible" />
-                  </DataTrigger>
-                </Style.Triggers>
-              </Style>
-            </ItemsControl.Style>
-          </ItemsControl>
-          <ItemsControl ItemsSource="{Binding Issues.Rows}">
-            <ItemsControl.Style>
-              <Style TargetType="ItemsControl" BasedOn="{StaticResource GitHubRows}">
-                <Style.Triggers>
-                  <DataTrigger Binding="{Binding IsPullRequestsShown}" Value="True">
-                    <Setter Property="Visibility" Value="Collapsed" />
-                  </DataTrigger>
-                </Style.Triggers>
-              </Style>
-            </ItemsControl.Style>
-          </ItemsControl>
+          <ItemsControl ItemsSource="{Binding PullRequests.Rows}" Tag="{Binding PullRequests}" Style="{StaticResource GitHubRows}" />
+          <ItemsControl ItemsSource="{Binding Issues.Rows}" Tag="{Binding Issues}" Style="{StaticResource GitHubRows}" />
         </Grid>
       </DockPanel>
     </Border>
