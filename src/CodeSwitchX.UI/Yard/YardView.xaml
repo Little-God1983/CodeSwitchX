@@ -296,8 +296,8 @@
                Not focusable: it collapses when clicked, and the keyboard would fall to the window with it. -->
           <Canvas DockPanel.Dock="Bottom" Height="0">
             <Button Canvas.Right="0" Canvas.Top="12" Command="{Binding DismissRefreshMessageCommand}" Focusable="False" Cursor="Hand" ToolTip="Click to put this away"
-                    AutomationProperties.Name="{Binding RefreshMessage}" MaxWidth="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=Canvas}}"
-                    Visibility="{Binding RefreshMessage, Converter={StaticResource NullToCollapsed}}">
+                    AutomationProperties.Name="{Binding FailureLineText}" MaxWidth="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=Canvas}}"
+                    Visibility="{Binding FailureLineText, Converter={StaticResource NullToCollapsed}}">
               <Button.Template>
                 <ControlTemplate TargetType="Button">
                   <Border Background="#262626" Padding="8,4" CornerRadius="4">
@@ -305,7 +305,7 @@
                   </Border>
                 </ControlTemplate>
               </Button.Template>
-              <TextBlock Text="{Binding RefreshMessage}" Foreground="#F59E0B" TextWrapping="Wrap" />
+              <TextBlock Text="{Binding FailureLineText}" Foreground="#F59E0B" TextWrapping="Wrap" />
             </Button>
           </Canvas>
           <!-- Before the controls, so it keeps its width when they run out of room. -->

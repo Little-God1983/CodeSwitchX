@@ -43,7 +43,8 @@ public partial class YardGitHubTests
         panel.CloseCommand.Execute(null);
         _pullGit.Release();
 
-        await Eventually(() => yard.RefreshMessage == "Pull stopped: 1 file has uncommitted changes.");
+        await Eventually(() => yard.JobMessage == "app: Pull stopped: 1 file has uncommitted changes.");
+        yard.FailureLineText.ShouldBe(yard.JobMessage);
     }
 
     [Fact]
@@ -57,7 +58,7 @@ public partial class YardGitHubTests
         panel.PullCommand.Execute(null);
         panel.CloseCommand.Execute(null);
         _pullGit.Release();
-        await Eventually(() => yard.RefreshMessage is not null);
+        await Eventually(() => yard.JobMessage is not null);
         _gh.Fail = true;
         var before = _gh.Reads;
 
@@ -65,7 +66,8 @@ public partial class YardGitHubTests
         await Eventually(() => _gh.Reads > before);
         await Quiet();
 
-        yard.RefreshMessage.ShouldBe("Pull stopped: 1 file has uncommitted changes.");
+        yard.JobMessage.ShouldBe("app: Pull stopped: 1 file has uncommitted changes.");
+        yard.RefreshMessage.ShouldBeNull("a timed round does not start saying what it found");
     }
 
     [Fact]
@@ -80,7 +82,7 @@ public partial class YardGitHubTests
 
         await Eventually(() => panel.ActionMessage is not null && !yard.GitJobs.IsRunning(app.RootPath));
         panel.IsActionFailed.ShouldBeTrue();
-        yard.RefreshMessage.ShouldBeNull();
+        yard.FailureLineText.ShouldBeNull();
     }
 
     [Fact]
@@ -95,6 +97,29 @@ public partial class YardGitHubTests
         await yard.RefreshGitAsync(CancellationToken.None);
 
         await Eventually(() => panel.PullText == "Switch to main and pull");
+    }
+
+    [Fact]
+    public async Task A_later_pull_of_the_checkout_takes_its_failure_off_the_line()
+    {
+        var (yard, app) = await SettledYard();
+        yard.OpenGitHubLineCommand.Execute(yard.FindTile(app.Id)!.GitLines[0]);
+        var panel = yard.GitHubPanel.ShouldNotBeNull();
+        _pullGit.Status = " M a.txt\n";
+        _pullGit.Hold();
+        panel.PullCommand.Execute(null);
+        panel.CloseCommand.Execute(null);
+        _pullGit.Release();
+        await Eventually(() => yard.JobMessage is not null);
+        _pullGit.Status = string.Empty;
+        yard.OpenGitHubLineCommand.Execute(yard.FindTile(app.Id)!.GitLines[0]);
+        var again = yard.GitHubPanel.ShouldNotBeNull();
+        await Eventually(() => !yard.GitJobs.IsRunning(app.RootPath));
+
+        again.PullCommand.Execute(null);
+
+        await Eventually(() => again.ActionMessage == "app is on main, 3 new commits.");
+        yard.JobMessage.ShouldBeNull();
     }
 
     private sealed class FakeSource : IBrowserSource

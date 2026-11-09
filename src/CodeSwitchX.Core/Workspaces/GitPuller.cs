@@ -125,6 +125,12 @@ public sealed class GitPuller(Func<string, IReadOnlyList<string>, TimeSpan, Canc
             var change = await _run(checkout, arguments, WriteTimeout, ct).ConfigureAwait(false);
             if (change.Output is null)
             {
+                // The branch goes back where it was: "Pull stopped" means nothing moved, and the next pull counts its new commits (review of #407).
+                if (before is { Length: > 0 })
+                {
+                    await _run(checkout, ["update-ref", "-m", "CodeSwitchX: switch refused", local, before, remote], ReadTimeout, ct).ConfigureAwait(false);
+                }
+
                 return Failed(change, $"git couldn't switch to {branch}.");
             }
         }

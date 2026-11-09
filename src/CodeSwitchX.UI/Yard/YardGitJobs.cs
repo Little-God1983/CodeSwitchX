@@ -7,7 +7,8 @@ namespace CodeSwitchX.UI.Yard;
 
 /// <summary>How a job on a checkout ended: the line the panel shows.</summary>
 /// <param name="Checkout">The checkout's folder, as the job was given it.</param>
-public sealed record GitJobOutcome(string Checkout, bool Succeeded, string Message);
+/// <param name="Name">The repository's name, for a line that is not in its panel.</param>
+public sealed record GitJobOutcome(string Checkout, string Name, bool Succeeded, string Message);
 
 /// <summary>
 /// The pulls the GitHub panel starts (#407), kept at the Yard's level so they outlive the panel. A job once started is never cancelled:
@@ -78,13 +79,13 @@ public sealed class YardGitJobs
             {
                 // Never cancelled, see the class.
                 var pull = await _puller.PullAsync(checkout, branch, name, CancellationToken.None, _ => StillFreeAsync(chatIsWorking)).ConfigureAwait(false);
-                outcome = new GitJobOutcome(checkout, pull.Succeeded, pull.Succeeded ? pull.Text : $"Pull stopped: {pull.Text}");
+                outcome = new GitJobOutcome(checkout, name, pull.Succeeded, pull.Succeeded ? pull.Text : $"Pull stopped: {pull.Text}");
             }
             catch (Exception ex)
             {
                 // The type only: a message could carry a path or a branch name.
                 _logger.LogWarning("A pull from the Yard failed: {ExceptionType}", ex.GetType().Name);
-                outcome = new GitJobOutcome(checkout, false, "Pull stopped: something went wrong. See the log.");
+                outcome = new GitJobOutcome(checkout, name, false, "Pull stopped: something went wrong. See the log.");
             }
 
             _logger.LogInformation("A pull from the Yard ended: {Succeeded}", outcome.Succeeded);

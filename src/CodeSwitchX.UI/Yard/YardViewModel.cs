@@ -817,11 +817,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         var round = await RefreshGitHubAsync(Tiles.SelectMany(t => t.GitLines).Where(HasRepository).Select(l => l.Path).OfType<string>().Distinct().ToList()).ConfigureAwait(false);
         _ui.Post(() =>
         {
-            // A pull's failure on the line is not a round's: the timer's rounds leave it, and do not start saying what they found (review of #407).
-            if (pressed || (RefreshMessage is not null && !_refreshMessageIsJobs))
+            if (pressed || RefreshMessage is not null)
             {
                 RefreshMessage = FailureLine(round);
-                _refreshMessageIsJobs = false;
             }
         });
     }
@@ -831,7 +829,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private void DismissRefreshMessage()
     {
         RefreshMessage = null;
-        _refreshMessageIsJobs = false;
+        JobMessage = null;
+        _jobMessageCheckout = null;
     }
 
     /// <summary>One repository that cannot be read is no failure of GitHub, and "any pills": a gh that never answered has read none.</summary>
@@ -1198,10 +1197,18 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             return;
         }
 
+        // A later pull of the same checkout says the last word on it, whatever it came to.
+        var key = YardGitJobs.Key(outcome.Checkout);
+        if (_jobMessageCheckout == key)
+        {
+            JobMessage = null;
+            _jobMessageCheckout = null;
+        }
+
         if (!taken && !outcome.Succeeded)
         {
-            RefreshMessage = outcome.Message;
-            _refreshMessageIsJobs = true;
+            JobMessage = $"{outcome.Name}: {outcome.Message}";
+            _jobMessageCheckout = key;
         }
 
         _ = RefreshGitAfterJobAsync();
@@ -1227,10 +1234,23 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     public string RefreshButtonText => IsRefreshing ? "Refreshing…" : "Refresh";
 
     /// <summary>Says what could not be read when the button asked. A round that reads everything takes it away, the button's or the timer's, and so does a click on it.</summary>
-    [ObservableProperty] private string? _refreshMessage;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(FailureLineText))]
+    private string? _refreshMessage;
 
-    /// <summary><see cref="RefreshMessage"/> is a pull's failure (#407), not a round's. UI thread.</summary>
-    private bool _refreshMessageIsJobs;
+    /// <summary>
+    /// A pull's failure no panel showed (#407), named after its repository: kept apart from <see cref="RefreshMessage"/>, so the rounds
+    /// neither take it away nor start saying what they found because of it (review of #407). A later pull of that checkout takes it away.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(FailureLineText))]
+    private string? _jobMessage;
+
+    /// <summary>The checkout <see cref="JobMessage"/> is about, by <see cref="YardGitJobs.Key"/>. UI thread.</summary>
+    private string? _jobMessageCheckout;
+
+    /// <summary>What the failure line on the top bar says: a pull's failure, then the round's, one to a line; null hides it.</summary>
+    public string? FailureLineText => JobMessage is null ? RefreshMessage : RefreshMessage is null ? JobMessage : $"{JobMessage}\n{RefreshMessage}";
 
     /// <summary>
     /// The button on the Yard's top bar (#382): the git info of every tile, then the GitHub pills of the lines that gives, without waiting

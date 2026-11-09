@@ -145,6 +145,7 @@ public class GitPullerTests : IDisposable
         await Commit(Other, "clash.txt", "theirs");
         await Git(Other, "push", "-q", "origin", "main");
         await File.WriteAllTextAsync(Path.Combine(Work, "clash.txt"), "mine", TestContext.Current.CancellationToken);
+        var main = await Git(Work, "rev-parse", "main");
 
         var outcome = await Pull();
 
@@ -153,6 +154,7 @@ public class GitPullerTests : IDisposable
         outcome.Text.ShouldNotStartWith("error:");
         (await Git(Work, "branch", "--show-current")).ShouldBe("feature/x");
         (await File.ReadAllTextAsync(Path.Combine(Work, "clash.txt"), TestContext.Current.CancellationToken)).ShouldBe("mine");
+        (await Git(Work, "rev-parse", "main")).ShouldBe(main, "the branch went back where it was");
     }
 
     [Fact]
