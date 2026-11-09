@@ -474,7 +474,7 @@
                             ContentTemplate="{StaticResource GitHubRowTemplate}" Content="{Binding}" AutomationProperties.Name="{Binding NumberText, StringFormat='Open {0}'}" />
                   </DockPanel>
                   <!-- The merge strip (#408), under the row whose Merge was pressed: the question, what happens to the checkout, the choices. -->
-                  <Border Margin="8,2,0,6" Padding="10,8" CornerRadius="6" Background="#2D464B" BorderBrush="#4B6F76" BorderThickness="1">
+                  <Border Margin="8,2,0,6" Padding="10,8" CornerRadius="6" Background="{StaticResource PullRequestPillBack}" BorderBrush="{StaticResource PullRequestPillBorder}" BorderThickness="1">
                     <Border.Visibility>
                       <MultiBinding Converter="{StaticResource SameVisible}">
                         <!-- by number: a list read again brings new rows of the same pull requests (review of #408) -->
@@ -590,18 +590,40 @@
                     <Style TargetType="Border">
                       <Setter Property="Background" Value="Transparent" />
                       <Style.Triggers>
-                        <DataTrigger Binding="{Binding IsShown}" Value="True">
-                          <Setter Property="Background" Value="{Binding ShownBackground, Converter={StaticResource HexBrush}}" />
-                        </DataTrigger>
+                        <MultiDataTrigger>
+                          <MultiDataTrigger.Conditions>
+                            <Condition Binding="{Binding IsShown}" Value="True" />
+                            <Condition Binding="{Binding Kind}" Value="{x:Static github:GitHubItemKind.PullRequest}" />
+                          </MultiDataTrigger.Conditions>
+                          <Setter Property="Background" Value="{StaticResource PullRequestPillBack}" />
+                        </MultiDataTrigger>
+                        <MultiDataTrigger>
+                          <MultiDataTrigger.Conditions>
+                            <Condition Binding="{Binding IsShown}" Value="True" />
+                            <Condition Binding="{Binding Kind}" Value="{x:Static github:GitHubItemKind.Issue}" />
+                          </MultiDataTrigger.Conditions>
+                          <Setter Property="Background" Value="{StaticResource IssuePillBack}" />
+                        </MultiDataTrigger>
                       </Style.Triggers>
                     </Style>
                   </Border.Style>
                   <Border.Resources>
                     <Style TargetType="Button" BasedOn="{StaticResource GitHubTabButton}">
                       <Style.Triggers>
-                        <DataTrigger Binding="{Binding IsShown}" Value="True">
-                          <Setter Property="Foreground" Value="{Binding ShownForeground, Converter={StaticResource HexBrush}}" />
-                        </DataTrigger>
+                        <MultiDataTrigger>
+                          <MultiDataTrigger.Conditions>
+                            <Condition Binding="{Binding IsShown}" Value="True" />
+                            <Condition Binding="{Binding Kind}" Value="{x:Static github:GitHubItemKind.PullRequest}" />
+                          </MultiDataTrigger.Conditions>
+                          <Setter Property="Foreground" Value="{StaticResource PullRequestPillText}" />
+                        </MultiDataTrigger>
+                        <MultiDataTrigger>
+                          <MultiDataTrigger.Conditions>
+                            <Condition Binding="{Binding IsShown}" Value="True" />
+                            <Condition Binding="{Binding Kind}" Value="{x:Static github:GitHubItemKind.Issue}" />
+                          </MultiDataTrigger.Conditions>
+                          <Setter Property="Foreground" Value="{StaticResource IssuePillText}" />
+                        </MultiDataTrigger>
                       </Style.Triggers>
                     </Style>
                   </Border.Resources>
@@ -610,10 +632,11 @@
                             AutomationProperties.Name="{Binding TabAutomationName}">
                       <StackPanel Orientation="Horizontal">
                         <TextBlock Text="{Binding TabName}" />
-                        <!-- room for three digits, the same width each: a hidden "000" in the same font holds the width, also under text scaling -->
+                        <!-- the count is at most "999+" (#416), and a hidden "999+" in the same font holds its width, also under text scaling:
+                             the tab beside it never moves -->
                         <Grid Margin="4,0,0,0">
-                          <TextBlock Text="000" Visibility="Hidden" Typography.NumeralAlignment="Tabular" />
-                          <TextBlock Text="{Binding Count}" Typography.NumeralAlignment="Tabular" />
+                          <TextBlock Text="999+" Visibility="Hidden" Typography.NumeralAlignment="Tabular" />
+                          <TextBlock Text="{Binding CountText}" Typography.NumeralAlignment="Tabular" />
                         </Grid>
                       </StackPanel>
                     </Button>

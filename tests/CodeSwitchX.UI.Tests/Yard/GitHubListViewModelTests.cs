@@ -164,7 +164,7 @@ public partial class GitHubListViewModelTests
         var model = Open(activity, new GitHubPill(pill.Activity, GitHubItemKind.PullRequest));
 
         model.Shown.ShouldBeSameAs(model.PullRequests);
-        model.IsPullRequestsShown.ShouldBeTrue();
+        model.PullRequests.IsShown.ShouldBeTrue();
         Open(activity, pill).Shown.Kind.ShouldBe(GitHubItemKind.Issue);
     }
 
@@ -182,13 +182,13 @@ public partial class GitHubListViewModelTests
     {
         var (activity, pill) = await PillAsync();
         var model = Open(activity, pill);
-        model.PullRequests.TabText.ShouldBe("Pull requests 1");
-        model.Issues.TabText.ShouldBe("Issues 12");
+        model.PullRequests.Count.ShouldBe(1);
+        model.Issues.Count.ShouldBe(12);
         _gh.List.SetResult(ListOf(19));
 
         await model.Issues.LoadAsync(TestContext.Current.CancellationToken);
 
-        model.Issues.TabText.ShouldBe("Issues 19");
+        model.Issues.Count.ShouldBe(19);
     }
 
     [Fact]
@@ -200,7 +200,7 @@ public partial class GitHubListViewModelTests
         model.ShowCommand.Execute(GitHubItemKind.Issue);
 
         model.Shown.ShouldBeSameAs(model.Issues);
-        model.IsPullRequestsShown.ShouldBeFalse();
+        model.PullRequests.IsShown.ShouldBeFalse();
     }
 
     [Fact]
@@ -296,7 +296,7 @@ public partial class GitHubListViewModelTests
 
         activity.ForFolder("app")!.OpenIssues.ShouldBe(4);
         activity.ForFolder("app")!.OpenPullRequests.ShouldBe(2);
-        model.PullRequests.TabText.ShouldBe("Pull requests 2");
+        model.PullRequests.Count.ShouldBe(2);
     }
 
     [Fact]
@@ -346,7 +346,7 @@ public partial class GitHubListViewModelTests
 
         model.PullRequests.Rows.ShouldBeEmpty();
         model.PullRequests.SkippedMessage.ShouldBe("1 row could not be shown.");
-        model.PullRequests.TabText.ShouldBe("Pull requests 1");
+        model.PullRequests.Count.ShouldBe(1);
         model.PullRequests.EmptyText.ShouldBeNull("the tab says 1, so it is not empty");
     }
 
@@ -609,7 +609,7 @@ public partial class GitHubListViewModelTests
 
         _closedLists.ShouldBe([model]);
         list.Rows.Count.ShouldBe(1);
-        list.TabText.ShouldBe("Issues 12");
+        list.Count.ShouldBe(12);
         activity.ForFolder("app")!.OpenIssues.ShouldBe(12, "a late result after the close does not exist");
     }
 
@@ -680,7 +680,7 @@ public partial class GitHubListViewModelTests
         await load;
 
         list.Rows.Select(r => r.NumberText).ShouldBe(["#1", "#2", "#3"]);
-        list.TabText.ShouldBe("Issues 3");
+        list.Count.ShouldBe(3);
         activity.ForFolder("app")!.OpenIssues.ShouldBe(20);
         activity.ForFolder("app")!.NewestIssues.Count.ShouldBe(1);
     }
@@ -730,7 +730,7 @@ public partial class GitHubListViewModelTests
 
         var second = yard.GitHubPanel;
         second.ShouldNotBeNull().ShouldNotBeSameAs(first);
-        second.Shown.TabText.ShouldBe("Pull requests 1");
+        second.Shown.Count.ShouldBe(1);
         // The earlier load finishes now and finds its panel gone.
         _gh.List.SetResult(ListOf(3));
         await first.Loaded;
@@ -787,8 +787,8 @@ public partial class GitHubListViewModelTests
 
         var panel = yard.GitHubPanel.ShouldNotBeNull();
         panel.Shown.Kind.ShouldBe(GitHubItemKind.Issue);
-        panel.Issues.TabText.ShouldBe("Issues 0");
-        panel.PullRequests.TabText.ShouldBe("Pull requests 0");
+        panel.Issues.Count.ShouldBe(0);
+        panel.PullRequests.Count.ShouldBe(0);
     }
 
     [Fact]
@@ -1294,7 +1294,8 @@ public partial class GitHubListViewModelTests
 
         await list.LoadAsync(TestContext.Current.CancellationToken);
 
-        list.TabText.ShouldBe("Issues 1500");
+        list.Count.ShouldBe(1500);
+        list.CountText.ShouldBe("999+");
         list.CutShortMessage.ShouldBe("Showing the newest 1000 of 1500. The rest are on GitHub.");
         list.Rows.Count.ShouldBe(1000);
         activity.ForFolder("app")!.OpenIssues.ShouldBe(1500);
@@ -1311,7 +1312,7 @@ public partial class GitHubListViewModelTests
 
         await list.LoadAsync(TestContext.Current.CancellationToken);
 
-        list.TabText.ShouldBe("Issues 1000");
+        list.Count.ShouldBe(1000);
         list.CutShortMessage.ShouldBeNull();
     }
 
@@ -1326,7 +1327,7 @@ public partial class GitHubListViewModelTests
 
         await list.LoadAsync(TestContext.Current.CancellationToken);
 
-        list.TabText.ShouldBe("Issues 1000");
+        list.Count.ShouldBe(1000);
         list.CutShortMessage.ShouldBeNull();
         list.SkippedMessage.ShouldBe("1 row could not be shown.");
     }
@@ -1341,7 +1342,7 @@ public partial class GitHubListViewModelTests
 
         await list.LoadAsync(TestContext.Current.CancellationToken);
 
-        list.TabText.ShouldBe("Issues 999");
+        list.Count.ShouldBe(999);
         list.CutShortMessage.ShouldBeNull();
         activity.ForFolder("app")!.OpenIssues.ShouldBe(999);
     }
@@ -1357,7 +1358,7 @@ public partial class GitHubListViewModelTests
         await list.LoadAsync(TestContext.Current.CancellationToken);
 
         list.Rows.Select(r => r.NumberText).ShouldBe(["#1", "#3"]);
-        list.TabText.ShouldBe("Issues 3", "gh returned every row, the odd one included: that is the count");
+        list.Count.ShouldBe(3, "gh returned every row, the odd one included: that is the count");
         list.CutShortMessage.ShouldBeNull();
         list.SkippedMessage.ShouldBe("1 row could not be shown.");
         activity.ForFolder("app")!.OpenIssues.ShouldBe(3);

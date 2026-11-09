@@ -99,7 +99,7 @@ public partial class GitHubListViewModelTests
         _merge.Runs.ShouldHaveSingleItem().Login.ShouldBe("me");
         _merge.Runs[0].Arguments.ShouldBe(["pr", "merge", "9", "-R", "acme/app", "--merge"]);
         model.PullRequests.Rows.ShouldBeEmpty();
-        model.PullRequests.TabText.ShouldBe("Pull requests 0");
+        model.PullRequests.Count.ShouldBe(0);
         model.PullText.ShouldBe("Pull main");
     }
 
@@ -176,7 +176,7 @@ public partial class GitHubListViewModelTests
         await load;
 
         model.PullRequests.Rows.Select(r => r.NumberText).ShouldBe(["#1", "#2"]);
-        model.PullRequests.TabText.ShouldBe("Pull requests 2");
+        model.PullRequests.Count.ShouldBe(2);
     }
 
     [Fact]

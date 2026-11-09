@@ -19,8 +19,15 @@
     <infra:InvertBoolConverter x:Key="InvertBool" />
     <infra:IsNullConverter x:Key="IsNull" />
     <infra:SameToVisibleConverter x:Key="SameVisible" />
+    <!-- The pills' colours (#335), defined once: the GitHub panel's tab in front and its merge strip use them too (#416). -->
+    <SolidColorBrush x:Key="IssuePillText" Color="#B9CDF0" />
+    <SolidColorBrush x:Key="IssuePillBack" Color="#3A4250" />
+    <SolidColorBrush x:Key="IssuePillBorder" Color="#566378" />
+    <SolidColorBrush x:Key="PullRequestPillText" Color="#A6E3E9" />
+    <SolidColorBrush x:Key="PullRequestPillBack" Color="#2D464B" />
+    <SolidColorBrush x:Key="PullRequestPillBorder" Color="#4B6F76" />
     <yard:GitHubLabelBrushConverter x:Key="LabelBrush" />
-    <!-- The issue and pull request pills on a tile's git line (#335); the colours come with each button. -->
+    <!-- The issue and pull request pills on a tile's git line (#335); each button takes its kind's brushes from above (#416). -->
     <Style x:Key="GitHubPillButton" TargetType="Button">
       <Setter Property="FontSize" Value="11" />
       <Setter Property="FontWeight" Value="SemiBold" />
@@ -103,27 +110,27 @@
         <StackPanel Grid.Column="2" Orientation="Horizontal"
                     Visibility="{Binding Path=(yard:GitPills.IsShown), RelativeSource={RelativeSource Self}, Converter={StaticResource BoolVisible}}">
           <Button DataContext="{Binding Issues}" Style="{StaticResource GitHubPillButton}"
-                  Foreground="#B9CDF0" Background="#3A4250" BorderBrush="#566378"
+                  Foreground="{StaticResource IssuePillText}" Background="{StaticResource IssuePillBack}" BorderBrush="{StaticResource IssuePillBorder}"
                   Command="{Binding DataContext.OpenGitHubListCommand, RelativeSource={RelativeSource AncestorType=yard:YardView}}" CommandParameter="{Binding}"
                   AutomationProperties.Name="{Binding AutomationName}">
             <StackPanel Orientation="Horizontal">
               <Canvas Width="12" Height="12" VerticalAlignment="Center" Margin="0,1,4,0">
-                <Ellipse Canvas.Left="1" Canvas.Top="1" Width="10" Height="10" Stroke="#B9CDF0" StrokeThickness="1.3" />
-                <Ellipse Canvas.Left="4.5" Canvas.Top="4.5" Width="3" Height="3" Fill="#B9CDF0" />
+                <Ellipse Canvas.Left="1" Canvas.Top="1" Width="10" Height="10" Stroke="{StaticResource IssuePillText}" StrokeThickness="1.3" />
+                <Ellipse Canvas.Left="4.5" Canvas.Top="4.5" Width="3" Height="3" Fill="{StaticResource IssuePillText}" />
               </Canvas>
               <TextBlock Text="{Binding Count}" />
             </StackPanel>
           </Button>
           <Button DataContext="{Binding PullRequests}" Style="{StaticResource GitHubPillButton}"
-                  Foreground="#A6E3E9" Background="#2D464B" BorderBrush="#4B6F76"
+                  Foreground="{StaticResource PullRequestPillText}" Background="{StaticResource PullRequestPillBack}" BorderBrush="{StaticResource PullRequestPillBorder}"
                   Command="{Binding DataContext.OpenGitHubListCommand, RelativeSource={RelativeSource AncestorType=yard:YardView}}" CommandParameter="{Binding}"
                   AutomationProperties.Name="{Binding AutomationName}">
             <StackPanel Orientation="Horizontal">
               <Canvas Width="12" Height="12" VerticalAlignment="Center" Margin="0,1,4,0">
-                <Ellipse Canvas.Left="1" Canvas.Top="1" Width="3" Height="3" Stroke="#A6E3E9" StrokeThickness="1.2" />
-                <Ellipse Canvas.Left="1" Canvas.Top="8" Width="3" Height="3" Stroke="#A6E3E9" StrokeThickness="1.2" />
-                <Ellipse Canvas.Left="8" Canvas.Top="8" Width="3" Height="3" Stroke="#A6E3E9" StrokeThickness="1.2" />
-                <Path Data="M2.5,4 V8 M9.5,8 V5 Q9.5,3.5 8,3.5 H6" Stroke="#A6E3E9" StrokeThickness="1.2" />
+                <Ellipse Canvas.Left="1" Canvas.Top="1" Width="3" Height="3" Stroke="{StaticResource PullRequestPillText}" StrokeThickness="1.2" />
+                <Ellipse Canvas.Left="1" Canvas.Top="8" Width="3" Height="3" Stroke="{StaticResource PullRequestPillText}" StrokeThickness="1.2" />
+                <Ellipse Canvas.Left="8" Canvas.Top="8" Width="3" Height="3" Stroke="{StaticResource PullRequestPillText}" StrokeThickness="1.2" />
+                <Path Data="M2.5,4 V8 M9.5,8 V5 Q9.5,3.5 8,3.5 H6" Stroke="{StaticResource PullRequestPillText}" StrokeThickness="1.2" />
               </Canvas>
               <TextBlock Text="{Binding Count}" />
             </StackPanel>
