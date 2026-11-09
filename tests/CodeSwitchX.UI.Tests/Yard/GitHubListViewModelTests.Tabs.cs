@@ -98,11 +98,13 @@ public partial class GitHubListViewModelTests
 
             Button NameOf(string name) => Descendants<Button>(view).Single(b => AutomationProperties.GetName(b).StartsWith(name, StringComparison.Ordinal));
             bool Plain(Border tab) => ((System.Windows.Media.SolidColorBrush)tab.Background).Color.A == 0;
+            // the tab button style's own text colour, which the tab in front leaves
+            void PlainText(Button name) => ((System.Windows.Media.SolidColorBrush)name.Foreground).Color.ToString().ShouldBe("#FFB0B0B0");
 
             TabOf("Pull requests,").Background.ShouldBeSameAs(view.FindResource("PullRequestPillBack"));
             NameOf("Pull requests,").Foreground.ShouldBeSameAs(view.FindResource("PullRequestPillText"));
             Plain(TabOf("Issues,")).ShouldBeTrue();
-            NameOf("Issues,").Foreground.ShouldNotBeSameAs(view.FindResource("IssuePillText"));
+            PlainText(NameOf("Issues,"));
 
             model.ShowCommand.Execute(GitHubItemKind.Issue);
             view.UpdateLayout();
@@ -110,7 +112,7 @@ public partial class GitHubListViewModelTests
             TabOf("Issues,").Background.ShouldBeSameAs(view.FindResource("IssuePillBack"));
             NameOf("Issues,").Foreground.ShouldBeSameAs(view.FindResource("IssuePillText"));
             Plain(TabOf("Pull requests,")).ShouldBeTrue("the tab that left the front goes plain again");
-            NameOf("Pull requests,").Foreground.ShouldNotBeSameAs(view.FindResource("PullRequestPillText"));
+            PlainText(NameOf("Pull requests,"));
         });
     }
 

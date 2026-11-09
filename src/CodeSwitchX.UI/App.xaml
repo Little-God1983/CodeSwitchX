@@ -27,7 +27,7 @@
     <SolidColorBrush x:Key="PullRequestPillBack" Color="#2D464B" />
     <SolidColorBrush x:Key="PullRequestPillBorder" Color="#4B6F76" />
     <yard:GitHubLabelBrushConverter x:Key="LabelBrush" />
-    <!-- The issue and pull request pills on a tile's git line (#335); the colours come with each button. -->
+    <!-- The issue and pull request pills on a tile's git line (#335); each button takes its kind's brushes from above (#416). -->
     <Style x:Key="GitHubPillButton" TargetType="Button">
       <Setter Property="FontSize" Value="11" />
       <Setter Property="FontWeight" Value="SemiBold" />
