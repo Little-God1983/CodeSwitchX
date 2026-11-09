@@ -14,9 +14,10 @@ namespace CodeSwitchX.UI.Yard;
 /// <param name="Pulled">The checkout is on the default branch and up to date: a pull, or the pull after a merge, went through.</param>
 /// <param name="ChangedGitHub">A merge job that merged, or may have (gh ran out of time, the job threw): the Yard reads GitHub again. A refusal changed nothing.</param>
 /// <param name="Key">The checkout's key the job ran under (<see cref="YardGitJobs.Key"/>).</param>
+/// <param name="Reread">The pull request moved since the panel read it (#414): the panel reads its list again before another try.</param>
 /// <param name="Tree">The working tree the job ran in, by its own git directory: a subfolder's line shares it, a linked worktree has one of its own.</param>
 public sealed record GitJobOutcome(string Checkout, string Name, bool Succeeded, string Message, int? Merged = null, bool Pulled = false, bool ChangedGitHub = false,
-    string Key = "", string Tree = "");
+    string Key = "", string Tree = "", bool Reread = false);
 
 /// <summary>
 /// The pulls (#407) and merges (#408) the GitHub panel starts, kept at the Yard's level so they outlive the panel. A job once started is
@@ -133,7 +134,7 @@ public sealed class YardGitJobs
     /// <param name="baseBranch">What the pull request merges into, for the conflict's reason.</param>
     /// <param name="pullBranch">The default branch for Merge and pull; null for Merge only.</param>
     public Task MergeAsync(string checkout, string name, GitHubRepo repo, string account, int number, string baseBranch, string? pullBranch, Func<bool> chatIsWorking,
-        string? key = null, string? tree = null)
+        string? key = null, string? tree = null, string? headSha = null)
     {
         if (_merger is null)
         {
@@ -142,10 +143,16 @@ public sealed class YardGitJobs
 
         return Run(checkout, key, tree, name, $"Merging #{number}…", "A merge", async () =>
         {
-            var merge = await _merger.MergeAsync(repo, account, number, baseBranch, CancellationToken.None).ConfigureAwait(false);
+            var merge = await _merger.MergeAsync(repo, account, number, baseBranch, CancellationToken.None, headSha).ConfigureAwait(false);
+            if (merge.Queued)
+            {
+                // Not merged yet: nothing is pulled and the row stays; the pills are read again.
+                return new GitJobOutcome(checkout, name, true, $"#{number} will be added to the merge queue. Pull when GitHub has merged it.", ChangedGitHub: true);
+            }
+
             if (!merge.Merged)
             {
-                return new GitJobOutcome(checkout, name, false, $"Can't merge #{number}: {merge.Text}", ChangedGitHub: merge.Unknown);
+                return new GitJobOutcome(checkout, name, false, $"Can't merge #{number}: {merge.Text}", ChangedGitHub: merge.Unknown, Reread: merge.Moved);
             }
 
             var merged = merge.AlreadyMerged ? $"#{number} was merged already" : $"Merged #{number}";

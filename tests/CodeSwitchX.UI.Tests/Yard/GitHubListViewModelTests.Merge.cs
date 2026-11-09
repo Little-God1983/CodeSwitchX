@@ -21,10 +21,11 @@ public partial class GitHubListViewModelTests
     /// A panel opened from a line in <c>C:\app</c> on <paramref name="branch"/>, whose one open pull request, #9, comes from branch <c>b</c>
     /// and merges into <paramref name="into"/>; the repository's default branch is main.
     /// </summary>
-    private async Task<GitHubPanelViewModel> OpenForMerge(string? branch = "b", string into = "main", bool fromFork = false, Func<bool>? working = null, YardGitJobs? jobs = null)
+    private async Task<GitHubPanelViewModel> OpenForMerge(string? branch = "b", string into = "main", bool fromFork = false, Func<bool>? working = null, YardGitJobs? jobs = null,
+        string? head = null)
     {
         var (activity, pill) = await PillAsync();
-        var pr = pill.Activity.NewestPullRequests.Single() with { BaseBranch = into, IsCrossRepository = fromFork };
+        var pr = pill.Activity.NewestPullRequests.Single() with { BaseBranch = into, IsCrossRepository = fromFork, HeadSha = head };
         var repo = pill.Activity with { DefaultBranch = "main", NewestPullRequests = [pr] };
         return new GitHubPanelViewModel(repo, GitHubItemKind.PullRequest, new GitHubReader(_gh), activity, Browsers(), _clipboard, new ImmediateDispatcher(), _time,
             NullLogger.Instance, _closedLists.Add, new PanelCheckout(@"C:\app", branch, working ?? (() => false), jobs ?? MergingJobs()));
@@ -245,6 +246,53 @@ public partial class GitHubListViewModelTests
 
         model.PullRequests.Count.ShouldBe(before - 1);
         model.PullRequests.Rows.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task The_merge_goes_for_the_head_the_row_was_read_at()
+    {
+        var model = await OpenForMerge("b", head: "abc123");
+        model.OpenMergeCommand.Execute(Row(model));
+
+        model.MergeOnlyCommand.Execute(null);
+
+        await Eventually(() => !model.IsBusy && model.ActionMessage is not null);
+        _merge.Runs.ShouldHaveSingleItem().Arguments.ShouldBe(["pr", "merge", "9", "-R", "acme/app", "--merge", "--match-head-commit", "abc123"]);
+    }
+
+    [Fact]
+    public async Task A_merge_GitHub_only_queued_keeps_the_row_and_pulls_nothing()
+    {
+        _merge.Answer = new GhAnswer(string.Empty, ErrorOutput: "! Pull request acme/app#9 will be added to the merge queue for main when ready\n");
+        var model = await OpenForMerge("b");
+        model.OpenMergeCommand.Execute(Row(model));
+
+        model.MergeAndPullCommand.Execute(null);
+
+        await Eventually(() => !model.IsBusy && model.ActionMessage is not null);
+        model.ActionMessage.ShouldBe("#9 will be added to the merge queue. Pull when GitHub has merged it.");
+        model.IsActionFailed.ShouldBeFalse();
+        model.PullRequests.Rows.Count.ShouldBe(1, "it is not merged yet");
+        _git.Ran.ShouldBeEmpty("main does not have it yet");
+    }
+
+    [Fact]
+    public async Task A_pull_request_that_moved_is_refused_and_the_list_is_read_again()
+    {
+        _merge.Answer = new GhAnswer(null, ErrorOutput: "GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)\n");
+        var model = await OpenForMerge("b", head: "old");
+        model.OpenMergeCommand.Execute(Row(model));
+
+        model.MergeOnlyCommand.Execute(null);
+
+        await Eventually(() => !model.IsBusy && model.ActionMessage is not null);
+        model.ActionMessage.ShouldBe("Can't merge #9: it changed since the panel read it. Look at it, then merge again.");
+        model.IsActionFailed.ShouldBeTrue();
+        await Eventually(() => _gh.Asked.Contains("pr"));
+        model.PullRequests.IsLoading.ShouldBeTrue("the list is read again; the next Merge goes for the new head");
+        _gh.PullRequestList.SetResult(PullRequestsOf(1).Replace("\"number\":1", "\"number\":9", StringComparison.Ordinal).Replace("\"headRefName\":\"b1\"", "\"headRefName\":\"b\",\"headRefOid\":\"new\"", StringComparison.Ordinal));
+        await Eventually(() => !model.PullRequests.IsLoading);
+        Row(model).Item.HeadSha.ShouldBe("new");
     }
 
     [Fact]

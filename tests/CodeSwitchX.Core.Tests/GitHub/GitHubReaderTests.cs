@@ -308,7 +308,7 @@ public class GitHubReaderTests
 
         var items = await new GitHubReader(gh).ListAsync(Repo, "amy", GitHubItemKind.PullRequest, CancellationToken.None);
 
-        gh.Commands.Single().ShouldBe(["pr", "list", "-R", "acme/tool", "--state", "open", "--limit", "1000", "--json", "number,title,url,updatedAt,labels,headRefName,baseRefName,isCrossRepository,author"]);
+        gh.Commands.Single().ShouldBe(["pr", "list", "-R", "acme/tool", "--state", "open", "--limit", "1000", "--json", "number,title,url,updatedAt,labels,headRefName,headRefOid,baseRefName,isCrossRepository,author"]);
         var item = items.ShouldNotBeNull().Items.Single();
         item.Branch.ShouldBe("feature/x");
         item.Author.ShouldBe("amy");

@@ -124,6 +124,27 @@ public sealed partial class GitHubListViewModel : ObservableObject
     /// </summary>
     public Task LoadAsync(CancellationToken ct) => Interlocked.Exchange(ref _started, 1) == 1 ? Loaded : LoadOnceAsync(ct);
 
+    /// <summary>
+    /// Reads the full list again (#414): a pull request moved since it was read, and the next Merge must go for its new head. On the UI thread;
+    /// the read runs off it, and the panel's close stops it.
+    /// </summary>
+    public Task RereadAsync()
+    {
+        Interlocked.Exchange(ref _started, 1);
+        IsLoading = true;
+        return Task.Run(async () =>
+        {
+            try
+            {
+                await ReadAsync(_stop.Token).ConfigureAwait(false);
+            }
+            finally
+            {
+                _ui.Post(() => IsLoading = false);
+            }
+        });
+    }
+
     private async Task LoadOnceAsync(CancellationToken ct)
     {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _stop.Token);

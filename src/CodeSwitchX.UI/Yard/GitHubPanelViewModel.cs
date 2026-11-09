@@ -263,7 +263,7 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
         MergeStrip = null;
         ActionMessage = null;
         _ = _checkout.Jobs.MergeAsync(_checkout.Path, _repo.Repo.Name, _repo.Repo, _repo.Account, strip.Row.Item.Number, strip.BaseBranch,
-            pull && strip.OffersPull ? _repo.DefaultBranch : null, _checkout.ChatIsWorking, _checkout.Key, _checkout.Tree);
+            pull && strip.OffersPull ? _repo.DefaultBranch : null, _checkout.ChatIsWorking, _checkout.Key, _checkout.Tree, strip.Row.Item.HeadSha);
     }
 
     private void OnJobChanged(string key)
@@ -292,6 +292,12 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
             if (outcome.Pulled && !opening)
             {
                 Branch = _repo.DefaultBranch;
+            }
+
+            // A pull request that moved since it was read: the list is read again, so the next Merge goes for its new head (#414).
+            if (outcome.Reread)
+            {
+                _ = PullRequests.RereadAsync();
             }
 
             // The merged row leaves the list at once; the Yard reads the repository again for the counts and pills.

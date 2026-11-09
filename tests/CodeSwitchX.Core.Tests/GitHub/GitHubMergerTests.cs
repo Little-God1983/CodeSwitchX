@@ -34,6 +34,38 @@ public class GitHubMergerTests
     }
 
     [Fact]
+    public async Task It_merges_only_the_head_the_panel_read()
+    {
+        var gh = new FakeGh(new GhAnswer(string.Empty));
+
+        await new GitHubMerger(gh).MergeAsync(Repo, "reader", 405, "main", CancellationToken.None, "abc123");
+
+        gh.Runs[0].Arguments.ShouldBe(["pr", "merge", "405", "-R", "acme/tool", "--merge", "--match-head-commit", "abc123"]);
+    }
+
+    [Fact]
+    public async Task A_branch_that_moved_since_the_read_is_refused_and_says_so()
+    {
+        var gh = new FakeGh(new GhAnswer(null, ErrorOutput: "GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)\n"));
+
+        var outcome = await new GitHubMerger(gh).MergeAsync(Repo, "reader", 405, "main", CancellationToken.None, "abc123");
+
+        outcome.ShouldBe(new MergeOutcome(false, "it changed since the panel read it. Look at it, then merge again.", Moved: true));
+    }
+
+    [Theory]
+    [InlineData("! Pull request acme/tool#405 will be added to the merge queue for main when ready\n")]
+    [InlineData("! Pull request acme/tool#405 is already in merge queue\n")]
+    public async Task A_merge_GitHub_only_queued_is_no_merge(string printed)
+    {
+        var gh = new FakeGh(new GhAnswer(string.Empty, ErrorOutput: printed));
+
+        var outcome = await new GitHubMerger(gh).MergeAsync(Repo, "reader", 405, "main", CancellationToken.None);
+
+        outcome.ShouldBe(new MergeOutcome(false, "it will be added to the merge queue.", Queued: true));
+    }
+
+    [Fact]
     public async Task A_refusal_gives_GitHubs_reason_in_short()
     {
         var gh = new FakeGh(new GhAnswer(null, ErrorOutput: "X Pull request acme/tool#399 is not mergeable: the merge commit cannot be cleanly created.\nTo have the pull request merged after all the requirements have been met, add the `--auto` flag.\n"));
