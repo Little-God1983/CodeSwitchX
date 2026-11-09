@@ -60,6 +60,20 @@ public partial class YardGitHubTests
         yard.RefreshMessage.ShouldBeNull();
     }
 
+    [Fact]
+    public async Task The_open_panel_follows_its_lines_branch_when_git_is_read_again()
+    {
+        var (yard, app) = await SettledYard();
+        yard.OpenGitHubLineCommand.Execute(yard.FindTile(app.Id)!.GitLines[0]);
+        var panel = yard.GitHubPanel.ShouldNotBeNull();
+        panel.PullText.ShouldBe("Pull main");
+        File.WriteAllText(Path.Combine(app.RootPath, ".git", "HEAD"), "ref: refs/heads/feature/y\n");
+
+        await yard.RefreshGitAsync(CancellationToken.None);
+
+        await Eventually(() => panel.PullText == "Switch to main and pull");
+    }
+
     private sealed class FakeSource : IBrowserSource
     {
         public IReadOnlyList<(string Key, string? Executable)> Installed() => [];

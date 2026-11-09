@@ -772,7 +772,11 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         var lines = await GitLinesAsync(tile, info, ct).ConfigureAwait(false);
         paths.AddRange(lines.Where(HasRepository).Select(l => l.Path).OfType<string>());
         // The pills are taken from the GitHub side when the tile shows the lines, not before: a result stored meanwhile is not overwritten by an older one.
-        _ui.Post(() => tile.ShowGit(lines.Select(WithGitHub).ToList()));
+        _ui.Post(() =>
+        {
+            tile.ShowGit(lines.Select(WithGitHub).ToList());
+            FollowPanelBranch();
+        });
 
         // A worktree added next to the repository after the registration is a child root from here on, so the chat started
         // in it lands on this tile within one refresh; a removed one stops being one. Git that fails to answer changes nothing.
@@ -887,7 +891,32 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         {
             tile.ShowGit(tile.GitLines.Select(WithGitHub).ToList());
         }
+
+        FollowPanelBranch();
     });
+
+    /// <summary>The open panel's Pull names what a press does now: its line's branch as last read (review of #407).</summary>
+    private void FollowPanelBranch()
+    {
+        if (GitHubPanel?.CheckoutPath is { } path && LinesOf(path).FirstOrDefault() is { } line)
+        {
+            GitHubPanel.FollowBranch(line.Branch);
+        }
+    }
+
+    /// <summary>Every tile's line of the checkout: a folder can be on the tiles of several workspaces.</summary>
+    private IEnumerable<GitLine> LinesOf(string path) =>
+        Tiles.SelectMany(t => t.GitLines).Where(l => l.Path is { } p && YardGitJobs.Key(p) == YardGitJobs.Key(path));
+
+    /// <summary>
+    /// A chat working in the checkout, or waiting mid-turn for an answer (a permission, a question), on any tile that shows it: the Yard
+    /// never switches a branch under one (#407). By tile, not by chat folder: it errs on the careful side.
+    /// </summary>
+    private bool ChatIsWorkingIn(string path)
+    {
+        var key = YardGitJobs.Key(path);
+        return Tiles.Any(t => (t.IsWorking || t.NeedsAttention) && t.GitLines.Any(l => l.Path is { } p && YardGitJobs.Key(p) == key));
+    }
 
     /// <summary>
     /// A line for the root folder, and one more for each other repository the tile's workspace file lists a folder of
@@ -1112,9 +1141,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void OpenGitHubList(GitHubPill pill)
     {
-        var (tile, line) = Tiles.SelectMany(t => t.GitLines.Select(l => (Tile: t, Line: l)))
-            .FirstOrDefault(p => ReferenceEquals(p.Line.Issues, pill) || ReferenceEquals(p.Line.PullRequests, pill));
-        OpenPanel(pill.Activity, pill.Kind, tile, line);
+        var line = Tiles.SelectMany(t => t.GitLines).FirstOrDefault(l => ReferenceEquals(l.Issues, pill) || ReferenceEquals(l.PullRequests, pill));
+        OpenPanel(pill.Activity, pill.Kind, line);
     }
 
     /// <summary>
@@ -1127,13 +1155,12 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     {
         if (line?.GitHub is { } activity)
         {
-            OpenPanel(activity, GitHubPanelViewModel.DefaultKind(activity), Tiles.FirstOrDefault(t => t.GitLines.Contains(line)), line);
+            OpenPanel(activity, GitHubPanelViewModel.DefaultKind(activity), line);
         }
     }
 
-    /// <param name="tile">The tile of the line, whose chats decide whether the panel may switch its branch (#407); null when it is gone.</param>
-    /// <param name="line">The line the panel was opened from: where its Pull acts. Null when it is gone; then the panel has no Pull.</param>
-    private void OpenPanel(RepoActivity activity, GitHubItemKind kind, WorkspaceTileViewModel? tile, GitLine? line)
+    /// <param name="line">The line the panel was opened from: where its Pull acts (#407). Null when it is gone; then the panel has no Pull.</param>
+    private void OpenPanel(RepoActivity activity, GitHubItemKind kind, GitLine? line)
     {
         if (_gitHub is null || _gitHubReader is null || _gitHubBrowsers is null)
         {
@@ -1141,7 +1168,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
 
         GitHubPanel?.CloseCommand.Execute(null);
-        var checkout = tile is not null && line?.Path is { } path ? new PanelCheckout(path, line.Branch, () => tile.IsWorking, GitJobs) : null;
+        var checkout = line?.Path is { } path ? new PanelCheckout(path, line.Branch, () => ChatIsWorkingIn(path), GitJobs) : null;
         var panel = new GitHubPanelViewModel(activity, kind, _gitHubReader, _gitHub, _gitHubBrowsers, _clipboard, _ui, _time, _logger,
             closed => { if (ReferenceEquals(GitHubPanel, closed)) { GitHubPanel = null; } }, checkout);
         GitHubPanel = panel;
@@ -1155,6 +1182,11 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// </summary>
     private void OnGitJobEnded(GitJobOutcome outcome, bool taken)
     {
+        if (_disposed)
+        {
+            return;
+        }
+
         if (!taken && !outcome.Succeeded)
         {
             RefreshMessage = outcome.Message;
@@ -1426,6 +1458,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         {
             _gitHub.Changed -= OnGitHubChanged;
         }
+
+        GitJobs.Ended -= OnGitJobEnded;
 
         // Not disposed: the source has no timer or registration that needs it, and Dispose may run twice.
         _gitHubStop.Cancel();

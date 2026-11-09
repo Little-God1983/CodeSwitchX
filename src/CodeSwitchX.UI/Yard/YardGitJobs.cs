@@ -19,8 +19,8 @@ public sealed class YardGitJobs
     private readonly GitPuller _puller;
     private readonly IUiDispatcher _ui;
     private readonly ILogger _logger;
-    // By checkout key: what the running job is doing ("Pulling main..."), and the outcome no panel has taken yet. UI thread only.
-    private readonly Dictionary<string, string> _running = new(StringComparer.Ordinal);
+    // By checkout key: the checkouts a job runs on, and the outcome no panel has taken yet. UI thread only.
+    private readonly HashSet<string> _running = new(StringComparer.Ordinal);
     private readonly Dictionary<string, GitJobOutcome> _outcomes = new(StringComparer.Ordinal);
 
     public YardGitJobs(GitPuller puller, IUiDispatcher ui, ILogger logger)
@@ -39,10 +39,7 @@ public sealed class YardGitJobs
     /// <summary>The same folder, written either way, is the same checkout.</summary>
     public static string Key(string checkout) => PathNormalizer.Normalize(checkout);
 
-    public bool IsRunning(string checkout) => _running.ContainsKey(Key(checkout));
-
-    /// <summary>What the checkout's running job is doing, or null when none runs.</summary>
-    public string? RunningText(string checkout) => _running.GetValueOrDefault(Key(checkout));
+    public bool IsRunning(string checkout) => _running.Contains(Key(checkout));
 
     /// <summary>The outcome of the checkout's last job, once: a panel shows it, and no other panel shows it again.</summary>
     public GitJobOutcome? TakeOutcome(string checkout) => _outcomes.Remove(Key(checkout), out var outcome) ? outcome : null;
@@ -54,7 +51,7 @@ public sealed class YardGitJobs
     public Task PullAsync(string checkout, string branch, string name)
     {
         var key = Key(checkout);
-        if (!_running.TryAdd(key, $"Pulling {branch}..."))
+        if (!_running.Add(key))
         {
             return Task.CompletedTask;
         }

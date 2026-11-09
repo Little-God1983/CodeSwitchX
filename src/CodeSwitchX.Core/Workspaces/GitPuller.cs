@@ -85,6 +85,18 @@ public sealed class GitPuller(Func<string, IReadOnlyList<string>, TimeSpan, Canc
             // leaves the checkout as it was. Moving a branch that has nothing of its own forward loses nothing; the old value guards a race.
             if (before is { Length: > 0 })
             {
+                // update-ref does not look at worktrees: a worktree with the branch checked out would see its HEAD move under its files (review of #407).
+                var trees = await _run(checkout, ["worktree", "list", "--porcelain"], ReadTimeout, ct).ConfigureAwait(false);
+                if (trees.Output is null)
+                {
+                    return Failed(trees, "git couldn't list the worktrees.");
+                }
+
+                if (Lines(trees.Output).Contains($"branch {local}"))
+                {
+                    return new PullOutcome(false, $"{branch} is checked out in another worktree.");
+                }
+
                 var move = await _run(checkout, ["update-ref", "-m", "CodeSwitchX: fast-forward", local, remote, before], ReadTimeout, ct).ConfigureAwait(false);
                 if (move.Output is null)
                 {
@@ -175,6 +187,8 @@ public sealed class GitPuller(Func<string, IReadOnlyList<string>, TimeSpan, Canc
             info.ArgumentList.Add(argument);
         }
 
+        // As GitInspector's: a plain git status refreshes the index under .git/index.lock, which collides with the user's own git.
+        info.Environment["GIT_OPTIONAL_LOCKS"] = "0";
         // Nobody can answer a prompt for a password or a host key: git fails at once instead of waiting for the timeout.
         info.Environment["GIT_TERMINAL_PROMPT"] = "0";
         info.Environment["GCM_INTERACTIVE"] = "never";

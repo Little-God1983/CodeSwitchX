@@ -170,6 +170,21 @@ public class GitPullerTests : IDisposable
     }
 
     [Fact]
+    public async Task Main_checked_out_in_another_worktree_refuses_and_leaves_that_worktree_alone()
+    {
+        await Arrange();
+        var tree = Path.Combine(_root, "tree");
+        await Git(Work, "worktree", "add", "-q", tree, "main");
+        var before = await Git(tree, "rev-parse", "HEAD");
+        await PushToMain(1);
+
+        (await Pull()).ShouldBe(new PullOutcome(false, "main is checked out in another worktree."));
+
+        (await Git(tree, "rev-parse", "HEAD")).ShouldBe(before, "the other worktree's branch did not move under its files");
+        (await Git(Work, "branch", "--show-current")).ShouldBe("feature/x");
+    }
+
+    [Fact]
     public async Task A_checkout_without_a_local_main_gets_one_from_GitHub()
     {
         await Arrange();

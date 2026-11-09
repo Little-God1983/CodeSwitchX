@@ -63,18 +63,37 @@ public partial class GitHubListViewModelTests
     }
 
     [Fact]
-    public async Task A_pull_turns_the_button_off_while_it_runs_then_says_what_it_did_and_the_branch_moves()
+    public async Task A_pull_says_it_runs_and_a_second_press_starts_nothing()
     {
         var model = await OpenOnLine();
+        model.PullCommand.Execute(null);
+        await Eventually(() => model.ActionMessage is not null);
+        _git.Ran.Clear();
+        _git.Status = " M a.txt\n";
         _git.Hold();
 
         model.PullCommand.Execute(null);
+        model.ActionMessage.ShouldBeNull("the last outcome goes when another pull starts");
+        model.PullCommand.Execute(null);
 
-        model.PullCommand.CanExecute(null).ShouldBeFalse();
-        model.ActionMessage.ShouldBe("Pulling main...");
-        model.IsActionFailed.ShouldBeFalse();
+        model.IsPulling.ShouldBeTrue();
+        model.PullText.ShouldBe("Pulling main…");
+        model.PullAutomationName.ShouldBe("Pulling main… in app");
+        model.PullCommand.CanExecute(null).ShouldBeTrue("a focused button that turns itself off drops the keyboard");
         _git.Release();
-        await Eventually(() => model.PullCommand.CanExecute(null));
+        await Eventually(() => !model.IsPulling);
+        _git.Ran.Count(r => r.StartsWith("status", StringComparison.Ordinal)).ShouldBe(1, "the second press started nothing");
+        model.ActionMessage.ShouldBe("Pull stopped: 1 file has uncommitted changes.");
+    }
+
+    [Fact]
+    public async Task A_pull_that_went_through_says_what_it_did_and_the_button_follows_the_branch()
+    {
+        var model = await OpenOnLine();
+
+        model.PullCommand.Execute(null);
+
+        await Eventually(() => !model.IsPulling && model.ActionMessage is not null);
         model.ActionMessage.ShouldBe("app is on main, 3 new commits.");
         model.IsActionFailed.ShouldBeFalse();
         model.PullText.ShouldBe("Pull main");
@@ -105,17 +124,32 @@ public partial class GitHubListViewModelTests
 
         first.CloseCommand.Execute(null);
         var second = await OpenOnLine(jobs: jobs);
-        second.PullCommand.CanExecute(null).ShouldBeFalse("one pull of a checkout at a time");
-        second.ActionMessage.ShouldBe("Pulling main...");
+        second.IsPulling.ShouldBeTrue("one pull of a checkout at a time");
+        second.PullText.ShouldBe("Pulling main…");
         second.CloseCommand.Execute(null);
         _git.Release();
         await Eventually(() => ended.Count == 1);
-        var third = await OpenOnLine(jobs: jobs);
+        var third = await OpenOnLine("feature/y", jobs: jobs);
 
         ended[0].Taken.ShouldBeFalse("no panel was open");
         third.ActionMessage.ShouldBe("app is on main, 3 new commits.");
-        first.ActionMessage.ShouldBe("Pulling main...", "a closed panel is let go of");
+        third.PullText.ShouldBe("Switch to main and pull", "the line, read since, knows the branch better than an old outcome");
+        first.IsPulling.ShouldBeTrue("a closed panel is let go of");
         (await OpenOnLine(jobs: jobs)).ActionMessage.ShouldBeNull("an outcome is shown once");
+    }
+
+    [Fact]
+    public async Task The_button_follows_the_lines_branch_while_the_panel_is_open()
+    {
+        var model = await OpenOnLine("main");
+        var changed = new List<string?>();
+        model.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+
+        model.FollowBranch("feature/z");
+
+        model.PullText.ShouldBe("Switch to main and pull");
+        changed.ShouldContain(nameof(GitHubPanelViewModel.PullAutomationName));
+        model.CheckoutPath.ShouldBe(@"C:\app");
     }
 
     [Fact]
@@ -133,7 +167,7 @@ public partial class GitHubListViewModelTests
     }
 
     [Fact]
-    public async Task The_view_shows_the_pull_button_above_the_tabs_and_turns_it_off_while_the_pull_runs()
+    public async Task The_view_shows_the_pull_button_above_the_tabs_and_says_while_the_pull_runs()
     {
         var model = await OpenOnLine();
         var (activity, pill) = await PillAsync();
@@ -153,8 +187,8 @@ public partial class GitHubListViewModelTests
             view.UpdateLayout();
             System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
 
-            button.IsEnabled.ShouldBeFalse();
-            Descendants<TextBlock>(view).ShouldContain(t => t.Text == "Pulling main..." && t.Visibility == Visibility.Visible);
+            button.IsEnabled.ShouldBeTrue("a focused button that turns itself off drops the keyboard");
+            button.Content.ShouldBe("Pulling main…");
 
             var without = PanelView(none);
             var hidden = Descendants<Button>(without).Single(b => ReferenceEquals(b.Command, none.PullCommand));
