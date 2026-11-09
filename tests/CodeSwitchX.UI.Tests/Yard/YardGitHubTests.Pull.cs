@@ -14,6 +14,12 @@ public partial class YardGitHubTests
 
     private readonly FakeMergeGh _mergeGh = new();
 
+    /// <summary>
+    /// Waits for the git round a pull's or a merge's end starts (#407): it reads the test's folders, which the cleanup deletes, and a
+    /// .git\HEAD still open fails the delete.
+    /// </summary>
+    private static async Task Settled(YardViewModel yard) => await yard.RefreshGitAsync(CancellationToken.None);
+
     private static GitHubBrowsers Browsers() =>
         new(new BrowserCatalog(new FakeSource()), Substitute.For<ISettingsStore>(), _ => true, NullLogger<GitHubBrowsers>.Instance);
 
@@ -30,6 +36,7 @@ public partial class YardGitHubTests
         panel.PullCommand.Execute(null);
         await Eventually(() => panel.ActionMessage == "app is on main, 3 new commits.");
         _pullGit.Ran[0].ShouldStartWith("fetch");
+        await Settled(yard);
     }
 
     [Fact]
@@ -47,6 +54,7 @@ public partial class YardGitHubTests
 
         await Eventually(() => yard.JobMessage == "app: Pull stopped: 1 file has uncommitted changes.");
         yard.FailureLineText.ShouldBe(yard.JobMessage);
+        await Settled(yard);
     }
 
     [Fact]
@@ -70,6 +78,7 @@ public partial class YardGitHubTests
 
         yard.JobMessage.ShouldBe("app: Pull stopped: 1 file has uncommitted changes.");
         yard.RefreshMessage.ShouldBeNull("a timed round does not start saying what it found");
+        await Settled(yard);
     }
 
     [Fact]
@@ -85,6 +94,7 @@ public partial class YardGitHubTests
         await Eventually(() => panel.ActionMessage is not null && !yard.GitJobs.IsRunning(app.RootPath));
         panel.IsActionFailed.ShouldBeTrue();
         yard.FailureLineText.ShouldBeNull();
+        await Settled(yard);
     }
 
     [Fact]
@@ -121,7 +131,9 @@ public partial class YardGitHubTests
         again.PullCommand.Execute(null);
 
         await Eventually(() => again.ActionMessage == "app is on main, 3 new commits.");
-        yard.JobMessage.ShouldBeNull();
+        // The panel shows the outcome a moment before the Yard hears of it: the job's thread runs both, in that order.
+        await Eventually(() => yard.JobMessage is null);
+        await Settled(yard);
     }
 
     [Fact]
@@ -137,6 +149,7 @@ public partial class YardGitHubTests
 
         _mergeGh.Runs.ShouldHaveSingleItem();
         await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].PullRequests is null);
+        await Settled(yard);
     }
 
     [Fact]

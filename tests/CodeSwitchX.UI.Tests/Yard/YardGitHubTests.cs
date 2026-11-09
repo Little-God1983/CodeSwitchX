@@ -178,9 +178,17 @@ public partial class YardGitHubTests : IDisposable
             yard.Dispose();
         }
 
-        if (Directory.Exists(_tempRoot))
+        // A git round a pull's end started (#407) can still be reading a .git\HEAD here: the delete waits for it, two seconds at most.
+        for (var attempt = 1; Directory.Exists(_tempRoot); attempt++)
         {
-            Directory.Delete(_tempRoot, recursive: true);
+            try
+            {
+                Directory.Delete(_tempRoot, recursive: true);
+            }
+            catch (IOException) when (attempt < 20)
+            {
+                Thread.Sleep(100);
+            }
         }
     }
 

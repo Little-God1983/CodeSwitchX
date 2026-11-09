@@ -29,7 +29,13 @@ public sealed partial class GitHubListViewModel : ObservableObject
     /// <summary>How many are open: the tile's count at first, then what the full list says.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(TabText))]
+    [NotifyPropertyChangedFor(nameof(TabAutomationName))]
     private int _count;
+
+    /// <summary>The tab is in front: its rows show, and it has its pill's colours (#410).</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(TabAutomationName))]
+    private bool _isShown;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(EmptyText))]
@@ -70,8 +76,23 @@ public sealed partial class GitHubListViewModel : ObservableObject
 
     public GitHubItemKind Kind => _pill.Kind;
 
+    /// <summary>The tab's name without its count: "Pull requests", "Issues".</summary>
+    public string TabName => Kind == GitHubItemKind.PullRequest ? "Pull requests" : "Issues";
+
     /// <summary>The tab's name: "Pull requests 2", "Issues 5".</summary>
-    public string TabText => $"{(Kind == GitHubItemKind.PullRequest ? "Pull requests" : "Issues")} {Count}";
+    public string TabText => $"{TabName} {Count}";
+
+    /// <summary>What a screen reader hears for the tab (#410): its count, and whether it is in front, which only its colours show.</summary>
+    public string TabAutomationName => $"{TabName}, {Count} open, {(IsShown ? "shown" : "not shown")}";
+
+    /// <summary>The tab's arrow: its tooltip and its name for a screen reader.</summary>
+    public string OpenAllText => $"Open all {(Kind == GitHubItemKind.PullRequest ? "pull requests" : "issues")} on GitHub";
+
+    /// <summary>The tab's text in front, as its pill has it on the tile.</summary>
+    public string ShownForeground => Kind == GitHubItemKind.PullRequest ? "#A6E3E9" : "#B9CDF0";
+
+    /// <summary>The tab's background in front, as its pill has it on the tile.</summary>
+    public string ShownBackground => Kind == GitHubItemKind.PullRequest ? "#2D464B" : "#3A4250";
 
     /// <summary>Says the tab is empty once the read has ended with nothing; none while it loads, when it could not load, or when rows were left out.</summary>
     public string? EmptyText => !IsLoading && Rows.Count == 0 && LoadMessage is null && SkippedMessage is null

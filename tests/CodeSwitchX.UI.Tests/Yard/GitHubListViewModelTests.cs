@@ -415,8 +415,8 @@ public partial class GitHubListViewModelTests
         {
             var names = TabStops(PanelView(model).Children.OfType<Border>().Single()).Select(AutomationProperties.GetName).ToList();
 
-            names.Take(7).ShouldBe(["Close the panel", "Open acme/app on GitHub", "Show pull requests", "Open all pull requests on GitHub", "Show issues",
-                "Open all issues on GitHub", "Copy all links"]);
+            names.Take(7).ShouldBe(["Close the panel", "Open acme/app on GitHub", "Pull requests, 1 open, not shown", "Open all pull requests on GitHub",
+                "Issues, 12 open, shown", "Open all issues on GitHub", "Copy all links"]);
             names.Skip(7).ShouldBe(["Open #1"]);
         });
     }

@@ -212,7 +212,7 @@ public partial class GitHubListViewModelTests
             var button = Descendants<Button>(view).Single(b => AutomationProperties.GetName(b) == "Switch to main and pull in app");
             button.Content.ShouldBe("Switch to main and pull");
             button.IsEnabled.ShouldBeTrue();
-            var tabs = Descendants<Button>(view).First(b => AutomationProperties.GetName(b) == "Show pull requests");
+            var tabs = Descendants<Button>(view).First(b => AutomationProperties.GetName(b).StartsWith("Pull requests,", StringComparison.Ordinal));
             button.TranslatePoint(new Point(0, 0), view).Y.ShouldBeLessThan(tabs.TranslatePoint(new Point(0, 0), view).Y, "the button sits above the tabs");
 
             ((IInvokeProvider)new ButtonAutomationPeer(button).GetPattern(PatternInterface.Invoke)!).Invoke();

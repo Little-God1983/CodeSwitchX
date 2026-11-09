@@ -81,6 +81,8 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
         Issues = new GitHubListViewModel(new GitHubPill(repo, GitHubItemKind.Issue), reader, activity, ui, time, logger);
         _first = ListOf(shown);
         _shown = _first;
+        _first.IsShown = true;
+        Tabs = [PullRequests, Issues];
         PullRequests.PropertyChanged += OnListChanged;
         Issues.PropertyChanged += OnListChanged;
         // Worked out once: the browser's name is read from the registry and files, which a binding would repeat.
@@ -110,6 +112,15 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     public GitHubListViewModel PullRequests { get; }
 
     public GitHubListViewModel Issues { get; }
+
+    /// <summary>The two tabs in their order, for the one tab template (#410).</summary>
+    public IReadOnlyList<GitHubListViewModel> Tabs { get; }
+
+    partial void OnShownChanged(GitHubListViewModel value)
+    {
+        PullRequests.IsShown = ReferenceEquals(value, PullRequests);
+        Issues.IsShown = ReferenceEquals(value, Issues);
+    }
 
     public bool IsPullRequestsShown => Shown.Kind == GitHubItemKind.PullRequest;
 
