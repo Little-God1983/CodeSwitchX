@@ -121,7 +121,7 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
     /// has it, so the pill agrees with it before the next round. <paramref name="all"/> is newest first, as
     /// <see cref="GitHubReader.ListAsync"/> gives it. Nothing is known of a repository no round has read, so that one is left alone.
     /// </summary>
-    /// <param name="since">The <see cref="Latest"/> from before the list was read (null when there was none): when another result is stored now, the list changes nothing.</param>
+    /// <param name="since">The <see cref="Latest"/> from before the list was read (null when there was none): when another result of this kind is stored now, the list changes nothing. A result that differs only in the other kind (the panel's other tab, read at the same time) does not stop it.</param>
     /// <param name="total">The count the repository now holds for that kind, when the list was applied.</param>
     /// <returns>Whether the list was applied: not when no round has read the repository, nor when another result is stored than <paramref name="since"/>.</returns>
     public bool Replace(GitHubRepo repo, GitHubItemKind kind, GitHubList all, RepoActivity? since, out int total)
@@ -136,7 +136,7 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
 
             // A list read before a newer result was stored must not overwrite it. The other orders, and a round that changed only the
             // other kind, are accepted: the next refresh heals them.
-            if (!ReferenceEquals(last, since))
+            if (!ReferenceEquals(last, since) && (since is null || !last.SameKindAs(since, kind)))
             {
                 return false;
             }

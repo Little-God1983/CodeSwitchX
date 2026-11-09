@@ -81,6 +81,9 @@ public sealed partial class GitHubListViewModel : ObservableObject
     /// <summary>Completes when the read of <see cref="LoadAsync"/> has ended, however it ended.</summary>
     internal Task Loaded => _loaded.Task;
 
+    /// <summary>A read has started (or ended): showing the tab again reads nothing.</summary>
+    public bool HasStarted => Volatile.Read(ref _started) == 1;
+
     /// <summary>Ends the read: nothing it would have found reaches the list or the tile.</summary>
     public void Stop() => _stop.Cancel();
 

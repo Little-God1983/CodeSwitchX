@@ -352,6 +352,25 @@ public sealed class GitHubPanelFocusTests
     });
 
     [Fact]
+    public Task A_pill_that_is_gone_hands_the_keyboard_to_its_line_not_the_tile_s_first_stop() => StaThread.RunAsync(() =>
+    {
+        using var rig = new Rig();
+        var model = new WorkspaceTileViewModel(new Workspace { Name = "W", RootPath = @"c:\w" }, null!);
+        var other = new GitHubPill(new RepoActivity(new GitHubRepo("acme", "other"), "me", 3, 3, [], []), GitHubItemKind.Issue);
+        var first = new Button { DataContext = new GitLine("other", "main", 0, @"c:\w\other", GitHub: other.Activity) };
+        var pill = NewPill(Pill(GitHubItemKind.PullRequest));
+        var line = new Button { DataContext = new GitLine("app", "main", 0, @"c:\w\app", PullRequests: Pill(GitHubItemKind.PullRequest), GitHub: Pill().Activity), Content = pill };
+        rig.Root.Children.Add(new StackPanel { DataContext = model, Children = { first, line } });
+        rig.Root.UpdateLayout(); // the pill is inside the line's template, which only a layout builds
+        rig.Open(pill);
+        line.Content = null; // the full read found no pull request: the pill is gone
+
+        rig.Close();
+
+        Keyboard.FocusedElement.ShouldBeSameAs(line);
+    });
+
+    [Fact]
     public Task The_pill_is_given_back_once() => StaThread.RunAsync(() =>
     {
         using var rig = new Rig();

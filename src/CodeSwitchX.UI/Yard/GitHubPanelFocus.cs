@@ -126,14 +126,13 @@ internal sealed class GitHubPanelFocus
         }
 
         // A line that opened it gets it back (#406). A pill: that pill of that line, else the line's other pill, else the repository's
-        // pill on another line. Else wherever the tile starts.
-        var lineButton = open.Kind is null
-            ? Descendants(tile).OfType<Button>().FirstOrDefault(button => button.IsVisible && button.DataContext is GitLine { GitHub: { } activity } line && activity.Repo == open.Repo && line.Path == open.Line)
-            : null;
-        var target = lineButton ?? Descendants(tile).OfType<Button>().Where(button => button.IsVisible && button.DataContext is GitHubPill pill && pill.Activity.Repo == open.Repo)
+        // pill on another line, else the line itself. Else wherever the tile starts.
+        var lineButton = Descendants(tile).OfType<Button>().FirstOrDefault(button => button.IsVisible && button.DataContext is GitLine { GitHub: { } activity } line && activity.Repo == open.Repo && line.Path == open.Line);
+        var pillButton = open.Kind is null ? null : Descendants(tile).OfType<Button>().Where(button => button.IsVisible && button.DataContext is GitHubPill pill && pill.Activity.Repo == open.Repo)
             .OrderBy(button => ContextsAbove<GitLine>(button).FirstOrDefault()?.Path != open.Line)
             .ThenBy(button => ((GitHubPill)button.DataContext).Kind != open.Kind)
             .FirstOrDefault();
+        var target = open.Kind is null ? lineButton : pillButton ?? lineButton;
         if (target is not null)
         {
             Keyboard.Focus(target);

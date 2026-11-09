@@ -26,8 +26,6 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     private readonly CancellationTokenSource _stop = new();
     // The tab the panel opened on, read by LoadAsync; the other is read when it is first shown.
     private readonly GitHubListViewModel _first;
-    // 1 once LoadAsync has run: from then on, showing a tab reads it.
-    private int _loading;
     private ITimer? _copyMessageTimer;
     private int _copies;
 
@@ -91,7 +89,6 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     /// </summary>
     public async Task LoadAsync(CancellationToken ct)
     {
-        Volatile.Write(ref _loading, 1);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _stop.Token);
         await _first.LoadAsync(linked.Token).ConfigureAwait(false);
     }
@@ -110,10 +107,12 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     private void Show(GitHubItemKind kind)
     {
         Shown = ListOf(kind);
-        if (Volatile.Read(ref _loading) == 1)
+        // Even before LoadAsync has run: the Yard starts it on the pool, and a quick click can come first (review of #406).
+        if (!Shown.HasStarted)
         {
             var list = Shown;
-            // Not on the UI thread: the read starts its gh before its first await. A list already read returns at once.
+            // Not on the UI thread: the read starts its gh before its first await. The panel's close stops it, as the Yard's does:
+            // leaving the Yard closes the panel.
             _ = Task.Run(() => list.LoadAsync(_stop.Token));
         }
     }

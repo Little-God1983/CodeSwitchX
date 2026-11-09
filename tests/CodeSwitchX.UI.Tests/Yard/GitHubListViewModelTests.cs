@@ -237,6 +237,35 @@ public class GitHubListViewModelTests
     }
 
     [Fact]
+    public async Task Both_tabs_read_at_once_both_update_the_tile()
+    {
+        var (activity, pill) = await PillAsync();
+        var model = Open(activity, pill);
+        var load = model.LoadAsync(TestContext.Current.CancellationToken);
+        model.ShowCommand.Execute(GitHubItemKind.PullRequest);
+        await Eventually(() => _gh.Asked.Count == 2);
+
+        _gh.List.SetResult(ListOf(4));
+        await load;
+        _gh.PullRequestList.SetResult(PullRequestsOf(2));
+        await model.PullRequests.Loaded;
+
+        activity.ForFolder("app")!.OpenIssues.ShouldBe(4);
+        activity.ForFolder("app")!.OpenPullRequests.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task A_tab_shown_before_the_load_starts_is_still_read()
+    {
+        var (activity, pill) = await PillAsync();
+        var model = Open(activity, pill);
+
+        model.ShowCommand.Execute(GitHubItemKind.PullRequest); // the Yard starts LoadAsync on the pool: a quick click can come first
+
+        await Eventually(() => _gh.Asked.Contains("pr"));
+    }
+
+    [Fact]
     public async Task A_tab_shown_twice_is_read_once()
     {
         var (activity, pill) = await PillAsync();
