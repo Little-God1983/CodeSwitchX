@@ -32,7 +32,6 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
 
     /// <summary>The tab in front.</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsPullRequestsShown))]
     [NotifyCanExecuteChangedFor(nameof(CopyAllLinksCommand))]
     private GitHubListViewModel _shown;
 
@@ -122,7 +121,6 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
         Issues.IsShown = ReferenceEquals(value, Issues);
     }
 
-    public bool IsPullRequestsShown => Shown.Kind == GitHubItemKind.PullRequest;
 
     /// <summary>The repository's name; the tabs carry the counts.</summary>
     public string Heading => _repo.Repo.Name;

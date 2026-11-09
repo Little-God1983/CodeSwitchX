@@ -61,6 +61,46 @@ public partial class GitHubListViewModelTests
         });
     }
 
+    [Theory]
+    [InlineData(0, "0")]
+    [InlineData(999, "999")]
+    [InlineData(1000, "999+")]
+    [InlineData(1500, "999+")]
+    public async Task The_tab_shows_at_most_999_plus_and_the_screen_reader_hears_the_whole_count(int count, string shown)
+    {
+        var (activity, pill) = await PillAsync();
+        var model = Open(activity, pill);
+
+        model.Issues.Count = count;
+
+        model.Issues.CountText.ShouldBe(shown);
+        model.Issues.TabAutomationName.ShouldBe($"Issues, {count} open, shown");
+    }
+
+    [Fact]
+    public async Task The_issues_tab_stays_where_it_is_when_the_pull_request_count_reaches_four_digits()
+    {
+        var (activity, pill) = await PillAsync();
+        var model = Open(activity, pill);
+        model.PullRequests.Count = 9;
+
+        await StaThread.RunAsync(() =>
+        {
+            var view = PanelView(model);
+            double IssuesTabX() => Descendants<Button>(view).Single(b => AutomationProperties.GetName(b).StartsWith("Issues,", StringComparison.Ordinal))
+                .TranslatePoint(new Point(0, 0), view).X;
+            var before = IssuesTabX();
+
+            foreach (var count in new[] { 99, 999, 1500 })
+            {
+                model.PullRequests.Count = count;
+                view.UpdateLayout();
+
+                IssuesTabX().ShouldBe(before, $"at {count}");
+            }
+        });
+    }
+
     [Fact]
     public async Task The_tab_in_front_has_its_pill_colours_and_the_other_none()
     {
