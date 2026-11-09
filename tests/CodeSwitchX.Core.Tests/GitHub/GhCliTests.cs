@@ -132,7 +132,7 @@ public class GhCliTests : IDisposable
 
         var answer = await gh.AnswerAsAsync("acme", ["api", "graphql"], TestContext.Current.CancellationToken);
 
-        answer.ShouldBe(new GhAnswer("{}"));
+        answer.ShouldBe(new GhAnswer("{}", ErrorOutput: string.Empty));
     }
 
     [Fact]

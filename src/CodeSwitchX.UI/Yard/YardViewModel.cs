@@ -290,10 +290,10 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         Func<string, TabConversation?>? writtenInAt = null, Func<IReadOnlyDictionary<string, bool>>? runningTabs = null,
         Func<CancellationToken, Task<IReadOnlyDictionary<Guid, DateTimeOffset>>>? storedLastUse = null, GitHubActivity? gitHub = null,
         GitHubReader? gitHubReader = null, GitHubBrowsers? gitHubBrowsers = null, ITextClipboard? clipboard = null, IChatRowMenu? rowMenu = null,
-        GitPuller? puller = null)
+        GitPuller? puller = null, GitHubMerger? merger = null)
     {
         RowMenu = rowMenu;
-        GitJobs = new YardGitJobs(puller ?? new GitPuller(), ui, time, logger);
+        GitJobs = new YardGitJobs(puller ?? new GitPuller(), ui, time, logger, merger);
         GitJobs.Ended += OnGitJobEnded;
         _gitHub = gitHub;
         _gitHubReader = gitHubReader;
@@ -1212,6 +1212,12 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
 
         _ = RefreshGitAfterJobAsync();
+
+        // A merge changes the repository's open pull requests: its pills and counts are read now, not at the next ten minutes (#408).
+        if (outcome.Merged is not null && _gitHub is not null)
+        {
+            _ = RefreshGitHubAsync([outcome.Checkout]);
+        }
     }
 
     private async Task RefreshGitAfterJobAsync()

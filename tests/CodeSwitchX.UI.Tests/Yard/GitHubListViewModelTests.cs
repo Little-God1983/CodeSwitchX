@@ -1391,7 +1391,8 @@ public partial class GitHubListViewModelTests
         return model;
     }
 
-    private static List<Button> RowButtons(DependencyObject panel) => Descendants(panel).OfType<Button>().Where(b => b.DataContext is GitHubRow && b.Focusable).ToList();
+    private static List<Button> RowButtons(DependencyObject panel) => Descendants(panel).OfType<Button>()
+        .Where(b => b.DataContext is GitHubRow && b.Focusable && AutomationProperties.GetName(b).StartsWith("Open ", StringComparison.Ordinal)).ToList();
 
     [Fact]
     public async Task A_thousand_rows_build_far_fewer_row_containers()

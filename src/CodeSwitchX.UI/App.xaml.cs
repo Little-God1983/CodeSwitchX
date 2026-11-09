@@ -301,6 +301,8 @@ public partial class App : Application
         // The open issues and pull requests on the tiles (#335), read through gh for any signed-in account.
         services.AddSingleton<IGhCli>(_ => new GhCli());
         services.AddSingleton<GitHubReader>();
+        // Merges a pull request from the Yard's GitHub panel (#408), as the account that reads the repository.
+        services.AddSingleton<GitHubMerger>();
         // What ~/.ssh/config makes of a host name in a remote (git@github-work:owner/repo), kept for a few minutes per name.
         services.AddSingleton(sp => new SshAliases(sp.GetRequiredService<ILogger<SshAliases>>()));
         services.AddSingleton(sp => new BrowserCatalog(new InstalledBrowsers(), logger: sp.GetRequiredService<ILogger<BrowserCatalog>>()));

@@ -439,16 +439,61 @@
             <Setter Property="ItemTemplate">
               <Setter.Value>
                 <DataTemplate>
+                  <StackPanel>
                   <DockPanel>
                     <!-- Beside the row's button, not in it, so a click copies and opens nothing. Not focusable: a row stays one Tab stop,
                          and the keyboard stays where it was. -->
                     <Button DockPanel.Dock="Right" Command="{Binding DataContext.CopyRowLinkCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"
                             Content="&#xE8C8;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Focusable="False" Cursor="Hand" Background="Transparent" BorderThickness="0" Padding="6,2" Margin="2,4,0,0"
                             VerticalAlignment="Top" ToolTip="Copy link" AutomationProperties.Name="{Binding NumberText, StringFormat='Copy the link to {0}'}" />
+                    <!-- Merge (#408), on pull request rows only: it opens the strip below and does nothing else. In a border of its own, so the
+                         button keeps the theme's style. -->
+                    <Border DockPanel.Dock="Right" Margin="4,3,0,0" VerticalAlignment="Top">
+                      <Border.Style>
+                        <Style TargetType="Border">
+                          <Setter Property="Visibility" Value="Collapsed" />
+                          <Style.Triggers>
+                            <MultiDataTrigger>
+                              <MultiDataTrigger.Conditions>
+                                <Condition Binding="{Binding Tag, RelativeSource={RelativeSource AncestorType=ItemsControl}}" Value="PullRequests" />
+                                <Condition Binding="{Binding DataContext.CanMerge, RelativeSource={RelativeSource AncestorType=ItemsControl}}" Value="True" />
+                              </MultiDataTrigger.Conditions>
+                              <Setter Property="Visibility" Value="Visible" />
+                            </MultiDataTrigger>
+                          </Style.Triggers>
+                        </Style>
+                      </Border.Style>
+                      <Button Content="Merge" Padding="8,1" Command="{Binding DataContext.OpenMergeCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                              CommandParameter="{Binding}" AutomationProperties.Name="{Binding NumberText, StringFormat='Merge {0}'}"
+                              ToolTip="Asks first: a merge cannot be undone" />
+                    </Border>
                     <Button Command="{Binding DataContext.OpenRowCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"
                             HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Cursor="Hand" Background="Transparent" BorderThickness="0" Padding="8,2"
                             ContentTemplate="{StaticResource GitHubRowTemplate}" Content="{Binding}" AutomationProperties.Name="{Binding NumberText, StringFormat='Open {0}'}" />
                   </DockPanel>
+                  <!-- The merge strip (#408), under the row whose Merge was pressed: the question, what happens to the checkout, the choices. -->
+                  <Border Margin="8,2,0,6" Padding="10,8" CornerRadius="6" Background="#2D464B" BorderBrush="#4B6F76" BorderThickness="1">
+                    <Border.Visibility>
+                      <MultiBinding Converter="{StaticResource SameVisible}">
+                        <Binding />
+                        <Binding Path="DataContext.MergeStrip.Row" RelativeSource="{RelativeSource AncestorType=ItemsControl}" />
+                      </MultiBinding>
+                    </Border.Visibility>
+                    <StackPanel DataContext="{Binding DataContext.MergeStrip, RelativeSource={RelativeSource AncestorType=ItemsControl}}">
+                      <TextBlock Text="{Binding Question}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                      <TextBlock Text="{Binding CheckoutLine}" Margin="0,2,0,8" Opacity="0.8" TextWrapping="Wrap" />
+                      <StackPanel Orientation="Horizontal">
+                        <Button Content="Merge and pull" Padding="10,3" Margin="0,0,6,0" Style="{DynamicResource AccentButtonStyle}"
+                                Command="{Binding DataContext.MergeAndPullCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                Visibility="{Binding OffersPull, Converter={StaticResource BoolVisible}}" AutomationProperties.Name="Merge and pull" />
+                        <Button Content="{Binding MergeText}" Padding="10,3" Margin="0,0,6,0" AutomationProperties.Name="{Binding MergeText}"
+                                Command="{Binding DataContext.MergeOnlyCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" />
+                        <Button Content="Cancel" Padding="10,3" AutomationProperties.Name="Cancel the merge"
+                                Command="{Binding DataContext.CancelMergeCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" />
+                      </StackPanel>
+                    </StackPanel>
+                  </Border>
+                  </StackPanel>
                 </DataTemplate>
               </Setter.Value>
             </Setter>
@@ -504,8 +549,10 @@
           <Button Content="{Binding PullText}" Command="{Binding PullCommand}" HorizontalAlignment="Left" Padding="10,3"
                   AutomationProperties.Name="{Binding PullAutomationName}"
                   ToolTip="Switches this checkout to the default branch and brings it up to date with GitHub, fast-forward only" />
-          <TextBlock Text="{Binding ActionMessage}" Margin="0,6,0,0" TextWrapping="Wrap"
-                     Visibility="{Binding ActionMessage, Converter={StaticResource NullToCollapsed}}">
+        </StackPanel>
+        <!-- what the last pull or merge came to (#407, #408), its own line: a merge's shows without a pull button too -->
+        <StackPanel DockPanel.Dock="Top" Margin="16,0,16,8" Visibility="{Binding ActionMessage, Converter={StaticResource NullToCollapsed}}">
+          <TextBlock Text="{Binding ActionMessage}" TextWrapping="Wrap">
             <TextBlock.Style>
               <Style TargetType="TextBlock">
                 <Setter Property="Foreground" Value="#B0B0B0" />
@@ -592,7 +639,7 @@
         <TextBlock Style="{StaticResource GitHubDimLine}" Text="{Binding Shown.EmptyText}" />
         <!-- the tab in front shows its rows; the other keeps its list, scrolled where it was -->
         <Grid>
-          <ItemsControl ItemsSource="{Binding PullRequests.Rows}">
+          <ItemsControl ItemsSource="{Binding PullRequests.Rows}" Tag="PullRequests">
             <ItemsControl.Style>
               <Style TargetType="ItemsControl" BasedOn="{StaticResource GitHubRows}">
                 <Setter Property="Visibility" Value="Collapsed" />

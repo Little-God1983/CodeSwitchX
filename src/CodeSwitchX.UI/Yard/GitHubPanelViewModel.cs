@@ -51,13 +51,16 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(PullAutomationName))]
     private string? _branch;
 
-    /// <summary>A pull of the checkout runs, from this panel or an earlier one.</summary>
+    /// <summary>A pull or a merge of the checkout runs, from this panel or an earlier one.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(PullText))]
     [NotifyPropertyChangedFor(nameof(PullAutomationName))]
-    private bool _isPulling;
+    private bool _isBusy;
 
-    /// <summary>What the last pull came to, or why it was refused; none before the first press.</summary>
+    /// <summary>The strip a row's Merge button opened (#408); null when none is open. One at a time.</summary>
+    [ObservableProperty] private MergeStrip? _mergeStrip;
+
+    /// <summary>What the last pull or merge came to, or why it was refused; none before the first press.</summary>
     [ObservableProperty] private string? _actionMessage;
 
     /// <summary><see cref="ActionMessage"/> is a refusal or a failure, not progress or success.</summary>
@@ -93,10 +96,11 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
 
     /// <summary>
     /// The button above the tabs (#407): "Switch to main and pull", or "Pull main" when the checkout is on it, with the branch GitHub calls
-    /// the default; "Pulling main…" while a pull runs. Null, and no button, when the panel has no checkout or the repository has no default branch.
+    /// the default; what runs ("Pulling main…", "Merging #405…") while a job of the checkout runs. Null, and no button, when the panel has no
+    /// checkout or the repository has no default branch.
     /// </summary>
     public string? PullText => _checkout is null || _repo.DefaultBranch is not { } main ? null
-        : IsPulling ? $"Pulling {main}…"
+        : IsBusy ? _checkout.Jobs.RunningText(_checkout.Path) ?? $"Pulling {main}\u2026"
         : Branch == main ? $"Pull {main}"
         : $"Switch to {main} and pull";
 
@@ -171,7 +175,7 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanPull))]
     private void Pull()
     {
-        if (_checkout is null || _repo.DefaultBranch is not { } main || IsPulling)
+        if (_checkout is null || _repo.DefaultBranch is not { } main || IsBusy)
         {
             return;
         }
@@ -188,6 +192,61 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
 
     private bool CanPull() => _checkout is not null && _repo.DefaultBranch is not null;
 
+    /// <summary>Pull request rows have a Merge button (#408): there is a checkout to say what happens to, and the Yard can merge.</summary>
+    public bool CanMerge => _checkout is not null && _checkout.Jobs.CanMerge;
+
+    /// <summary>
+    /// A row's Merge button (#408): opens the strip under the row, and does nothing else. Merge and pull is offered when the workspace is on
+    /// the pull request's branch (not a fork's), it merges into the default branch, and no chat is working here. A press while a job of the
+    /// checkout runs does nothing, as Pull does.
+    /// </summary>
+    [RelayCommand]
+    private void OpenMerge(GitHubRow row)
+    {
+        if (_checkout is null || !CanMerge || IsBusy)
+        {
+            return;
+        }
+
+        var item = row.Item;
+        var main = _repo.DefaultBranch;
+        var into = item.BaseBranch ?? main ?? "its base branch";
+        var onBranch = !item.IsCrossRepository && item.Branch is not null && item.Branch == Branch;
+        var pullable = onBranch && main is not null && into == main;
+        var busy = pullable && _checkout.ChatIsWorking();
+        var stays = Branch is { } branch ? $"This workspace stays on {branch}." : "This workspace stays as it is.";
+        var line = !onBranch ? (item.IsCrossRepository ? $"It comes from a fork. {stays}" : stays)
+            : busy ? "A chat is working here, so the switch is left out."
+            : pullable ? $"This workspace is on its branch. Merge and pull switches it to {main} and pulls."
+            : $"It merges into {into}, not {main ?? "the default branch"}. {stays}";
+        MergeStrip = new MergeStrip(row, $"Merge {row.NumberText} into {into}?", line, pullable && !busy, pullable ? "Merge only" : "Merge", into);
+        ActionMessage = null;
+    }
+
+    /// <summary>The merge, then the switch to the default branch and the pull (#408).</summary>
+    [RelayCommand]
+    private void MergeAndPull() => Merge(pull: true);
+
+    /// <summary>The merge alone: the checkout stays as it is.</summary>
+    [RelayCommand]
+    private void MergeOnly() => Merge(pull: false);
+
+    [RelayCommand]
+    private void CancelMerge() => MergeStrip = null;
+
+    private void Merge(bool pull)
+    {
+        if (_checkout is null || MergeStrip is not { } strip || IsBusy)
+        {
+            return;
+        }
+
+        MergeStrip = null;
+        ActionMessage = null;
+        _ = _checkout.Jobs.MergeAsync(_checkout.Path, _repo.Repo.Name, _repo.Repo, _repo.Account, strip.Row.Item.Number, strip.BaseBranch,
+            pull && strip.OffersPull ? _repo.DefaultBranch : null, _checkout.ChatIsWorking);
+    }
+
     private void OnJobChanged(string key)
     {
         if (_checkout is not null && key == YardGitJobs.Key(_checkout.Path))
@@ -200,13 +259,20 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     private void ShowJob(bool opening)
     {
         var jobs = _checkout!.Jobs;
-        IsPulling = jobs.IsRunning(_checkout.Path);
-        if (!IsPulling && jobs.TakeOutcome(_checkout.Path) is { } outcome)
+        IsBusy = jobs.IsRunning(_checkout.Path);
+        if (!IsBusy && jobs.TakeOutcome(_checkout.Path) is { } outcome)
         {
             ShowAction(outcome.Message, failed: !outcome.Succeeded);
-            if (outcome.Succeeded && !opening)
+            if (outcome.Pulled && !opening)
             {
                 Branch = _repo.DefaultBranch;
+            }
+
+            // The merged row leaves the list at once; the Yard reads the repository again for the counts and pills.
+            if (outcome.Merged is { } number)
+            {
+                PullRequests.Drop(number);
+                CopyAllLinksCommand.NotifyCanExecuteChanged();
             }
         }
     }

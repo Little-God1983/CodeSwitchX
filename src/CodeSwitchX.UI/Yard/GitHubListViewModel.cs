@@ -84,6 +84,17 @@ public sealed partial class GitHubListViewModel : ObservableObject
     /// <summary>A read has started (or ended): showing the tab again reads nothing.</summary>
     public bool HasStarted => Volatile.Read(ref _started) == 1;
 
+    /// <summary>A pull request merged from the panel (#408) leaves the list, and the count with it.</summary>
+    public void Drop(int number)
+    {
+        var left = Rows.Where(r => r.Item.Number != number).ToList();
+        if (left.Count < Rows.Count)
+        {
+            Rows = left;
+            Count = Math.Max(0, Count - 1);
+        }
+    }
+
     /// <summary>Ends the read: nothing it would have found reaches the list or the tile.</summary>
     public void Stop() => _stop.Cancel();
 

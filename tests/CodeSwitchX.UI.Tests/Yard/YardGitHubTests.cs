@@ -215,7 +215,7 @@ public partial class YardGitHubTests : IDisposable
             ? new GitHubActivity(_gh, new GitHubReader(_gh), (path, _) => Task.FromResult(_originOf(path)), NullLogger<GitHubActivity>.Instance)
             : null;
         var yard = new YardViewModel(_store, registry, engine, pricing, git, _bus, ui, _time, NullLogger<YardViewModel>.Instance, gitHub: _activity,
-            gitHubReader: withGitHub ? new GitHubReader(_gh) : null, gitHubBrowsers: withGitHub ? Browsers() : null, puller: new GitPuller(_pullGit.RunAsync));
+            gitHubReader: withGitHub ? new GitHubReader(_gh) : null, gitHubBrowsers: withGitHub ? Browsers() : null, puller: new GitPuller(_pullGit.RunAsync), merger: new GitHubMerger(_mergeGh));
         _yards.Add(yard);
         return yard;
     }

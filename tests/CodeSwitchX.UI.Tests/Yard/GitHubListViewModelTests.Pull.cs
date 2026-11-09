@@ -76,12 +76,12 @@ public partial class GitHubListViewModelTests
         model.ActionMessage.ShouldBeNull("the last outcome goes when another pull starts");
         model.PullCommand.Execute(null);
 
-        model.IsPulling.ShouldBeTrue();
+        model.IsBusy.ShouldBeTrue();
         model.PullText.ShouldBe("Pulling main…");
         model.PullAutomationName.ShouldBe("Pulling main… in app");
         model.PullCommand.CanExecute(null).ShouldBeTrue("a focused button that turns itself off drops the keyboard");
         _git.Release();
-        await Eventually(() => !model.IsPulling);
+        await Eventually(() => !model.IsBusy);
         _git.Ran.Count(r => r.StartsWith("status", StringComparison.Ordinal)).ShouldBe(1, "the second press started nothing");
         model.ActionMessage.ShouldBe("Pull stopped: 1 file has uncommitted changes.");
     }
@@ -93,7 +93,7 @@ public partial class GitHubListViewModelTests
 
         model.PullCommand.Execute(null);
 
-        await Eventually(() => !model.IsPulling && model.ActionMessage is not null);
+        await Eventually(() => !model.IsBusy && model.ActionMessage is not null);
         model.ActionMessage.ShouldBe("app is on main, 3 new commits.");
         model.IsActionFailed.ShouldBeFalse();
         model.PullText.ShouldBe("Pull main");
@@ -124,7 +124,7 @@ public partial class GitHubListViewModelTests
 
         first.CloseCommand.Execute(null);
         var second = await OpenOnLine(jobs: jobs);
-        second.IsPulling.ShouldBeTrue("one pull of a checkout at a time");
+        second.IsBusy.ShouldBeTrue("one pull of a checkout at a time");
         second.PullText.ShouldBe("Pulling main…");
         second.CloseCommand.Execute(null);
         _git.Release();
@@ -134,7 +134,7 @@ public partial class GitHubListViewModelTests
         ended[0].Taken.ShouldBeFalse("no panel was open");
         third.ActionMessage.ShouldBe("app is on main, 3 new commits.");
         third.PullText.ShouldBe("Switch to main and pull", "the line, read since, knows the branch better than an old outcome");
-        first.IsPulling.ShouldBeTrue("a closed panel is let go of");
+        first.IsBusy.ShouldBeTrue("a closed panel is let go of");
         (await OpenOnLine(jobs: jobs)).ActionMessage.ShouldBeNull("an outcome is shown once");
     }
 
@@ -149,7 +149,7 @@ public partial class GitHubListViewModelTests
         working = true;
         _git.Release();
 
-        await Eventually(() => !model.IsPulling);
+        await Eventually(() => !model.IsBusy);
         model.ActionMessage.ShouldBe("Pull stopped: a chat started working here.");
         _git.Ran.ShouldNotContain(r => r.StartsWith("switch", StringComparison.Ordinal) || r.StartsWith("update-ref", StringComparison.Ordinal));
     }

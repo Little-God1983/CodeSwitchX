@@ -1,0 +1,243 @@
+using System.Windows;
+using System.Windows.Automation;
+using System.Windows.Controls;
+using CodeSwitchX.Core.GitHub;
+using CodeSwitchX.Core.Workspaces;
+using CodeSwitchX.UI.Tests.Infrastructure;
+using CodeSwitchX.UI.Yard;
+using Microsoft.Extensions.Logging.Abstractions;
+
+namespace CodeSwitchX.UI.Tests.Yard;
+
+/// <summary>The panel's Merge button and strip (#408).</summary>
+public partial class GitHubListViewModelTests
+{
+    private readonly FakeMergeGh _merge = new();
+
+    private YardGitJobs MergingJobs() => new(new GitPuller(_git.RunAsync), new ImmediateDispatcher(), _time, NullLogger.Instance, new GitHubMerger(_merge));
+
+    /// <summary>
+    /// A panel opened from a line in <c>C:\app</c> on <paramref name="branch"/>, whose one open pull request, #9, comes from branch <c>b</c>
+    /// and merges into <paramref name="into"/>; the repository's default branch is main.
+    /// </summary>
+    private async Task<GitHubPanelViewModel> OpenForMerge(string? branch = "b", string into = "main", bool fromFork = false, Func<bool>? working = null, YardGitJobs? jobs = null)
+    {
+        var (activity, pill) = await PillAsync();
+        var pr = pill.Activity.NewestPullRequests.Single() with { BaseBranch = into, IsCrossRepository = fromFork };
+        var repo = pill.Activity with { DefaultBranch = "main", NewestPullRequests = [pr] };
+        return new GitHubPanelViewModel(repo, GitHubItemKind.PullRequest, new GitHubReader(_gh), activity, Browsers(), _clipboard, new ImmediateDispatcher(), _time,
+            NullLogger.Instance, _closedLists.Add, new PanelCheckout(@"C:\app", branch, working ?? (() => false), jobs ?? MergingJobs()));
+    }
+
+    private static GitHubRow Row(GitHubPanelViewModel model) => model.PullRequests.Rows.Single();
+
+    [Fact]
+    public async Task Merge_only_opens_the_strip_and_merges_nothing()
+    {
+        var model = await OpenForMerge();
+
+        model.OpenMergeCommand.Execute(Row(model));
+
+        model.MergeStrip.ShouldNotBeNull().Row.ShouldBe(Row(model));
+        _merge.Runs.ShouldBeEmpty();
+        _git.Ran.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task On_the_pull_requests_branch_the_strip_offers_merge_and_pull_first()
+    {
+        var model = await OpenForMerge("b");
+
+        model.OpenMergeCommand.Execute(Row(model));
+
+        model.MergeStrip.ShouldBe(new MergeStrip(Row(model), "Merge #9 into main?", "This workspace is on its branch. Merge and pull switches it to main and pulls.", true, "Merge only", "main"));
+    }
+
+    [Theory]
+    [InlineData("other", "main", false, "This workspace stays on other.")]
+    [InlineData("b", "main", true, "It comes from a fork. This workspace stays on b.")]
+    [InlineData("b", "develop", false, "It merges into develop, not main. This workspace stays on b.")]
+    public async Task Elsewhere_a_forks_branch_or_another_base_offer_merge_alone(string branch, string into, bool fromFork, string line)
+    {
+        var model = await OpenForMerge(branch, into, fromFork);
+
+        model.OpenMergeCommand.Execute(Row(model));
+
+        var strip = model.MergeStrip.ShouldNotBeNull();
+        strip.OffersPull.ShouldBeFalse();
+        strip.MergeText.ShouldBe(into == "main" && !fromFork && branch == "b" ? "Merge only" : "Merge");
+        strip.CheckoutLine.ShouldBe(line);
+        strip.Question.ShouldBe($"Merge #9 into {into}?");
+    }
+
+    [Fact]
+    public async Task A_working_chat_leaves_the_switch_out()
+    {
+        var model = await OpenForMerge("b", working: () => true);
+
+        model.OpenMergeCommand.Execute(Row(model));
+
+        var strip = model.MergeStrip.ShouldNotBeNull();
+        strip.OffersPull.ShouldBeFalse();
+        strip.MergeText.ShouldBe("Merge only");
+        strip.CheckoutLine.ShouldBe("A chat is working here, so the switch is left out.");
+    }
+
+    [Fact]
+    public async Task Merge_and_pull_merges_as_the_reading_account_then_pulls_and_the_row_leaves()
+    {
+        var model = await OpenForMerge("b");
+        model.OpenMergeCommand.Execute(Row(model));
+
+        model.MergeAndPullCommand.Execute(null);
+
+        model.MergeStrip.ShouldBeNull();
+        await Eventually(() => !model.IsBusy && model.ActionMessage is not null);
+        model.ActionMessage.ShouldBe("Merged #9. app is on main, 3 new commits.");
+        model.IsActionFailed.ShouldBeFalse();
+        _merge.Runs.ShouldHaveSingleItem().Login.ShouldBe("me");
+        _merge.Runs[0].Arguments.ShouldBe(["pr", "merge", "9", "-R", "acme/app", "--merge"]);
+        model.PullRequests.Rows.ShouldBeEmpty();
+        model.PullRequests.TabText.ShouldBe("Pull requests 0");
+        model.PullText.ShouldBe("Pull main");
+    }
+
+    [Fact]
+    public async Task Merge_only_leaves_the_checkout_alone()
+    {
+        var model = await OpenForMerge("b");
+        model.OpenMergeCommand.Execute(Row(model));
+
+        model.MergeOnlyCommand.Execute(null);
+
+        await Eventually(() => !model.IsBusy && model.ActionMessage is not null);
+        model.ActionMessage.ShouldBe("Merged #9.");
+        _git.Ran.ShouldBeEmpty();
+        model.PullText.ShouldBe("Switch to main and pull");
+        model.PullRequests.Rows.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_merge_GitHub_refuses_says_why_and_the_row_stays()
+    {
+        _merge.Answer = new GhAnswer(null, ErrorOutput: "X Pull request acme/app#9 is not mergeable: the merge commit cannot be cleanly created.\n");
+        var model = await OpenForMerge("b");
+        model.OpenMergeCommand.Execute(Row(model));
+
+        model.MergeAndPullCommand.Execute(null);
+
+        await Eventually(() => !model.IsBusy && model.ActionMessage is not null);
+        model.ActionMessage.ShouldBe("Can't merge #9: it has conflicts with main.");
+        model.IsActionFailed.ShouldBeTrue();
+        _git.Ran.ShouldBeEmpty("nothing is pulled after a merge that did not happen");
+        model.PullRequests.Rows.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_merge_whose_pull_is_refused_says_it_merged_but_did_not_switch()
+    {
+        _git.Status = " M a.txt\n";
+        var model = await OpenForMerge("b");
+        model.OpenMergeCommand.Execute(Row(model));
+
+        model.MergeAndPullCommand.Execute(null);
+
+        await Eventually(() => !model.IsBusy && model.ActionMessage is not null);
+        model.ActionMessage.ShouldBe("Merged #9, but didn't switch: 1 file has uncommitted changes.");
+        model.IsActionFailed.ShouldBeTrue();
+        model.PullRequests.Rows.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Cancel_closes_the_strip_and_merges_nothing()
+    {
+        var model = await OpenForMerge();
+        model.OpenMergeCommand.Execute(Row(model));
+
+        model.CancelMergeCommand.Execute(null);
+
+        model.MergeStrip.ShouldBeNull();
+        _merge.Runs.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task While_a_job_of_the_checkout_runs_merge_opens_nothing()
+    {
+        var model = await OpenForMerge("feature/x");
+        _git.Hold();
+        model.PullCommand.Execute(null);
+
+        model.OpenMergeCommand.Execute(Row(model));
+
+        model.MergeStrip.ShouldBeNull();
+        _git.Release();
+        await Eventually(() => !model.IsBusy);
+    }
+
+    [Fact]
+    public async Task A_running_merge_names_itself_on_the_button()
+    {
+        var jobs = MergingJobs();
+        var model = await OpenForMerge("b", jobs: jobs);
+        _git.Hold();
+        model.OpenMergeCommand.Execute(Row(model));
+
+        model.MergeAndPullCommand.Execute(null);
+
+        await Eventually(() => _git.Ran.Count > 0);
+        model.PullText.ShouldBe("Merging #9\u2026");
+        _git.Release();
+        await Eventually(() => !model.IsBusy);
+    }
+
+    [Fact]
+    public async Task Without_a_merger_there_is_no_merge()
+    {
+        (await OpenOnLine()).CanMerge.ShouldBeFalse();
+        (await OpenForMerge()).CanMerge.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task The_view_puts_merge_on_pull_request_rows_and_the_strip_under_the_row()
+    {
+        var model = await OpenForMerge("b");
+        model.Issues.Rows.ShouldNotBeEmpty();
+
+        await StaThread.RunAsync(() =>
+        {
+            var view = PanelView(model);
+            var merges = Descendants<Button>(view).Where(b => AutomationProperties.GetName(b) == "Merge #9").ToList();
+            merges.Count.ShouldBe(1, string.Join(", ", merges.Select(b => b.GetType().Name)));
+            var merge = merges[0];
+            ((FrameworkElement)merge.Parent).Visibility.ShouldBe(Visibility.Visible);
+
+            model.OpenMergeCommand.Execute(Row(model));
+            view.UpdateLayout();
+
+            var strip = Descendants<TextBlock>(view).Single(t => t.Text == "Merge #9 into main?" && Shown(t, view));
+            strip.TranslatePoint(new Point(0, 0), view).Y.ShouldBeGreaterThan(merge.TranslatePoint(new Point(0, 0), view).Y, "the strip is under its row");
+            var names = Descendants<Button>(view).Where(b => Shown(b, view)).Select(AutomationProperties.GetName).ToList();
+            names.ShouldContain("Merge and pull");
+            names.ShouldContain("Merge only");
+            names.ShouldContain("Cancel the merge");
+
+            model.ShowCommand.Execute(GitHubItemKind.Issue);
+            view.UpdateLayout();
+            Descendants<Button>(view).Where(b => AutomationProperties.GetName(b) is "Merge #1").ShouldAllBe(b => ((FrameworkElement)b.Parent).Visibility == Visibility.Collapsed);
+        });
+    }
+
+    /// <summary>The element and every element above it up to <paramref name="root"/> are visible: a strip of another row is collapsed above its text.</summary>
+    private static bool Shown(DependencyObject element, DependencyObject root)
+    {
+        for (var at = element; at is not null && at != root; at = System.Windows.Media.VisualTreeHelper.GetParent(at))
+        {
+            if (at is UIElement { Visibility: not Visibility.Visible })
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+}

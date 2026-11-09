@@ -101,7 +101,7 @@ public sealed class GhCli : IGhCli
         }
 
         var run = await GitInspector.RunProcessAsync(StartInfo(arguments, token, _executable), timeout, ct).ConfigureAwait(false);
-        return new GhAnswer(run.Output, run.FailureOutput, run.TimedOut);
+        return new GhAnswer(run.Output, run.FailureOutput, run.TimedOut, run.ErrorOutput);
     }
 
     private async Task<string?> RunAsync(IReadOnlyList<string> arguments, string? token, CancellationToken ct) =>
@@ -114,7 +114,7 @@ public sealed class GhCli : IGhCli
     internal static ProcessStartInfo StartInfo(IReadOnlyList<string> arguments, string? token, string executable = "gh")
     {
         // gh writes UTF-8; a windowed process would decode the pipe with the ANSI code page and garble titles.
-        var info = new ProcessStartInfo(executable) { StandardOutputEncoding = Encoding.UTF8 };
+        var info = new ProcessStartInfo(executable) { StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8 };
         foreach (var argument in arguments)
         {
             info.ArgumentList.Add(argument);
