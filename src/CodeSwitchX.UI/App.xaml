@@ -80,8 +80,8 @@
         </WrapPanel>
       </StackPanel>
     </DataTemplate>
-    <!-- A repository's line: on a tile, and in the header of its Raven chat. -->
-    <DataTemplate x:Key="GitLineTemplate" DataType="{x:Type yard:GitLine}">
+    <!-- A repository's line as it reads: on a tile, and in the header of its Raven chat. -->
+    <DataTemplate x:Key="GitLineContent" DataType="{x:Type yard:GitLine}">
       <!-- the pill sits at the line's right edge, so the pills of every line and every tile line up; the folder and the
            branch share what is left, a long folder name at most 120 wide, so the pills stay whole. The line's tooltip is on its
            parts, not on the Grid: a pill has none above it, so the preview is the only thing over it -->
@@ -158,6 +158,47 @@
           </TextBlock>
         </Border>
       </Grid>
+    </DataTemplate>
+    <!-- A tile's line on GitHub (#406): the whole line is one button that opens the repository's panel, lit under the pointer. The
+         border's thickness never changes and its negative margin gives back what it and the padding take, so the line has the room
+         of a plain one and nothing moves. No tooltip: a pill has none above it (#335). -->
+    <DataTemplate x:Key="GitLineButton" DataType="{x:Type yard:GitLine}">
+      <Button Content="{Binding}" ContentTemplate="{StaticResource GitLineContent}" Cursor="Hand"
+              Command="{Binding DataContext.OpenGitHubLineCommand, RelativeSource={RelativeSource AncestorType=yard:YardView}}" CommandParameter="{Binding}"
+              AutomationProperties.Name="{Binding OpenGitHubText}">
+        <Button.Template>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Back" Margin="-4,-1" Padding="3,0" BorderThickness="1" CornerRadius="5" Background="Transparent" BorderBrush="Transparent">
+              <ContentPresenter />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Back" Property="Background" Value="#3D4A5C" />
+                <Setter TargetName="Back" Property="BorderBrush" Value="#6B85A8" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Button.Template>
+      </Button>
+    </DataTemplate>
+    <!-- A repository's line: a button on a tile when it is on GitHub, plain text otherwise and in Raven's chat header, where a
+         click must still reach the tile or the header. -->
+    <DataTemplate x:Key="GitLineTemplate" DataType="{x:Type yard:GitLine}">
+      <ContentControl Content="{Binding}" Focusable="False" IsTabStop="False">
+        <ContentControl.Style>
+          <Style TargetType="ContentControl">
+            <Setter Property="ContentTemplate" Value="{StaticResource GitLineButton}" />
+            <Style.Triggers>
+              <DataTrigger Binding="{Binding GitHub}" Value="{x:Null}">
+                <Setter Property="ContentTemplate" Value="{StaticResource GitLineContent}" />
+              </DataTrigger>
+              <DataTrigger Binding="{Binding Path=(yard:GitPills.IsShown), RelativeSource={RelativeSource Self}}" Value="False">
+                <Setter Property="ContentTemplate" Value="{StaticResource GitLineContent}" />
+              </DataTrigger>
+            </Style.Triggers>
+          </Style>
+        </ContentControl.Style>
+      </ContentControl>
     </DataTemplate>
   </Application.Resources>
 </Application>

@@ -338,6 +338,20 @@ public sealed class GitHubPanelFocusTests
     });
 
     [Fact]
+    public Task Closing_a_panel_a_line_opened_hands_the_keyboard_back_to_that_line() => StaThread.RunAsync(() =>
+    {
+        using var rig = new Rig();
+        var model = new WorkspaceTileViewModel(new Workspace { Name = "W", RootPath = @"c:\w" }, null!);
+        var line = new Button { DataContext = new GitLine("app", "main", 0, @"c:\w\one", Issues: Pill(), GitHub: Pill().Activity), Content = NewPill(Pill()) };
+        rig.Root.Children.Add(new StackPanel { DataContext = model, Children = { line } });
+        rig.Open(line);
+
+        rig.Close();
+
+        Keyboard.FocusedElement.ShouldBeSameAs(line);
+    });
+
+    [Fact]
     public Task The_pill_is_given_back_once() => StaThread.RunAsync(() =>
     {
         using var rig = new Rig();

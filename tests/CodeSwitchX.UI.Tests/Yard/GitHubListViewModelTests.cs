@@ -670,6 +670,53 @@ public class GitHubListViewModelTests
     }
 
     [Fact]
+    public async Task A_line_opens_the_panel_on_pull_requests_when_any_are_open()
+    {
+        var (activity, pill) = await PillAsync();
+        var yard = NewYard(activity);
+
+        yard.OpenGitHubLineCommand.Execute(new GitLine(null, "main", 0, "app", GitHub: pill.Activity));
+
+        yard.GitHubPanel.ShouldNotBeNull().Shown.Kind.ShouldBe(GitHubItemKind.PullRequest);
+    }
+
+    [Fact]
+    public async Task A_line_with_no_pull_requests_opens_on_issues()
+    {
+        var (activity, pill) = await PillAsync();
+        var yard = NewYard(activity);
+
+        yard.OpenGitHubLineCommand.Execute(new GitLine(null, "main", 0, "app", GitHub: pill.Activity with { OpenPullRequests = 0, NewestPullRequests = [] }));
+
+        yard.GitHubPanel.ShouldNotBeNull().Shown.Kind.ShouldBe(GitHubItemKind.Issue);
+    }
+
+    [Fact]
+    public async Task A_line_with_nothing_open_opens_two_empty_tabs()
+    {
+        var (activity, pill) = await PillAsync();
+        var yard = NewYard(activity);
+        var nothing = pill.Activity with { OpenIssues = 0, OpenPullRequests = 0, NewestIssues = [], NewestPullRequests = [] };
+
+        yard.OpenGitHubLineCommand.Execute(new GitLine(null, "main", 0, "app", GitHub: nothing));
+
+        var panel = yard.GitHubPanel.ShouldNotBeNull();
+        panel.Shown.Kind.ShouldBe(GitHubItemKind.Issue);
+        panel.Issues.TabText.ShouldBe("Issues 0");
+        panel.PullRequests.TabText.ShouldBe("Pull requests 0");
+    }
+
+    [Fact]
+    public async Task A_line_without_github_cannot_open_the_panel()
+    {
+        var (activity, pill) = await PillAsync();
+
+        NewYard(activity).OpenGitHubLineCommand.CanExecute(new GitLine(null, "main", 0)).ShouldBeFalse();
+        NewYard(null).OpenGitHubLineCommand.CanExecute(new GitLine(null, "main", 0, GitHub: pill.Activity)).ShouldBeFalse("no readers");
+        NewYard(activity).OpenGitHubLineCommand.CanExecute(new GitLine(null, "main", 0, GitHub: pill.Activity)).ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task Without_the_readers_a_click_does_nothing()
     {
         var (_, pill) = await PillAsync();

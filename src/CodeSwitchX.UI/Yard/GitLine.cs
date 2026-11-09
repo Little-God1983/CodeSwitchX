@@ -31,6 +31,9 @@ public sealed record GitLine(string? Folder, string? Branch, int? DirtyCount, st
 
     public string? GitStateLabel => Label(DirtyCount);
 
+    /// <summary>What a click on the line does, for a screen reader; null when the line is not on GitHub.</summary>
+    public string? OpenGitHubText => GitHub is { } activity ? $"Open issues and pull requests of {activity.Repo.Name}" : null;
+
     /// <summary>
     /// "clean", or how many files have uncommitted changes (edited, staged or new). Null when git could not tell, so no
     /// pill: a made-up "clean" would hide changes.

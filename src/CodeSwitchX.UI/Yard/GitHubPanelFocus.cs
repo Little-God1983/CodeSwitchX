@@ -22,7 +22,7 @@ internal sealed class GitHubPanelFocus
     private readonly UIElement _root;
     private readonly UIElement _panel;
     private readonly Action _closePreview;
-    private (WorkspaceTileViewModel? Tile, string? Line, GitHubRepo Repo, GitHubItemKind Kind)? _opener;
+    private (WorkspaceTileViewModel? Tile, string? Line, GitHubRepo Repo, GitHubItemKind? Kind)? _opener;
 
     /// <param name="root">The Yard, whose pills open the list.</param>
     /// <param name="panel">The list's panel, whose visibility says when the list opens and closes.</param>
@@ -44,6 +44,11 @@ internal sealed class GitHubPanelFocus
         {
             // The outermost tile context: the tile, not a part of it.
             _opener = (ContextsAbove<WorkspaceTileViewModel>(button).LastOrDefault(), ContextsAbove<GitLine>(button).FirstOrDefault()?.Path, pill.Activity.Repo, pill.Kind);
+        }
+        else if (e.OriginalSource is Button { DataContext: GitLine { GitHub: { } activity } line } lineButton)
+        {
+            // A repository line (#406): no kind, the line itself is what the keyboard goes back to.
+            _opener = (ContextsAbove<WorkspaceTileViewModel>(lineButton).LastOrDefault(), line.Path, activity.Repo, null);
         }
     }
 
@@ -120,8 +125,12 @@ internal sealed class GitHubPanelFocus
             return;
         }
 
-        // The pill of that line, else the line's other pill, else the repository's pill on another line, else wherever the tile starts.
-        var target = Descendants(tile).OfType<Button>().Where(button => button.IsVisible && button.DataContext is GitHubPill pill && pill.Activity.Repo == open.Repo)
+        // A line that opened it gets it back (#406). A pill: that pill of that line, else the line's other pill, else the repository's
+        // pill on another line. Else wherever the tile starts.
+        var lineButton = open.Kind is null
+            ? Descendants(tile).OfType<Button>().FirstOrDefault(button => button.IsVisible && button.DataContext is GitLine { GitHub: { } activity } line && activity.Repo == open.Repo && line.Path == open.Line)
+            : null;
+        var target = lineButton ?? Descendants(tile).OfType<Button>().Where(button => button.IsVisible && button.DataContext is GitHubPill pill && pill.Activity.Repo == open.Repo)
             .OrderBy(button => ContextsAbove<GitLine>(button).FirstOrDefault()?.Path != open.Line)
             .ThenBy(button => ((GitHubPill)button.DataContext).Kind != open.Kind)
             .FirstOrDefault();
