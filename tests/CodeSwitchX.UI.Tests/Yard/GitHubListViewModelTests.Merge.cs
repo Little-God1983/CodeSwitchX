@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Input;
 using CodeSwitchX.Core.GitHub;
 using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.UI.Tests.Infrastructure;
@@ -146,6 +147,70 @@ public partial class GitHubListViewModelTests
         model.ActionMessage.ShouldBe("Merged #9, but didn't switch: 1 file has uncommitted changes.");
         model.IsActionFailed.ShouldBeTrue();
         model.PullRequests.Rows.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task One_merged_already_leaves_the_list_and_the_pull_follows()
+    {
+        _merge.Answer = new GhAnswer(null, ErrorOutput: "X Pull request acme/app#9 was already merged\n");
+        var model = await OpenForMerge("b");
+        model.OpenMergeCommand.Execute(Row(model));
+
+        model.MergeAndPullCommand.Execute(null);
+
+        await Eventually(() => !model.IsBusy && model.ActionMessage is not null);
+        model.ActionMessage.ShouldBe("#9 was merged already. app is on main, 3 new commits.");
+        model.PullRequests.Rows.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_pull_closes_an_open_strip()
+    {
+        var model = await OpenForMerge("b");
+        model.OpenMergeCommand.Execute(Row(model));
+
+        model.PullCommand.Execute(null);
+
+        model.MergeStrip.ShouldBeNull("its choices were worked out from the branch the pull changes");
+        await Eventually(() => !model.IsBusy);
+    }
+
+    [Fact]
+    public async Task The_strip_stays_under_its_row_when_the_full_list_arrives()
+    {
+        var model = await OpenForMerge("b");
+        model.OpenMergeCommand.Execute(Row(model));
+        _gh.PullRequestList.SetResult("""[{"number":9,"title":"Ninth","url":"https://github.com/acme/app/pull/9","updatedAt":"2026-09-23T06:00:00Z","labels":[{"name":"x","color":"ffffff"}],"headRefName":"b","author":{"login":"me"}}]""");
+        await model.PullRequests.LoadAsync(TestContext.Current.CancellationToken);
+
+        await StaThread.RunAsync(() =>
+        {
+            var view = PanelView(model);
+
+            Descendants<TextBlock>(view).Count(t => t.Text == "Merge #9 into main?" && Shown(t, view)).ShouldBe(1, "a new row of the same pull request");
+        });
+    }
+
+    [Fact]
+    public async Task A_strip_button_that_closes_the_strip_hands_the_keyboard_to_its_rows_merge_button()
+    {
+        var model = await OpenForMerge("b");
+
+        await StaThread.RunAsync(() =>
+        {
+            var (_, panel, source) = FocusedPanel(model);
+            using var _ = source;
+            model.OpenMergeCommand.Execute(Row(model));
+            panel.UpdateLayout();
+            var cancel = Descendants<Button>(panel).Single(b => AutomationProperties.GetName(b) == "Cancel the merge" && Shown(b, panel));
+            Keyboard.Focus(cancel).ShouldBe(cancel);
+
+            model.CancelMergeCommand.Execute(null);
+            panel.UpdateLayout();
+            System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+
+            AutomationProperties.GetName(Keyboard.FocusedElement.ShouldBeOfType<Button>()).ShouldBe("Merge #9");
+        });
     }
 
     [Fact]

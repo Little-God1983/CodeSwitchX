@@ -100,15 +100,16 @@ public sealed class YardGitJobs
                 return new GitJobOutcome(checkout, name, false, $"Can't merge #{number}: {merge.Text}");
             }
 
+            var merged = merge.AlreadyMerged ? $"#{number} was merged already" : $"Merged #{number}";
             if (pullBranch is null)
             {
-                return new GitJobOutcome(checkout, name, true, $"Merged #{number}.", number);
+                return new GitJobOutcome(checkout, name, true, $"{merged}.", number);
             }
 
             var pull = await _puller.PullAsync(checkout, pullBranch, name, CancellationToken.None, _ => StillFreeAsync(chatIsWorking)).ConfigureAwait(false);
             return pull.Succeeded
-                ? new GitJobOutcome(checkout, name, true, $"Merged #{number}. {pull.Text}", number, Pulled: true)
-                : new GitJobOutcome(checkout, name, false, $"Merged #{number}, but didn't switch: {pull.Text}", number);
+                ? new GitJobOutcome(checkout, name, true, $"{merged}. {pull.Text}", number, Pulled: true)
+                : new GitJobOutcome(checkout, name, false, $"{merged}, but didn't switch: {pull.Text}", number);
         }, $"#{number} may or may not be merged: something went wrong. See the log and GitHub.");
     }
 

@@ -475,8 +475,9 @@
                   <Border Margin="8,2,0,6" Padding="10,8" CornerRadius="6" Background="#2D464B" BorderBrush="#4B6F76" BorderThickness="1">
                     <Border.Visibility>
                       <MultiBinding Converter="{StaticResource SameVisible}">
-                        <Binding />
-                        <Binding Path="DataContext.MergeStrip.Row" RelativeSource="{RelativeSource AncestorType=ItemsControl}" />
+                        <!-- by number: a list read again brings new rows of the same pull requests (review of #408) -->
+                        <Binding Path="Item.Number" />
+                        <Binding Path="DataContext.MergeStrip.Row.Item.Number" RelativeSource="{RelativeSource AncestorType=ItemsControl}" />
                       </MultiBinding>
                     </Border.Visibility>
                     <StackPanel DataContext="{Binding DataContext.MergeStrip, RelativeSource={RelativeSource AncestorType=ItemsControl}}">

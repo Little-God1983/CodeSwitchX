@@ -44,6 +44,22 @@ public class GitHubMergerTests
     }
 
     [Fact]
+    public async Task One_merged_already_counts_as_merged()
+    {
+        var gh = new FakeGh(new GhAnswer(null, ErrorOutput: "X Pull request acme/tool#9 was already merged\n"));
+
+        (await new GitHubMerger(gh).MergeAsync(Repo, "reader", 9, "main", CancellationToken.None)).ShouldBe(new MergeOutcome(true, AlreadyMerged: true));
+    }
+
+    [Fact]
+    public async Task An_empty_stderr_does_not_hide_the_reason_on_stdout()
+    {
+        var gh = new FakeGh(new GhAnswer(null, FailureOutput: "X Pull request acme/tool#9 is not mergeable: the base branch policy prohibits the merge.\n", ErrorOutput: string.Empty));
+
+        (await new GitHubMerger(gh).MergeAsync(Repo, "reader", 9, "main", CancellationToken.None)).Text.ShouldBe("the base branch policy prohibits the merge.");
+    }
+
+    [Fact]
     public async Task A_run_out_of_time_says_to_look_on_GitHub()
     {
         var gh = new FakeGh(new GhAnswer(null, TimedOut: true));
@@ -53,7 +69,6 @@ public class GitHubMergerTests
 
     [Theory]
     [InlineData("X Pull request acme/tool#9 is not mergeable: the base branch policy prohibits the merge.\n", "the base branch policy prohibits the merge.")]
-    [InlineData("X Pull request acme/tool#9 was already merged\n", "it was merged already.")]
     [InlineData("GraphQL: Resource not accessible by integration (mergePullRequest)\n", "GraphQL: Resource not accessible by integration (mergePullRequest)")]
     [InlineData("X some other failure\nhint: more\n", "some other failure")]
     [InlineData("", null)]

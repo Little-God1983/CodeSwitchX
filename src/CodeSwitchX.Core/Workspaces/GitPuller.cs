@@ -13,8 +13,7 @@ public sealed record PullOutcome(bool Succeeded, string Text);
 /// with the reason and leaves the checkout as it was (on its branch, its files untouched): uncommitted changes to tracked files, a local default branch with commits that are
 /// not on GitHub, and whatever git itself refuses (an untracked file the switch would overwrite). Never stashes, resets or merges.
 /// </summary>
-/// <param name="run">Runs git in a folder with the arguments and a timeout; a real process by default, a fake in tests.</param>
-public sealed class GitPuller(Func<string, IReadOnlyList<string>, TimeSpan, CancellationToken, Task<ProcessRunResult>>? run = null)
+public sealed class GitPuller
 {
     /// <summary>For the reads: status, rev-parse, rev-list.</summary>
     internal static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(30);
@@ -28,7 +27,13 @@ public sealed class GitPuller(Func<string, IReadOnlyList<string>, TimeSpan, Canc
     /// <summary>The most of git's own words a reason carries; git can list many files.</summary>
     private const int MostReasonLength = 300;
 
-    private readonly Func<string, IReadOnlyList<string>, TimeSpan, CancellationToken, Task<ProcessRunResult>> _run = run ?? RunGitAsync;
+    private readonly Func<string, IReadOnlyList<string>, TimeSpan, CancellationToken, Task<ProcessRunResult>> _run;
+
+    /// <param name="run">Runs git in a folder with the arguments and a timeout; a real process by default, a fake in tests.</param>
+    public GitPuller(Func<string, IReadOnlyList<string>, TimeSpan, CancellationToken, Task<ProcessRunResult>>? run = null)
+    {
+        _run = run ?? RunGitAsync;
+    }
 
     /// <param name="checkout">The checkout's folder (a repository line's).</param>
     /// <param name="branch">The default branch, as GitHub names it.</param>

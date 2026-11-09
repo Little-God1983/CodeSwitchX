@@ -187,6 +187,8 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
         }
 
         ActionMessage = null;
+        // An open strip worked out its choices from the branch the pull is about to change (review of #408).
+        MergeStrip = null;
         _ = _checkout.Jobs.PullAsync(_checkout.Path, main, _repo.Repo.Name, _checkout.ChatIsWorking);
     }
 
@@ -260,6 +262,12 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     {
         var jobs = _checkout!.Jobs;
         IsBusy = jobs.IsRunning(_checkout.Path);
+        if (IsBusy)
+        {
+            // A job from another panel of the line: the strip's choices may not hold when it ends.
+            MergeStrip = null;
+        }
+
         if (!IsBusy && jobs.TakeOutcome(_checkout.Path) is { } outcome)
         {
             ShowAction(outcome.Message, failed: !outcome.Succeeded);
@@ -272,7 +280,6 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
             if (outcome.Merged is { } number)
             {
                 PullRequests.Drop(number);
-                CopyAllLinksCommand.NotifyCanExecuteChanged();
             }
         }
     }
