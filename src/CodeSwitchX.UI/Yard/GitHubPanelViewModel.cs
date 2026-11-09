@@ -121,7 +121,6 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
         Issues.IsShown = ReferenceEquals(value, Issues);
     }
 
-
     /// <summary>The repository's name; the tabs carry the counts.</summary>
     public string Heading => _repo.Repo.Name;
 

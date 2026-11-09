@@ -89,7 +89,6 @@ public sealed partial class GitHubListViewModel : ObservableObject
     /// <summary>The tab's arrow: its tooltip and its name for a screen reader.</summary>
     public string OpenAllText => $"Open all {(Kind == GitHubItemKind.PullRequest ? "pull requests" : "issues")} on GitHub";
 
-
     /// <summary>Says the tab is empty once the read has ended with nothing; none while it loads, when it could not load, or when rows were left out.</summary>
     public string? EmptyText => !IsLoading && Rows.Count == 0 && LoadMessage is null && SkippedMessage is null
         ? Kind == GitHubItemKind.PullRequest ? "No open pull requests." : "No open issues."

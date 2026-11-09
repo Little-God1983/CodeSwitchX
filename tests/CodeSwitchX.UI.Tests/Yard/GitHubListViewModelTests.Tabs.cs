@@ -41,26 +41,6 @@ public partial class GitHubListViewModelTests
         changed.ShouldContain(nameof(GitHubListViewModel.TabAutomationName));
     }
 
-    [Fact]
-    public async Task The_issues_tab_stays_where_it_is_when_the_pull_request_count_gains_a_digit()
-    {
-        var (activity, pill) = await PillAsync();
-        var model = Open(activity, pill);
-
-        await StaThread.RunAsync(() =>
-        {
-            var view = PanelView(model);
-            double IssuesTabX() => Descendants<Button>(view).Single(b => AutomationProperties.GetName(b).StartsWith("Issues,", StringComparison.Ordinal))
-                .TranslatePoint(new Point(0, 0), view).X;
-            var before = IssuesTabX();
-
-            model.PullRequests.Count = 12;
-            view.UpdateLayout();
-
-            IssuesTabX().ShouldBe(before);
-        });
-    }
-
     [Theory]
     [InlineData(0, "0")]
     [InlineData(999, "999")]
@@ -78,7 +58,7 @@ public partial class GitHubListViewModelTests
     }
 
     [Fact]
-    public async Task The_issues_tab_stays_where_it_is_when_the_pull_request_count_reaches_four_digits()
+    public async Task The_issues_tab_stays_where_it_is_as_the_pull_request_count_grows_and_the_tab_shows_999_plus()
     {
         var (activity, pill) = await PillAsync();
         var model = Open(activity, pill);
@@ -91,13 +71,17 @@ public partial class GitHubListViewModelTests
                 .TranslatePoint(new Point(0, 0), view).X;
             var before = IssuesTabX();
 
-            foreach (var count in new[] { 99, 999, 1500 })
+            foreach (var count in new[] { 12, 99, 999, 1500 })
             {
                 model.PullRequests.Count = count;
                 view.UpdateLayout();
 
                 IssuesTabX().ShouldBe(before, $"at {count}");
             }
+
+            // what the tab shows, not only where the next one sits: the count is the visible one of the two in the pull requests tab
+            var tab = Descendants<Button>(view).Single(b => AutomationProperties.GetName(b).StartsWith("Pull requests,", StringComparison.Ordinal));
+            Descendants<TextBlock>(tab).Where(t => t.Visibility == Visibility.Visible).Select(t => t.Text).ShouldBe(["Pull requests", "999+"]);
         });
     }
 
@@ -113,13 +97,13 @@ public partial class GitHubListViewModelTests
             Border TabOf(string name) => (Border)Ancestors(Descendants<Button>(view).Single(b => AutomationProperties.GetName(b).StartsWith(name, StringComparison.Ordinal)))
                 .First(e => e is Border { CornerRadius.TopLeft: 6 });
 
-            ((System.Windows.Media.SolidColorBrush)TabOf("Pull requests,").Background).Color.ToString().ShouldBe("#FF2D464B");
+            TabOf("Pull requests,").Background.ShouldBeSameAs(view.FindResource("PullRequestPillBack"));
             ((System.Windows.Media.SolidColorBrush)TabOf("Issues,").Background).Color.A.ShouldBe((byte)0);
 
             model.ShowCommand.Execute(GitHubItemKind.Issue);
             view.UpdateLayout();
 
-            ((System.Windows.Media.SolidColorBrush)TabOf("Issues,").Background).Color.ToString().ShouldBe("#FF3A4250");
+            TabOf("Issues,").Background.ShouldBeSameAs(view.FindResource("IssuePillBack"));
         });
     }
 

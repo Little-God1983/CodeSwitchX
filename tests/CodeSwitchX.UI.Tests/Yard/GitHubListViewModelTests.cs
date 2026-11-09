@@ -1295,6 +1295,7 @@ public partial class GitHubListViewModelTests
         await list.LoadAsync(TestContext.Current.CancellationToken);
 
         list.Count.ShouldBe(1500);
+        list.CountText.ShouldBe("999+");
         list.CutShortMessage.ShouldBe("Showing the newest 1000 of 1500. The rest are on GitHub.");
         list.Rows.Count.ShouldBe(1000);
         activity.ForFolder("app")!.OpenIssues.ShouldBe(1500);
