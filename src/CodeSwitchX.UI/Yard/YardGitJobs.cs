@@ -143,7 +143,7 @@ public sealed class YardGitJobs
 
         return Run(checkout, key, tree, name, $"Merging #{number}…", "A merge", async () =>
         {
-            var merge = await _merger.MergeAsync(repo, account, number, baseBranch, CancellationToken.None, headSha).ConfigureAwait(false);
+            var merge = await _merger.MergeAsync(repo, account, number, baseBranch, headSha, CancellationToken.None).ConfigureAwait(false);
             if (merge.Queued)
             {
                 // Not merged yet: nothing is pulled and the row stays; the pills are read again.

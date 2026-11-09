@@ -33,6 +33,11 @@ public partial class GitHubListViewModelTests
 
     private static GitHubRow Row(GitHubPanelViewModel model) => model.PullRequests.Rows.Single();
 
+    /// <summary>gh's list of one open pull request, #9 from branch b, at head <paramref name="head"/>.</summary>
+    private static string PullRequestNine(string head) =>
+        PullRequestsOf(1).Replace("\"number\":1", "\"number\":9", StringComparison.Ordinal)
+            .Replace("\"headRefName\":\"b1\"", $"\"headRefName\":\"b\",\"headRefOid\":\"{head}\"", StringComparison.Ordinal);
+
     [Fact]
     public async Task Merge_only_opens_the_strip_and_merges_nothing()
     {
@@ -261,17 +266,23 @@ public partial class GitHubListViewModelTests
     }
 
     [Fact]
-    public async Task The_merge_goes_for_the_head_the_list_holds_now_not_the_one_the_strip_opened_on()
+    public async Task A_head_read_after_the_strip_opened_refuses_the_merge_here_and_merges_nothing()
     {
-        var model = await OpenForMerge("b", head: "preview");
+        var model = await OpenForMerge("b", head: "looked-at");
         model.OpenMergeCommand.Execute(Row(model));
-        _gh.PullRequestList.SetResult(PullRequestsOf(1).Replace("\"number\":1", "\"number\":9", StringComparison.Ordinal).Replace("\"headRefName\":\"b1\"", "\"headRefName\":\"b\",\"headRefOid\":\"listed\"", StringComparison.Ordinal));
+        _gh.PullRequestList.SetResult(PullRequestNine("pushed-since"));
         await model.PullRequests.LoadAsync(TestContext.Current.CancellationToken);
 
         model.MergeOnlyCommand.Execute(null);
 
-        await Eventually(() => !model.IsBusy && model.ActionMessage is not null);
-        _merge.Runs.ShouldHaveSingleItem().Arguments.ShouldContain("listed");
+        model.ActionMessage.ShouldBe("Can't merge #9: it changed since you opened Merge. Look at it, then merge again.");
+        model.IsActionFailed.ShouldBeTrue();
+        model.MergeStrip.ShouldBeNull();
+        _merge.Runs.ShouldBeEmpty("a commit nobody looked at is not merged");
+        model.OpenMergeCommand.Execute(Row(model));
+        model.MergeOnlyCommand.Execute(null);
+        await Eventually(() => !model.IsBusy && _merge.Runs.Count == 1);
+        _merge.Runs[0].Arguments.ShouldContain("pushed-since", "a strip opened again goes for the head it shows now");
     }
 
     [Fact]
@@ -295,6 +306,8 @@ public partial class GitHubListViewModelTests
     {
         _merge.Answer = new GhAnswer(null, ErrorOutput: "GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)\n");
         var model = await OpenForMerge("b", head: "old");
+        _ = model.PullRequests.LoadAsync(TestContext.Current.CancellationToken); // the tab in front is read when the panel opens; its answer is held
+        await Eventually(() => _gh.Asked.Count(a => a == "pr") == 1);
         model.OpenMergeCommand.Execute(Row(model));
 
         model.MergeOnlyCommand.Execute(null);
@@ -302,9 +315,9 @@ public partial class GitHubListViewModelTests
         await Eventually(() => !model.IsBusy && model.ActionMessage is not null);
         model.ActionMessage.ShouldBe("Can't merge #9: it changed since the panel read it. Look at it, then merge again.");
         model.IsActionFailed.ShouldBeTrue();
-        await Eventually(() => _gh.Asked.Contains("pr"));
+        await Eventually(() => _gh.Asked.Count(a => a == "pr") == 2);
         model.PullRequests.IsLoading.ShouldBeTrue("the list is read again; the next Merge goes for the new head");
-        _gh.PullRequestList.SetResult(PullRequestsOf(1).Replace("\"number\":1", "\"number\":9", StringComparison.Ordinal).Replace("\"headRefName\":\"b1\"", "\"headRefName\":\"b\",\"headRefOid\":\"new\"", StringComparison.Ordinal));
+        _gh.PullRequestList.SetResult(PullRequestNine("new"));
         await Eventually(() => !model.PullRequests.IsLoading);
         Row(model).Item.HeadSha.ShouldBe("new");
     }
@@ -337,7 +350,7 @@ public partial class GitHubListViewModelTests
         model.MergeStrip.ShouldBeNull("the rows still hold the old head");
         model.ActionMessage.ShouldBe("Reading the pull requests again. Merge when the list is there.");
         // both reads get gh's answer, which carries the new head (the fake answers every list read alike)
-        _gh.PullRequestList.SetResult(PullRequestsOf(1).Replace("\"number\":1", "\"number\":9", StringComparison.Ordinal).Replace("\"headRefName\":\"b1\"", "\"headRefName\":\"b\",\"headRefOid\":\"new\"", StringComparison.Ordinal));
+        _gh.PullRequestList.SetResult(PullRequestNine("new"));
         await Task.WhenAll(first, again);
         await Eventually(() => !model.PullRequests.IsRereading && !model.PullRequests.IsLoading);
         await model.PullRequests.Loaded.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);

@@ -26,7 +26,7 @@ public sealed class GitHubMerger
 
     /// <param name="baseBranch">The branch it merges into, for the conflict's reason.</param>
     /// <param name="headSha">The head commit the panel read (#414): GitHub merges only that, and refuses once the branch has moved. Null merges whatever is there.</param>
-    public async Task<MergeOutcome> MergeAsync(GitHubRepo repo, string account, int number, string baseBranch, CancellationToken ct, string? headSha = null)
+    public async Task<MergeOutcome> MergeAsync(GitHubRepo repo, string account, int number, string baseBranch, string? headSha, CancellationToken ct)
     {
         IReadOnlyList<string> arguments = ["pr", "merge", number.ToString(CultureInfo.InvariantCulture), "-R", repo.Slug, "--merge"];
         if (headSha is { Length: > 0 })
