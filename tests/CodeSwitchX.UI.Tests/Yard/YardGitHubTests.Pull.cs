@@ -29,7 +29,9 @@ public partial class YardGitHubTests
         panel.PullText.ShouldBe("Pull main", "the line is on main, GitHub's default branch");
         panel.PullCommand.Execute(null);
         await Eventually(() => panel.ActionMessage == "app is on main, 3 new commits.");
-        _pullGit.Ran.ShouldContain(r => r.Contains("fetch", StringComparison.Ordinal));
+        // the ssh probe, then the fetch (in batch mode: nothing configures ssh here), before anything else
+        _pullGit.Ran[0].ShouldBe("config --get core.sshCommand");
+        _pullGit.Ran[1].ShouldStartWith("-c core.sshCommand=ssh -o BatchMode=yes fetch");
     }
 
     [Fact]
@@ -187,11 +189,21 @@ public partial class YardGitHubTests
 
     [Theory]
     [InlineData(@"C:\r\.git", @"C:\r", @"c:\R\.git", @"C:\r\src", true)]
-    [InlineData(@"C:\r\.git", @"C:\r", @"C:\s\.git", @"C:\r", false)]
+    [InlineData(@"C:\r\.git", @"C:\r", @"C:\s\.git", @"C:\s", false)]
+    [InlineData(@"C:\r\.git", @"C:\r", @"C:\x\.git", @"C:\r", true)]
     [InlineData(null, @"C:\r", null, @"c:\R\", true)]
     [InlineData(null, @"C:\r", @"C:\r\.git", @"C:\r\src", false)]
-    public void Same_checkout_is_the_same_git_directory_else_the_same_folder(string? gitDirA, string pathA, string? gitDirB, string pathB, bool same) =>
+    [InlineData(@"C:\r\.git\worktrees\wt", @"C:\wt", @"C:\r\.git", @"C:\r", true)]
+    public void Same_checkout_is_the_same_folder_or_the_same_repository_git_directory(string? gitDirA, string pathA, string? gitDirB, string pathB, bool same) =>
         YardViewModel.SameCheckout(new GitLine(null, "main", 0, pathA, GitDir: gitDirA), new GitLine(null, "main", 0, pathB, GitDir: gitDirB)).ShouldBe(same);
+
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData(@"C:\r\.git", @"C:\r\.git")]
+    [InlineData(@"C:\r\.git\worktrees\wt", @"C:\r\.git")]
+    [InlineData(@"C:\r\.git\modules\sub", @"C:\r\.git\modules\sub")]
+    public void A_linked_worktree_shares_its_repository_s_git_directory(string? gitDir, string? common) =>
+        YardGitJobs.CommonGitDir(gitDir).ShouldBe(common);
 
     private sealed class FakeSource : IBrowserSource
     {

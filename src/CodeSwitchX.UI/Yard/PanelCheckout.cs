@@ -10,6 +10,9 @@ namespace CodeSwitchX.UI.Yard;
 /// <param name="GitDir">The checkout's git directory; null when git could not tell, and the folder stands in for it.</param>
 public sealed record PanelCheckout(string Path, string? Branch, Func<bool> ChatIsWorking, YardGitJobs Jobs, string? GitDir = null)
 {
-    /// <summary>What the Yard's jobs know the checkout by (#412): its git directory, so two lines of one checkout share one job.</summary>
-    public string Key { get; } = YardGitJobs.Key(GitDir ?? Path);
+    /// <summary>
+    /// What the Yard's jobs know the checkout by (#412): its repository's git directory, so two lines of one checkout share one job, and so
+    /// do a linked worktree and the main one, whose refs a pull writes alike. Worked out on each read: a copy made with <c>with</c> keeps no stale one.
+    /// </summary>
+    public string Key => YardGitJobs.Key(YardGitJobs.CommonGitDir(GitDir) ?? Path);
 }

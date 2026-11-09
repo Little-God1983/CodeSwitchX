@@ -922,10 +922,13 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private bool ChatIsWorkingIn(GitLine line, GitHubRepo repo) =>
         Tiles.Any(t => (t.IsWorking || t.NeedsAttention) && t.GitLines.Any(l => SameCheckout(l, line) || l.GitHub?.Repo == repo));
 
-    /// <summary>Two lines are the same checkout: the same git directory when both know it, else the same folder (#412).</summary>
+    /// <summary>
+    /// Two lines are the same checkout (#412): the same folder, or the same repository's git directory when both know it (a workspace on a
+    /// subfolder, a linked worktree). The same folder counts whatever git says of it now: a folder cloned again is still where the chat works.
+    /// </summary>
     internal static bool SameCheckout(GitLine a, GitLine b) =>
-        a.GitDir is { } x && b.GitDir is { } y ? YardGitJobs.Key(x) == YardGitJobs.Key(y)
-        : a.Path is { } p && b.Path is { } q && YardGitJobs.Key(p) == YardGitJobs.Key(q);
+        (a.Path is { } p && b.Path is { } q && YardGitJobs.Key(p) == YardGitJobs.Key(q))
+        || (YardGitJobs.CommonGitDir(a.GitDir) is { } x && YardGitJobs.CommonGitDir(b.GitDir) is { } y && YardGitJobs.Key(x) == YardGitJobs.Key(y));
 
     /// <summary>
     /// A line for the root folder, and one more for each other repository the tile's workspace file lists a folder of

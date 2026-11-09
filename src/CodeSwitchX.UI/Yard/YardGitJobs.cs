@@ -3,6 +3,7 @@ using CodeSwitchX.Core.Paths;
 using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.UI.Infrastructure;
 using Microsoft.Extensions.Logging;
+using Path = System.IO.Path;
 
 namespace CodeSwitchX.UI.Yard;
 
@@ -63,6 +64,24 @@ public sealed class YardGitJobs
     /// where git could not tell. The same path written either way is the same key. The methods below take a key or a folder.
     /// </summary>
     public static string Key(string gitDirOrFolder) => PathNormalizer.Normalize(gitDirOrFolder);
+
+    /// <summary>
+    /// The git directory a linked worktree shares with its main checkout (<c>repo\.git</c> for <c>repo\.git\worktrees\name</c>): the refs a
+    /// pull fetches and moves live there (review of #412). Any other git directory is its own; null stays null.
+    /// </summary>
+    public static string? CommonGitDir(string? gitDir)
+    {
+        if (gitDir is null)
+        {
+            return null;
+        }
+
+        var trimmed = Path.TrimEndingDirectorySeparator(gitDir);
+        var parent = Path.GetDirectoryName(trimmed);
+        return parent is not null && string.Equals(Path.GetFileName(parent), "worktrees", StringComparison.OrdinalIgnoreCase) && Path.GetDirectoryName(parent) is { } common
+            ? common
+            : trimmed;
+    }
 
     public bool IsRunning(string checkout) => _running.ContainsKey(Key(checkout));
 
