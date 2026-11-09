@@ -147,7 +147,7 @@ public sealed class YardGitJobs
             if (merge.Queued)
             {
                 // Not merged yet: nothing is pulled and the row stays; the pills are read again.
-                return new GitJobOutcome(checkout, name, true, $"#{number} will be added to the merge queue. Pull when GitHub has merged it.", ChangedGitHub: true);
+                return new GitJobOutcome(checkout, name, true, $"#{number} {merge.Text} Pull when GitHub has merged it.", ChangedGitHub: true);
             }
 
             if (!merge.Merged)

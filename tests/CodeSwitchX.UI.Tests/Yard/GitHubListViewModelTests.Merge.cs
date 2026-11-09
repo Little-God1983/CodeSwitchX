@@ -261,6 +261,20 @@ public partial class GitHubListViewModelTests
     }
 
     [Fact]
+    public async Task The_merge_goes_for_the_head_the_list_holds_now_not_the_one_the_strip_opened_on()
+    {
+        var model = await OpenForMerge("b", head: "preview");
+        model.OpenMergeCommand.Execute(Row(model));
+        _gh.PullRequestList.SetResult(PullRequestsOf(1).Replace("\"number\":1", "\"number\":9", StringComparison.Ordinal).Replace("\"headRefName\":\"b1\"", "\"headRefName\":\"b\",\"headRefOid\":\"listed\"", StringComparison.Ordinal));
+        await model.PullRequests.LoadAsync(TestContext.Current.CancellationToken);
+
+        model.MergeOnlyCommand.Execute(null);
+
+        await Eventually(() => !model.IsBusy && model.ActionMessage is not null);
+        _merge.Runs.ShouldHaveSingleItem().Arguments.ShouldContain("listed");
+    }
+
+    [Fact]
     public async Task A_merge_GitHub_only_queued_keeps_the_row_and_pulls_nothing()
     {
         _merge.Answer = new GhAnswer(string.Empty, ErrorOutput: "! The merge strategy for main is set by the merge queue\n");
@@ -316,11 +330,12 @@ public partial class GitHubListViewModelTests
         var first = model.PullRequests.LoadAsync(TestContext.Current.CancellationToken); // a slow first read, still on its way
         await Eventually(() => _gh.Asked.Count(a => a == "pr") == 1);
 
-        var again = model.PullRequests.RereadAsync();
+        var again = model.PullRequests.RereadAsync(TestContext.Current.CancellationToken);
 
         model.PullRequests.IsRereading.ShouldBeTrue();
         model.OpenMergeCommand.Execute(Row(model));
         model.MergeStrip.ShouldBeNull("the rows still hold the old head");
+        model.ActionMessage.ShouldBe("Reading the pull requests again. Merge when the list is there.");
         // both reads get gh's answer, which carries the new head (the fake answers every list read alike)
         _gh.PullRequestList.SetResult(PullRequestsOf(1).Replace("\"number\":1", "\"number\":9", StringComparison.Ordinal).Replace("\"headRefName\":\"b1\"", "\"headRefName\":\"b\",\"headRefOid\":\"new\"", StringComparison.Ordinal));
         await Task.WhenAll(first, again);
@@ -337,7 +352,7 @@ public partial class GitHubListViewModelTests
     {
         var model = await OpenForMerge("b");
 
-        var again = model.PullRequests.RereadAsync();
+        var again = model.PullRequests.RereadAsync(TestContext.Current.CancellationToken);
         _gh.PullRequestList.SetResult(PullRequestsOf(1));
         await again;
 

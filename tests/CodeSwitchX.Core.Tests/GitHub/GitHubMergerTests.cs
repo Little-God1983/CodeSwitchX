@@ -53,6 +53,17 @@ public class GitHubMergerTests
         outcome.ShouldBe(new MergeOutcome(false, "it changed since the panel read it. Look at it, then merge again.", Moved: true));
     }
 
+    [Fact]
+    public async Task A_base_branch_that_moved_is_no_moved_head()
+    {
+        var gh = new FakeGh(new GhAnswer(null, ErrorOutput: "GraphQL: Base branch was modified. Review and try the merge again. (mergePullRequest)\n"));
+
+        var outcome = await new GitHubMerger(gh).MergeAsync(Repo, "reader", 405, "main", CancellationToken.None, "abc123");
+
+        outcome.Moved.ShouldBeFalse();
+        outcome.Text.ShouldBe("GraphQL: Base branch was modified. Review and try the merge again. (mergePullRequest)");
+    }
+
     [Theory]
     // what gh prints without a terminal: its strategy warning when it queues, and its warning for one queued before
     [InlineData("! The merge strategy for main is set by the merge queue\n")]
@@ -63,7 +74,9 @@ public class GitHubMergerTests
 
         var outcome = await new GitHubMerger(gh).MergeAsync(Repo, "reader", 405, "main", CancellationToken.None);
 
-        outcome.ShouldBe(new MergeOutcome(false, "it will be added to the merge queue.", Queued: true));
+        outcome.Queued.ShouldBeTrue();
+        outcome.Merged.ShouldBeFalse();
+        outcome.Text.ShouldBe(printed.Contains("already", StringComparison.Ordinal) ? "is already in the merge queue." : "will be added to the merge queue.");
     }
 
     [Fact]

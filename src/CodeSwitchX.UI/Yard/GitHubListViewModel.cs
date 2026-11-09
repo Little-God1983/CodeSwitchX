@@ -124,32 +124,33 @@ public sealed partial class GitHubListViewModel : ObservableObject
     /// Reads the full list, once: a later call waits for the first read. <see cref="Stop"/> cancels the read: nothing it would have
     /// found reaches the panel or the tile.
     /// </summary>
-    public Task LoadAsync(CancellationToken ct) => Interlocked.Exchange(ref _started, 1) == 1 ? Loaded : LoadOnceAsync(ct);
+    public Task LoadAsync(CancellationToken ct) =>
+        Interlocked.Exchange(ref _started, 1) == 1 ? Loaded : ReadNewestAsync(Interlocked.Increment(ref _generation), ct);
 
     /// <summary>
     /// Reads the full list again (#414): a pull request moved since it was read, and the next Merge must go for its new head. On the UI thread;
     /// the read runs off it, and the panel's close stops it.
     /// </summary>
-    public Task RereadAsync()
+    public Task RereadAsync(CancellationToken ct)
     {
         Interlocked.Exchange(ref _started, 1);
+        // Taken here, on the UI thread, before any older read's answer can be shown: that one is older from now on (review of #414).
+        var mine = Interlocked.Increment(ref _generation);
         IsLoading = true;
         IsRereading = true;
-        return Task.Run(() => ReadNewestAsync(CancellationToken.None));
+        return Task.Run(() => ReadNewestAsync(mine, ct));
     }
 
     /// <summary>A read <see cref="RereadAsync"/> started has not ended: the rows still hold the heads read before, so Merge waits (review of #414).</summary>
     [ObservableProperty] private bool _isRereading;
 
-    private Task LoadOnceAsync(CancellationToken ct) => ReadNewestAsync(ct);
-
     /// <summary>
     /// The one read path: a first load and a read again both come here. A read started later wins: an older one that ends after it shows
     /// nothing and leaves the loading line alone. <see cref="Loaded"/> completes when the first read ends, however it ended.
     /// </summary>
-    private async Task ReadNewestAsync(CancellationToken ct)
+    /// <param name="mine">This read's number, taken where it was asked for.</param>
+    private async Task ReadNewestAsync(int mine, CancellationToken ct)
     {
-        var mine = Interlocked.Increment(ref _generation);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _stop.Token);
         try
         {

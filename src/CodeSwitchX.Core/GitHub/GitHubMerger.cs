@@ -7,7 +7,7 @@ namespace CodeSwitchX.Core.GitHub;
 /// <param name="Text">Why it was not merged, in short ("it has conflicts with main."); empty when it was.</param>
 /// <param name="AlreadyMerged">GitHub says it was merged before: merged all the same, so the row leaves and a pull may follow (review of #408).</param>
 /// <param name="Unknown">gh ran out of time: it may have merged or not.</param>
-/// <param name="Queued">GitHub put it in the merge queue (#414): not merged yet, so nothing is pulled and the row stays.</param>
+/// <param name="Queued">GitHub put it in the merge queue, or had it there already (#414): not merged yet, so nothing is pulled and the row stays. <paramref name="Text"/> says which.</param>
 /// <param name="Moved">The branch moved since the row was read (#414): GitHub refused, and the list is read again before another try.</param>
 public sealed record MergeOutcome(bool Merged, string Text = "", bool AlreadyMerged = false, bool Unknown = false, bool Queued = false, bool Moved = false);
 
@@ -41,8 +41,13 @@ public sealed class GitHubMerger
             // gh exits 0 when it only queued it. Without a terminal it prints no "will be added to the merge queue"; what reaches here is its
             // warning "The merge strategy for main is set by the merge queue", or "is already queued to merge" (#414, review).
             var said = $"{answer.Output}\n{answer.ErrorOutput}";
-            return said.Contains("merge queue", StringComparison.OrdinalIgnoreCase) || said.Contains("queued to merge", StringComparison.OrdinalIgnoreCase)
-                ? new MergeOutcome(false, "it will be added to the merge queue.", Queued: true)
+            if (said.Contains("queued to merge", StringComparison.OrdinalIgnoreCase))
+            {
+                return new MergeOutcome(false, "is already in the merge queue.", Queued: true);
+            }
+
+            return said.Contains("merge queue", StringComparison.OrdinalIgnoreCase)
+                ? new MergeOutcome(false, "will be added to the merge queue.", Queued: true)
                 : new MergeOutcome(true);
         }
 
@@ -57,8 +62,9 @@ public sealed class GitHubMerger
             return new MergeOutcome(true, AlreadyMerged: true);
         }
 
-        // GitHub's answer to --match-head-commit when the branch moved: "Head branch was modified. Review and try the merge again."
-        if (printed.Contains("branch was modified", StringComparison.OrdinalIgnoreCase))
+        // GitHub's answer to --match-head-commit when the branch moved: "Head branch was modified. Review and try the merge again." Not its
+        // "Base branch was modified", which says nothing of the head (review of #414).
+        if (headSha is { Length: > 0 } && printed.Contains("Head branch was modified", StringComparison.OrdinalIgnoreCase))
         {
             return new MergeOutcome(false, "it changed since the panel read it. Look at it, then merge again.", Moved: true);
         }
