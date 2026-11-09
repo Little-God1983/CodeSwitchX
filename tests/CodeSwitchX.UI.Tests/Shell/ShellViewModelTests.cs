@@ -51,15 +51,15 @@ public class ShellViewModelTests
         var (h, pill) = HarnessWithGitHub();
 
         h.Shell.Yard.OpenGitHubListCommand.Execute(pill);
-        h.Shell.Yard.GitHubList.ShouldNotBeNull();
+        h.Shell.Yard.GitHubPanel.ShouldNotBeNull();
         h.Shell.OpenSettings();
-        h.Shell.Yard.GitHubList.ShouldBeNull();
+        h.Shell.Yard.GitHubPanel.ShouldBeNull();
 
         h.Shell.CloseSettings();
         h.Shell.Yard.OpenGitHubListCommand.Execute(pill);
-        h.Shell.Yard.GitHubList.ShouldNotBeNull();
+        h.Shell.Yard.GitHubPanel.ShouldNotBeNull();
         h.Shell.OpenSettingsAt(SettingsPage.GitHub);
-        h.Shell.Yard.GitHubList.ShouldBeNull();
+        h.Shell.Yard.GitHubPanel.ShouldBeNull();
     }
 
     [Fact]
@@ -68,14 +68,14 @@ public class ShellViewModelTests
         var (h, pill) = HarnessWithGitHub();
         await h.Shell.InitializeAsync(CancellationToken.None);
         h.Shell.Yard.OpenGitHubListCommand.Execute(pill);
-        h.Shell.Yard.GitHubList.ShouldNotBeNull();
+        h.Shell.Yard.GitHubPanel.ShouldNotBeNull();
         h.VsCodeWindowAppears();
         h.Shell.Cab.LastHostRect = ScreenRect.FromSize(0, 28, 1600, 900);
 
         await h.Shell.EnterCabAsync(h.App.Id);
 
         h.Shell.Mode.ShouldBe(ShellMode.Cab);
-        h.Shell.Yard.GitHubList.ShouldBeNull();
+        h.Shell.Yard.GitHubPanel.ShouldBeNull();
     }
 
     [Fact]

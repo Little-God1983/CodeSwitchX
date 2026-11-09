@@ -786,7 +786,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
     }
 
-    /// <summary>The line with the pills of the issues and pull requests last read for its repository; a count of zero has none.</summary>
+    /// <summary>The line with the pills of the issues and pull requests last read for its repository (a count of zero has none), and what was read, which opens the panel (#406).</summary>
     private GitLine WithGitHub(GitLine line)
     {
         var activity = HasRepository(line) && line.Path is { } path ? _gitHub?.ForFolder(path) : null;
@@ -794,6 +794,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         {
             Issues = activity is { OpenIssues: > 0 } ? new GitHubPill(activity, GitHubItemKind.Issue) : null,
             PullRequests = activity is { OpenPullRequests: > 0 } ? new GitHubPill(activity, GitHubItemKind.PullRequest) : null,
+            GitHub = activity,
         };
     }
 
@@ -1098,24 +1099,40 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// </summary>
     public static string? DroppedWorkspacePath(IReadOnlyList<string>? paths) => paths is [var path] && WorkspaceProbe.LooksProbeable(path) ? path : null;
 
-    /// <summary>The panel a click on a pill opens with every open item of its kind; null when closed. Another pill replaces it.</summary>
-    [ObservableProperty] private GitHubListViewModel? _gitHubList;
+    /// <summary>The panel a repository line or a pill opens with the repository's open pull requests and issues; null when closed. Another opening replaces it.</summary>
+    [ObservableProperty] private GitHubPanelViewModel? _gitHubPanel;
 
-    /// <summary>A click on a pill opens the repository's full list over the Yard. Without the readers (tests, no gh) it does nothing.</summary>
+    /// <summary>A click on a pill opens the repository's panel over the Yard, on that pill's tab. Without the readers (tests, no gh) it does nothing.</summary>
     [RelayCommand]
-    private void OpenGitHubList(GitHubPill pill)
+    private void OpenGitHubList(GitHubPill pill) => OpenPanel(pill.Activity, pill.Kind);
+
+    /// <summary>
+    /// A click on a tile's repository line opens its panel (#406), on pull requests when any are open; a line with nothing open opens
+    /// it too. Always enabled: the line's pills sit inside its button, and a button turned off would turn them off with it. The line
+    /// is a button only when it is on GitHub, and without the readers there is nothing on GitHub.
+    /// </summary>
+    [RelayCommand]
+    private void OpenGitHubLine(GitLine? line)
+    {
+        if (line?.GitHub is { } activity)
+        {
+            OpenPanel(activity, GitHubPanelViewModel.DefaultKind(activity));
+        }
+    }
+
+    private void OpenPanel(RepoActivity activity, GitHubItemKind kind)
     {
         if (_gitHub is null || _gitHubReader is null || _gitHubBrowsers is null)
         {
             return;
         }
 
-        GitHubList?.CloseCommand.Execute(null);
-        var list = new GitHubListViewModel(pill, _gitHubReader, _gitHub, _gitHubBrowsers, _clipboard, _ui, _time, _logger,
-            closed => { if (ReferenceEquals(GitHubList, closed)) { GitHubList = null; } });
-        GitHubList = list;
+        GitHubPanel?.CloseCommand.Execute(null);
+        var panel = new GitHubPanelViewModel(activity, kind, _gitHubReader, _gitHub, _gitHubBrowsers, _clipboard, _ui, _time, _logger,
+            closed => { if (ReferenceEquals(GitHubPanel, closed)) { GitHubPanel = null; } });
+        GitHubPanel = panel;
         // Not on the UI thread: the load starts its first gh before its first await.
-        _ = Task.Run(() => list.LoadAsync(_gitHubStop.Token));
+        _ = Task.Run(() => panel.LoadAsync(_gitHubStop.Token));
     }
 
     /// <summary>A refresh the button asked for is running.</summary>
@@ -1387,6 +1404,6 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
         _subscriptions.Clear();
         // Last: it runs the UI's close logic, and a subscriber that throws there must not skip the cleanup above.
-        GitHubList?.CloseCommand.Execute(null);
+        GitHubPanel?.CloseCommand.Execute(null);
     }
 }

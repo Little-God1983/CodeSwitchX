@@ -20,7 +20,7 @@ public partial class YardView : UserControl
 
     private void OnGitHubShadeClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
-        (DataContext as YardViewModel)?.GitHubList?.CloseCommand.Execute(null);
+        (DataContext as YardViewModel)?.GitHubPanel?.CloseCommand.Execute(null);
         e.Handled = true;
     }
 

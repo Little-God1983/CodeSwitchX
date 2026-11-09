@@ -3,10 +3,11 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:yard="clr-namespace:CodeSwitchX.UI.Yard"
              xmlns:infra="clr-namespace:CodeSwitchX.UI.Infrastructure"
+             xmlns:github="clr-namespace:CodeSwitchX.Core.GitHub;assembly=CodeSwitchX.Core"
              AllowDrop="True" Background="Transparent" DragEnter="OnDragOver" DragOver="OnDragOver" DragLeave="OnDragLeave" Drop="OnDrop">
   <UserControl.InputBindings>
-    <!-- Closes the list a pill opened, wherever in the Yard the keyboard is. With no list the command is null, so the binding does not match and the key goes on. -->
-    <KeyBinding Key="Escape" Command="{Binding GitHubList.CloseCommand}" />
+    <!-- Closes the GitHub panel, wherever in the Yard the keyboard is. With no panel the command is null, so the binding does not match and the key goes on. -->
+    <KeyBinding Key="Escape" Command="{Binding GitHubPanel.CloseCommand}" />
   </UserControl.InputBindings>
   <UserControl.Resources>
     <DataTemplate x:Key="ChatRowTemplate" DataType="{x:Type yard:ChatRowViewModel}">
@@ -387,13 +388,13 @@
         </ItemsControl>
       </ScrollViewer>
     </DockPanel>
-    <!-- The list a pill opens (#335): a shade that closes it on a click, and the panel at the right edge. -->
-    <Rectangle Fill="#88000000" Visibility="{Binding GitHubList, Converter={StaticResource NullToCollapsed}}" MouseLeftButtonDown="OnGitHubShadeClick" />
+    <!-- The panel a repository line or a pill opens (#335, #406): a shade that closes it on a click, and the panel at the right edge. -->
+    <Rectangle Fill="#88000000" Visibility="{Binding GitHubPanel, Converter={StaticResource NullToCollapsed}}" MouseLeftButtonDown="OnGitHubShadeClick" />
     <Border x:Name="GitHubPanel" HorizontalAlignment="Right" Width="560" MaxWidth="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=UserControl}}"
             Background="#262626" BorderThickness="1,0,0,0" BorderBrush="#40FFFFFF" Focusable="False" FocusVisualStyle="{x:Null}" KeyboardNavigation.TabNavigation="Cycle"
             KeyboardNavigation.ControlTabNavigation="Cycle" KeyboardNavigation.DirectionalNavigation="Cycle"
-            Visibility="{Binding GitHubList, Converter={StaticResource NullToCollapsed}}">
-      <DockPanel DataContext="{Binding GitHubList}">
+            Visibility="{Binding GitHubPanel, Converter={StaticResource NullToCollapsed}}">
+      <DockPanel DataContext="{Binding GitHubPanel}">
         <DockPanel.Resources>
           <!-- why the list could not be read, why a row could not be opened: each shows only while it has something to say -->
           <Style x:Key="GitHubFailureLine" TargetType="TextBlock">
@@ -411,9 +412,67 @@
           <Style x:Key="GitHubDimLine" TargetType="TextBlock" BasedOn="{StaticResource GitHubFailureLine}">
             <Setter Property="Foreground" Value="#B0B0B0" />
           </Style>
+          <!-- A tab's rows. A large repository has up to a thousand rows: only the ones in view are built (#363). Each tab has a list of its
+               own, so it keeps its scroll position and a tab shown starts at its top (review of #406). -->
+          <Style x:Key="GitHubRows" TargetType="ItemsControl">
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="ScrollViewer.CanContentScroll" Value="True" />
+            <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True" />
+            <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling" />
+            <Setter Property="VirtualizingPanel.ScrollUnit" Value="Pixel" />
+            <Setter Property="Template">
+              <Setter.Value>
+                <ControlTemplate TargetType="ItemsControl">
+                  <ScrollViewer VerticalScrollBarVisibility="Auto" Focusable="False" CanContentScroll="{TemplateBinding ScrollViewer.CanContentScroll}">
+                    <ItemsPresenter Margin="8,0,8,8" />
+                  </ScrollViewer>
+                </ControlTemplate>
+              </Setter.Value>
+            </Setter>
+            <Setter Property="ItemsPanel">
+              <Setter.Value>
+                <ItemsPanelTemplate>
+                  <VirtualizingStackPanel />
+                </ItemsPanelTemplate>
+              </Setter.Value>
+            </Setter>
+            <Setter Property="ItemTemplate">
+              <Setter.Value>
+                <DataTemplate>
+                  <DockPanel>
+                    <!-- Beside the row's button, not in it, so a click copies and opens nothing. Not focusable: a row stays one Tab stop,
+                         and the keyboard stays where it was. -->
+                    <Button DockPanel.Dock="Right" Command="{Binding DataContext.CopyRowLinkCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"
+                            Content="&#xE8C8;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Focusable="False" Cursor="Hand" Background="Transparent" BorderThickness="0" Padding="6,2" Margin="2,4,0,0"
+                            VerticalAlignment="Top" ToolTip="Copy link" AutomationProperties.Name="{Binding NumberText, StringFormat='Copy the link to {0}'}" />
+                    <Button Command="{Binding DataContext.OpenRowCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"
+                            HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Cursor="Hand" Background="Transparent" BorderThickness="0" Padding="8,2"
+                            ContentTemplate="{StaticResource GitHubRowTemplate}" Content="{Binding}" AutomationProperties.Name="{Binding NumberText, StringFormat='Open {0}'}" />
+                  </DockPanel>
+                </DataTemplate>
+              </Setter.Value>
+            </Setter>
+          </Style>
+          <!-- a tab's name and its arrow: plain text on the tab, each a Tab stop of its own -->
+          <Style x:Key="GitHubTabButton" TargetType="Button">
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Padding" Value="8,4" />
+            <Setter Property="Foreground" Value="#B0B0B0" />
+            <!-- the theme's focus ring: a style of its own drops it, and the classic dotted one is black on the dark panel -->
+            <Setter Property="FocusVisualStyle" Value="{DynamicResource DefaultControlFocusVisualStyle}" />
+            <Setter Property="Template">
+              <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                  <Border Background="Transparent" Padding="{TemplateBinding Padding}">
+                    <ContentPresenter TextElement.Foreground="{TemplateBinding Foreground}" />
+                  </Border>
+                </ControlTemplate>
+              </Setter.Value>
+            </Setter>
+          </Style>
         </DockPanel.Resources>
         <DockPanel DockPanel.Dock="Top" Margin="16,12,8,8">
-          <Button DockPanel.Dock="Right" Content="&#x2715;" Command="{Binding CloseCommand}" VerticalAlignment="Top" AutomationProperties.Name="Close the list" />
+          <Button DockPanel.Dock="Right" Content="&#x2715;" Command="{Binding CloseCommand}" VerticalAlignment="Top" AutomationProperties.Name="Close the panel" />
           <StackPanel>
             <!-- The heading opens the repository's main page (#382): a link, so it keeps the look of a heading and is underlined under the pointer. -->
             <Button Command="{Binding OpenRepositoryCommand}" HorizontalAlignment="Left" Cursor="Hand" ToolTip="{Binding OpenRepositoryText}"
@@ -438,6 +497,65 @@
             <TextBlock Text="{Binding AccountLine}" Opacity="0.7" Margin="0,2,0,0" TextWrapping="Wrap" />
           </StackPanel>
         </DockPanel>
+        <!-- The tabs (#406): a tab's name shows its list, its arrow opens all of that kind on GitHub. The tab in front has its pill's colours. -->
+        <Border DockPanel.Dock="Top" Margin="16,0,16,8" BorderThickness="0,0,0,1" BorderBrush="#40FFFFFF">
+          <StackPanel Orientation="Horizontal">
+            <Border CornerRadius="6,6,0,0" Margin="0,0,4,0">
+              <Border.Style>
+                <Style TargetType="Border">
+                  <Setter Property="Background" Value="Transparent" />
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding IsPullRequestsShown}" Value="True">
+                      <Setter Property="Background" Value="#2D464B" />
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </Border.Style>
+              <Border.Resources>
+                <Style TargetType="Button" BasedOn="{StaticResource GitHubTabButton}">
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding IsPullRequestsShown}" Value="True">
+                      <Setter Property="Foreground" Value="#A6E3E9" />
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </Border.Resources>
+              <StackPanel Orientation="Horizontal">
+                <Button Content="{Binding PullRequests.TabText}" Command="{Binding ShowCommand}" CommandParameter="{x:Static github:GitHubItemKind.PullRequest}"
+                        AutomationProperties.Name="Show pull requests" />
+                <Button Content="&#x2197;" Command="{Binding OpenOnGitHubCommand}" CommandParameter="{x:Static github:GitHubItemKind.PullRequest}" Padding="2,4,8,4"
+                        ToolTip="Open all pull requests on GitHub" AutomationProperties.Name="Open all pull requests on GitHub" />
+              </StackPanel>
+            </Border>
+            <Border CornerRadius="6,6,0,0" Margin="0,0,4,0">
+              <Border.Style>
+                <Style TargetType="Border">
+                  <Setter Property="Background" Value="Transparent" />
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding IsPullRequestsShown}" Value="False">
+                      <Setter Property="Background" Value="#3A4250" />
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </Border.Style>
+              <Border.Resources>
+                <Style TargetType="Button" BasedOn="{StaticResource GitHubTabButton}">
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding IsPullRequestsShown}" Value="False">
+                      <Setter Property="Foreground" Value="#B9CDF0" />
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </Border.Resources>
+              <StackPanel Orientation="Horizontal">
+                <Button Content="{Binding Issues.TabText}" Command="{Binding ShowCommand}" CommandParameter="{x:Static github:GitHubItemKind.Issue}"
+                        AutomationProperties.Name="Show issues" />
+                <Button Content="&#x2197;" Command="{Binding OpenOnGitHubCommand}" CommandParameter="{x:Static github:GitHubItemKind.Issue}" Padding="2,4,8,4"
+                        ToolTip="Open all issues on GitHub" AutomationProperties.Name="Open all issues on GitHub" />
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </Border>
         <!-- Always there, so a copy line does not move the rows under the pointer. -->
         <DockPanel DockPanel.Dock="Top" Margin="16,0,16,8">
           <Button DockPanel.Dock="Left" Content="Copy all links" Command="{Binding CopyAllLinksCommand}" Padding="8,2" VerticalAlignment="Top"
@@ -446,40 +564,37 @@
           <TextBlock Text="{Binding CopyMessage}" ToolTip="{Binding CopyMessage}" Margin="8,0,0,0" Opacity="0.7" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
         </DockPanel>
         <TextBlock Style="{StaticResource GitHubFailureLine}" Text="{Binding OpenMessage}" />
-        <TextBlock Style="{StaticResource GitHubFailureLine}" Text="{Binding LoadMessage}" />
-        <TextBlock Style="{StaticResource GitHubFailureLine}" Text="{Binding CutShortMessage}" />
-        <TextBlock Style="{StaticResource GitHubFailureLine}" Text="{Binding SkippedMessage}" />
-        <TextBlock Style="{StaticResource GitHubDimLine}" Text="{Binding LoadingMessage}" />
-        <!-- A large repository has up to a thousand rows: only the ones in view are built (#363). -->
-        <ItemsControl ItemsSource="{Binding Rows}" Focusable="False" ScrollViewer.CanContentScroll="True" VirtualizingPanel.IsVirtualizing="True"
-                      VirtualizingPanel.VirtualizationMode="Recycling" VirtualizingPanel.ScrollUnit="Pixel">
-          <ItemsControl.Template>
-            <ControlTemplate TargetType="ItemsControl">
-              <ScrollViewer VerticalScrollBarVisibility="Auto" Focusable="False" CanContentScroll="{TemplateBinding ScrollViewer.CanContentScroll}">
-                <ItemsPresenter Margin="8,0,8,8" />
-              </ScrollViewer>
-            </ControlTemplate>
-          </ItemsControl.Template>
-          <ItemsControl.ItemsPanel>
-            <ItemsPanelTemplate>
-              <VirtualizingStackPanel />
-            </ItemsPanelTemplate>
-          </ItemsControl.ItemsPanel>
-          <ItemsControl.ItemTemplate>
-            <DataTemplate>
-              <DockPanel>
-                <!-- Beside the row's button, not in it, so a click copies and opens nothing. Not focusable: a row stays one Tab stop,
-                     and the keyboard stays where it was. -->
-                <Button DockPanel.Dock="Right" Command="{Binding DataContext.CopyRowLinkCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"
-                        Content="&#xE8C8;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Focusable="False" Cursor="Hand" Background="Transparent" BorderThickness="0" Padding="6,2" Margin="2,4,0,0"
-                        VerticalAlignment="Top" ToolTip="Copy link" AutomationProperties.Name="{Binding NumberText, StringFormat='Copy the link to {0}'}" />
-                <Button Command="{Binding DataContext.OpenRowCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"
-                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Cursor="Hand" Background="Transparent" BorderThickness="0" Padding="8,2"
-                        ContentTemplate="{StaticResource GitHubRowTemplate}" Content="{Binding}" AutomationProperties.Name="{Binding NumberText, StringFormat='Open {0}'}" />
-              </DockPanel>
-            </DataTemplate>
-          </ItemsControl.ItemTemplate>
-        </ItemsControl>
+        <TextBlock Style="{StaticResource GitHubFailureLine}" Text="{Binding Shown.LoadMessage}" />
+        <TextBlock Style="{StaticResource GitHubFailureLine}" Text="{Binding Shown.CutShortMessage}" />
+        <TextBlock Style="{StaticResource GitHubFailureLine}" Text="{Binding Shown.SkippedMessage}" />
+        <TextBlock Style="{StaticResource GitHubDimLine}" Text="{Binding Shown.LoadingMessage}" />
+        <TextBlock Style="{StaticResource GitHubDimLine}" Text="{Binding Shown.EmptyText}" />
+        <!-- the tab in front shows its rows; the other keeps its list, scrolled where it was -->
+        <Grid>
+          <ItemsControl ItemsSource="{Binding PullRequests.Rows}">
+            <ItemsControl.Style>
+              <Style TargetType="ItemsControl" BasedOn="{StaticResource GitHubRows}">
+                <Setter Property="Visibility" Value="Collapsed" />
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding IsPullRequestsShown}" Value="True">
+                    <Setter Property="Visibility" Value="Visible" />
+                  </DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </ItemsControl.Style>
+          </ItemsControl>
+          <ItemsControl ItemsSource="{Binding Issues.Rows}">
+            <ItemsControl.Style>
+              <Style TargetType="ItemsControl" BasedOn="{StaticResource GitHubRows}">
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding IsPullRequestsShown}" Value="True">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                  </DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </ItemsControl.Style>
+          </ItemsControl>
+        </Grid>
       </DockPanel>
     </Border>
   </Grid>

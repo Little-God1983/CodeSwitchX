@@ -53,6 +53,14 @@ public sealed record RepoActivity(
         && SameItems(NewestIssues, other.NewestIssues)
         && SameItems(NewestPullRequests, other.NewestPullRequests);
 
+    /// <summary>Same repository, account, and count and preview of one kind; the other kind may differ.</summary>
+    public bool SameKindAs(RepoActivity other, GitHubItemKind kind) =>
+        Repo == other.Repo
+        && Account == other.Account
+        && (kind == GitHubItemKind.Issue
+            ? OpenIssues == other.OpenIssues && SameItems(NewestIssues, other.NewestIssues)
+            : OpenPullRequests == other.OpenPullRequests && SameItems(NewestPullRequests, other.NewestPullRequests));
+
     private static bool SameItems(IReadOnlyList<GitHubItem> a, IReadOnlyList<GitHubItem> b) =>
         a.Count == b.Count && a.Zip(b).All(p => SameItem(p.First, p.Second));
 

@@ -28,6 +28,53 @@ public sealed class GitPillsXamlTests
         PillButtons(Render(line, tile: true)).Count(IsShown).ShouldBe(2);
     });
 
+    private static RepoActivity Read(int issues = 3, int pullRequests = 3) => new(new GitHubRepo("acme", "SomeRepo"), "me", issues, pullRequests, [], []);
+
+    [Fact]
+    public Task A_tile_line_on_github_is_one_button_named_for_the_repository() => StaThread.RunAsync(() =>
+    {
+        var line = new GitLine(null, "main", 0, Issues: Pill(GitHubItemKind.Issue), PullRequests: Pill(GitHubItemKind.PullRequest), GitHub: Read());
+
+        var button = Descendants<Button>(Render(line, tile: true)).Single(b => b.DataContext is GitLine);
+
+        System.Windows.Automation.AutomationProperties.GetName(button).ShouldBe("Open issues and pull requests of SomeRepo");
+        PillButtons(button).Count(IsShown).ShouldBe(2, "the pills stay, inside the line");
+        button.ToolTip.ShouldBeNull("no tooltip above the pills (#335)");
+    });
+
+    [Fact]
+    public Task A_line_without_github_or_in_ravens_header_is_no_button() => StaThread.RunAsync(() =>
+    {
+        Descendants<Button>(Render(new GitLine(null, "main", 0), tile: true)).ShouldNotContain(b => b.DataContext is GitLine);
+        Descendants<Button>(Render(new GitLine(null, "main", 0, GitHub: Read()), tile: false)).ShouldNotContain(b => b.DataContext is GitLine);
+    });
+
+    [Fact]
+    public Task A_clickable_line_takes_the_same_room_as_a_plain_one() => StaThread.RunAsync(() =>
+    {
+        var plain = Render(new GitLine("Folder", "main", 0), tile: true);
+
+        var clickable = Render(new GitLine("Folder", "main", 0, GitHub: Read(0, 0)), tile: true);
+
+        Descendants<Button>(clickable).ShouldContain(b => b.DataContext is GitLine);
+        clickable.DesiredSize.ShouldBe(plain.DesiredSize);
+    });
+
+    [Fact]
+    public Task A_clickable_line_fills_the_line_under_the_app_theme_s_button_style() => StaThread.RunAsync(() =>
+    {
+        // The Fluent theme's implicit Button style sets HorizontalAlignment Left; the line must still span the whole line, so the
+        // pills stay at the right edge and a click anywhere on the line opens the panel (review of #406).
+        var themed = new Style(typeof(Button));
+        themed.Setters.Add(new Setter(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Left));
+        themed.Setters.Add(new Setter(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center));
+
+        var presenter = Render(new GitLine("Folder", "main", 0, Issues: Pill(GitHubItemKind.Issue), GitHub: Read()), tile: true, implicitButton: themed);
+
+        var line = Descendants<Button>(presenter).Single(b => b.DataContext is GitLine);
+        line.ActualWidth.ShouldBe(presenter.ActualWidth, 0.5);
+    });
+
     [Fact]
     public Task A_line_without_pills_shows_none_even_on_a_tile() => StaThread.RunAsync(() =>
         PillButtons(Render(new GitLine(null, "main", 0), tile: true)).ShouldAllBe(b => !IsShown(b)));
@@ -193,9 +240,14 @@ public sealed class GitPillsXamlTests
     internal static string AssemblyQualified(string xaml) => xaml.Replace("\"clr-namespace:CodeSwitchX.UI.Infrastructure\"", "\"clr-namespace:CodeSwitchX.UI.Infrastructure;assembly=CodeSwitchX\"")
         .Replace("\"clr-namespace:CodeSwitchX.UI.Yard\"", "\"clr-namespace:CodeSwitchX.UI.Yard;assembly=CodeSwitchX\"");
 
-    private static ContentPresenter Render(GitLine line, bool tile, double width = 400)
+    private static ContentPresenter Render(GitLine line, bool tile, double width = 400, Style? implicitButton = null)
     {
         var resources = AppResources();
+        if (implicitButton is not null)
+        {
+            resources[typeof(Button)] = implicitButton;
+        }
+
         // a bare presenter: an ItemsControl has no template without the application's theme
         var items = new ContentPresenter { Content = line, ContentTemplate = (DataTemplate)resources["GitLineTemplate"], Width = width };
         items.Resources.MergedDictionaries.Add(resources);
@@ -216,7 +268,7 @@ public sealed class GitPillsXamlTests
         for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
         {
             var child = VisualTreeHelper.GetChild(root, i);
-            if (child is Button button)
+            if (child is Button { DataContext: GitHubPill } button)
             {
                 found.Add(button);
             }

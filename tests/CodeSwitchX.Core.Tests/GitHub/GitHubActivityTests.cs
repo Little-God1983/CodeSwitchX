@@ -669,6 +669,23 @@ public class GitHubActivityTests
     }
 
     [Fact]
+    public async Task A_list_is_applied_after_the_other_kind_was_replaced_during_its_read()
+    {
+        // The panel's two tabs read at once (review of #406): the one that ends second still lands on the tile.
+        var activity = Activity(new FakeGh { Issues = 3 }, _ => "https://github.com/acme/tool.git");
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
+        var repo = new GitHubRepo("acme", "tool");
+        var started = activity.Latest(repo);
+        activity.Replace(repo, GitHubItemKind.PullRequest, ListOf(2), started, out _).ShouldBeTrue();
+
+        activity.Replace(repo, GitHubItemKind.Issue, ListOf(7), started, out var total).ShouldBeTrue();
+
+        total.ShouldBe(7);
+        activity.ForFolder(@"c:\r\tool")!.OpenIssues.ShouldBe(7);
+        activity.ForFolder(@"c:\r\tool")!.OpenPullRequests.ShouldBe(2, "the other kind's list stays");
+    }
+
+    [Fact]
     public void A_repository_no_round_has_read_has_no_total_to_give()
     {
         var activity = Activity(new FakeGh(), _ => "https://github.com/acme/tool.git");

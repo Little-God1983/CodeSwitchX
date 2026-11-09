@@ -1,3 +1,5 @@
+using CodeSwitchX.Core.GitHub;
+
 namespace CodeSwitchX.UI.Yard;
 
 /// <summary>
@@ -10,7 +12,8 @@ namespace CodeSwitchX.UI.Yard;
 /// <param name="Issues">The repository's open issues; null when there are none or nothing is known yet.</param>
 /// <param name="PullRequests">The repository's open pull requests; null when there are none or nothing is known yet.</param>
 /// <param name="IsRepository">The folder is in a repository of its own, whether or not its branch could be read; false before the first git round and when there is no repository. A repository whose branch cannot be read shows "no git" and keeps its pills.</param>
-public sealed record GitLine(string? Folder, string? Branch, int? DirtyCount, string? Path = null, GitHubPill? Issues = null, GitHubPill? PullRequests = null, bool IsRepository = false)
+/// <param name="GitHub">What was last read on GitHub for the line's repository, whatever its counts: with nothing open there are no pills, but the line still opens the panel (#406). Null when the repository is not on GitHub or has not been read.</param>
+public sealed record GitLine(string? Folder, string? Branch, int? DirtyCount, string? Path = null, GitHubPill? Issues = null, GitHubPill? PullRequests = null, bool IsRepository = false, RepoActivity? GitHub = null)
 {
     /// <summary>Before the first git round: "no git" and no pill.</summary>
     public static readonly GitLine Unknown = new(null, null, null);
@@ -27,6 +30,9 @@ public sealed record GitLine(string? Folder, string? Branch, int? DirtyCount, st
     public string ToolTipText => Path is null ? Text : $"{Text}\n{Path}";
 
     public string? GitStateLabel => Label(DirtyCount);
+
+    /// <summary>What a click on the line does, for a screen reader; null when the line is not on GitHub.</summary>
+    public string? OpenGitHubText => GitHub is { } activity ? $"Open issues and pull requests of {activity.Repo.Name}" : null;
 
     /// <summary>
     /// "clean", or how many files have uncommitted changes (edited, staged or new). Null when git could not tell, so no

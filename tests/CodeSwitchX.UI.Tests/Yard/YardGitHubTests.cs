@@ -257,6 +257,37 @@ public class YardGitHubTests : IDisposable
     }
 
     [Fact]
+    public async Task A_repository_with_nothing_open_keeps_its_activity_on_the_line()
+    {
+        var app = Add("App", Repo("app"));
+        var yard = Yard(true, app);
+        _gh.Issues = 0;
+        _gh.PullRequests = 0;
+        await yard.InitializeAsync(CancellationToken.None);
+
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].GitHub is not null);
+
+        var line = yard.FindTile(app.Id)!.GitLines[0];
+        line.GitHub!.Repo.Slug.ShouldBe("acme/app");
+        line.Issues.ShouldBeNull();
+        line.PullRequests.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_line_without_a_github_origin_has_no_activity()
+    {
+        _originOf = _ => new OriginLookup("https://gitlab.com/acme/app.git");
+        var app = Add("App", Repo("app"));
+        var yard = Yard(true, app);
+
+        await yard.InitializeAsync(CancellationToken.None);
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Text == "main");
+        await Task.Delay(300, TestContext.Current.CancellationToken);
+
+        yard.FindTile(app.Id)!.GitLines[0].GitHub.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task A_folder_that_is_no_repository_gets_no_origin_lookup_and_no_pills()
     {
         // A git above the user profile would answer for it; GitInspector stops there, so the tile reads "no git".

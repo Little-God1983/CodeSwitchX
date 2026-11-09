@@ -11,9 +11,9 @@ namespace CodeSwitchX.UI.Yard;
 /// <summary>
 /// Where the keyboard goes when the GitHub list opens and closes (#362). Opening takes the keyboard to the first stop in the panel, so Escape
 /// closes it, and puts the hover preview away. A list that swaps its rows loses the focused row with them, and the keyboard
-/// falls to the window: it goes back to the panel. Closing the list hands the keyboard back to the pill that opened it, as its
+/// falls to the window: it goes back to the panel. Closing the list hands the keyboard back to the repository line or pill that opened it (#406), as its
 /// tile has it now: a tile rebuilds its buttons when a git line changes, and may be rebuilt itself when it moves to another
-/// group, so the pill is looked up again, on the same line of the same tile. The tile gets the keyboard when no pill of the
+/// group, so the line or pill is looked up again, on the same line of the same tile. The tile gets the keyboard when no pill of the
 /// repository is left. Nothing is handed back after a mouse close, when the keyboard was not in the panel, when it has moved to
 /// a control since (Raven's type box), when another list took the panel's place, or when the Yard is being left.
 /// </summary>
@@ -22,7 +22,7 @@ internal sealed class GitHubPanelFocus
     private readonly UIElement _root;
     private readonly UIElement _panel;
     private readonly Action _closePreview;
-    private (WorkspaceTileViewModel? Tile, string? Line, GitHubRepo Repo, GitHubItemKind Kind)? _opener;
+    private (WorkspaceTileViewModel? Tile, string? Line, GitHubRepo Repo, GitHubItemKind? Kind)? _opener;
 
     /// <param name="root">The Yard, whose pills open the list.</param>
     /// <param name="panel">The list's panel, whose visibility says when the list opens and closes.</param>
@@ -44,6 +44,11 @@ internal sealed class GitHubPanelFocus
         {
             // The outermost tile context: the tile, not a part of it.
             _opener = (ContextsAbove<WorkspaceTileViewModel>(button).LastOrDefault(), ContextsAbove<GitLine>(button).FirstOrDefault()?.Path, pill.Activity.Repo, pill.Kind);
+        }
+        else if (e.OriginalSource is Button { DataContext: GitLine { GitHub: { } activity } line } lineButton)
+        {
+            // A repository line (#406): no kind, the line itself is what the keyboard goes back to.
+            _opener = (ContextsAbove<WorkspaceTileViewModel>(lineButton).LastOrDefault(), line.Path, activity.Repo, null);
         }
     }
 
@@ -120,11 +125,14 @@ internal sealed class GitHubPanelFocus
             return;
         }
 
-        // The pill of that line, else the line's other pill, else the repository's pill on another line, else wherever the tile starts.
-        var target = Descendants(tile).OfType<Button>().Where(button => button.IsVisible && button.DataContext is GitHubPill pill && pill.Activity.Repo == open.Repo)
+        // A line that opened it gets it back (#406). A pill: that pill of that line, else the line's other pill, else the repository's
+        // pill on another line, else the line itself. Else wherever the tile starts.
+        var lineButton = Descendants(tile).OfType<Button>().FirstOrDefault(button => button.IsVisible && button.DataContext is GitLine { GitHub: { } activity } line && activity.Repo == open.Repo && line.Path == open.Line);
+        var pillButton = open.Kind is null ? null : Descendants(tile).OfType<Button>().Where(button => button.IsVisible && button.DataContext is GitHubPill pill && pill.Activity.Repo == open.Repo)
             .OrderBy(button => ContextsAbove<GitLine>(button).FirstOrDefault()?.Path != open.Line)
             .ThenBy(button => ((GitHubPill)button.DataContext).Kind != open.Kind)
             .FirstOrDefault();
+        var target = open.Kind is null ? lineButton : pillButton ?? lineButton;
         if (target is not null)
         {
             Keyboard.Focus(target);
