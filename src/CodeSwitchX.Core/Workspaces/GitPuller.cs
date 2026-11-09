@@ -51,7 +51,13 @@ public sealed class GitPuller
     {
         // An explicit refspec: the remote's own fetch setting may leave the default branch out (a single-branch clone).
         var remote = $"refs/remotes/origin/{branch}";
-        var fetch = await _run(checkout, ["fetch", "--no-tags", "origin", $"+refs/heads/{branch}:{remote}"], WriteTimeout, ct).ConfigureAwait(false);
+        IReadOnlyList<string> fetchArguments = ["fetch", "--no-tags", "origin", $"+refs/heads/{branch}:{remote}"];
+        if (await NeedsBatchSshAsync(checkout, ct).ConfigureAwait(false))
+        {
+            fetchArguments = ["-c", BatchSsh, .. fetchArguments];
+        }
+
+        var fetch = await _run(checkout, fetchArguments, WriteTimeout, ct).ConfigureAwait(false);
         if (fetch.Output is null)
         {
             return Failed(fetch, "Couldn't fetch from GitHub.");
@@ -182,6 +188,25 @@ public sealed class GitPuller
             var n => $", {n} new commits",
         };
         return new PullOutcome(true, $"{name} is on {branch}{commits}.");
+    }
+
+    /// <summary>
+    /// ssh that cannot ask for a passphrase or a host key fails at once (#412): nobody can answer, and a pull would show "Pulling…" until the
+    /// timeout. Given to git only where no ssh command is configured, so one the user chose always wins.
+    /// </summary>
+    internal const string BatchSsh = "core.sshCommand=ssh -o BatchMode=yes";
+
+    /// <summary>No ssh command is set for the checkout: not <c>core.sshCommand</c> in its config, not GIT_SSH_COMMAND or GIT_SSH in the environment.</summary>
+    private async Task<bool> NeedsBatchSshAsync(string checkout, CancellationToken ct)
+    {
+        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("GIT_SSH_COMMAND")) || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("GIT_SSH")))
+        {
+            return false;
+        }
+
+        // Exit code 1 (and no output) when it is not set; a config git cannot read leaves it to git as it is.
+        var configured = await _run(checkout, ["config", "--get", "core.sshCommand"], ReadTimeout, ct).ConfigureAwait(false);
+        return configured.ExitCode == 1 || (configured.Output is not null && configured.Output.Trim().Length == 0);
     }
 
     /// <summary>What git said, in short, or <paramref name="otherwise"/> when it said nothing (it did not start, or ran out of time).</summary>

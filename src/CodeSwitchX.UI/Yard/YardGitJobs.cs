@@ -12,7 +12,9 @@ namespace CodeSwitchX.UI.Yard;
 /// <param name="Merged">The pull request a merge job merged (#408), whatever the pull after it came to; null when nothing was merged.</param>
 /// <param name="Pulled">The checkout is on the default branch and up to date: a pull, or the pull after a merge, went through.</param>
 /// <param name="ChangedGitHub">A merge job that merged, or may have (gh ran out of time, the job threw): the Yard reads GitHub again. A refusal changed nothing.</param>
-public sealed record GitJobOutcome(string Checkout, string Name, bool Succeeded, string Message, int? Merged = null, bool Pulled = false, bool ChangedGitHub = false);
+/// <param name="Key">The checkout's key the job ran under (<see cref="YardGitJobs.Key"/>).</param>
+public sealed record GitJobOutcome(string Checkout, string Name, bool Succeeded, string Message, int? Merged = null, bool Pulled = false, bool ChangedGitHub = false,
+    string Key = "");
 
 /// <summary>
 /// The pulls (#407) and merges (#408) the GitHub panel starts, kept at the Yard's level so they outlive the panel. A job once started is
@@ -56,8 +58,11 @@ public sealed class YardGitJobs
     /// <summary>The panel can offer a merge.</summary>
     public bool CanMerge => _merger is not null;
 
-    /// <summary>The same folder, written either way, is the same checkout.</summary>
-    public static string Key(string checkout) => PathNormalizer.Normalize(checkout);
+    /// <summary>
+    /// What a checkout is known by: its git directory, normalized, so lines on two folders of one checkout share one job (#412); its folder
+    /// where git could not tell. The same path written either way is the same key. The methods below take a key or a folder.
+    /// </summary>
+    public static string Key(string gitDirOrFolder) => PathNormalizer.Normalize(gitDirOrFolder);
 
     public bool IsRunning(string checkout) => _running.ContainsKey(Key(checkout));
 
@@ -73,8 +78,9 @@ public sealed class YardGitJobs
     /// task ends when the outcome has been handed out, for tests; nobody needs to wait for it.
     /// </summary>
     /// <param name="chatIsWorking">Asked on the UI thread right before git changes anything, after the fetch: a chat that started working meanwhile stops the pull.</param>
-    public Task PullAsync(string checkout, string branch, string name, Func<bool> chatIsWorking) =>
-        Run(checkout, name, $"Pulling {branch}…", "A pull", async () =>
+    /// <param name="key">The checkout's key (<see cref="PanelCheckout.Key"/>); its folder's when none is given.</param>
+    public Task PullAsync(string checkout, string branch, string name, Func<bool> chatIsWorking, string? key = null) =>
+        Run(checkout, key, name, $"Pulling {branch}…", "A pull", async () =>
         {
             var pull = await _puller.PullAsync(checkout, branch, name, CancellationToken.None, _ => StillFreeAsync(chatIsWorking)).ConfigureAwait(false);
             return new GitJobOutcome(checkout, name, pull.Succeeded, pull.Succeeded ? pull.Text : $"Pull stopped: {pull.Text}", Pulled: pull.Succeeded);
@@ -86,14 +92,15 @@ public sealed class YardGitJobs
     /// </summary>
     /// <param name="baseBranch">What the pull request merges into, for the conflict's reason.</param>
     /// <param name="pullBranch">The default branch for Merge and pull; null for Merge only.</param>
-    public Task MergeAsync(string checkout, string name, GitHubRepo repo, string account, int number, string baseBranch, string? pullBranch, Func<bool> chatIsWorking)
+    public Task MergeAsync(string checkout, string name, GitHubRepo repo, string account, int number, string baseBranch, string? pullBranch, Func<bool> chatIsWorking,
+        string? key = null)
     {
         if (_merger is null)
         {
             return Task.CompletedTask;
         }
 
-        return Run(checkout, name, $"Merging #{number}…", "A merge", async () =>
+        return Run(checkout, key, name, $"Merging #{number}…", "A merge", async () =>
         {
             var merge = await _merger.MergeAsync(repo, account, number, baseBranch, CancellationToken.None).ConfigureAwait(false);
             if (!merge.Merged)
@@ -118,9 +125,9 @@ public sealed class YardGitJobs
     /// <param name="what">"A pull", "A merge": for the log, which names no repository.</param>
     /// <param name="failed">What the panel says when the job threw.</param>
     /// <param name="fromMerge">A merge job: one that threw may have merged.</param>
-    private Task Run(string checkout, string name, string running, string what, Func<Task<GitJobOutcome>> work, string failed, bool fromMerge = false)
+    private Task Run(string checkout, string? checkoutKey, string name, string running, string what, Func<Task<GitJobOutcome>> work, string failed, bool fromMerge = false)
     {
-        var key = Key(checkout);
+        var key = Key(checkoutKey ?? checkout);
         if (!_running.TryAdd(key, running))
         {
             return Task.CompletedTask;
@@ -135,13 +142,13 @@ public sealed class YardGitJobs
             GitJobOutcome outcome;
             try
             {
-                outcome = await work().ConfigureAwait(false);
+                outcome = await work().ConfigureAwait(false) with { Key = key };
             }
             catch (Exception ex)
             {
                 // The type only: a message could carry a path, a branch or a repository's name.
                 _logger.LogWarning("{Job} from the Yard failed: {ExceptionType}", what, ex.GetType().Name);
-                outcome = new GitJobOutcome(checkout, name, false, failed, ChangedGitHub: fromMerge);
+                outcome = new GitJobOutcome(checkout, name, false, failed, ChangedGitHub: fromMerge, Key: key);
             }
 
             _logger.LogInformation("{Job} from the Yard ended: {Succeeded}", what, outcome.Succeeded);

@@ -29,7 +29,7 @@ public partial class YardGitHubTests
         panel.PullText.ShouldBe("Pull main", "the line is on main, GitHub's default branch");
         panel.PullCommand.Execute(null);
         await Eventually(() => panel.ActionMessage == "app is on main, 3 new commits.");
-        _pullGit.Ran[0].ShouldStartWith("fetch");
+        _pullGit.Ran.ShouldContain(r => r.Contains("fetch", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -155,6 +155,43 @@ public partial class YardGitHubTests
 
         panel.Branch.ShouldBe("main-after-a-pull", "only a git round knows the branch; the lines a GitHub round shows may be older than a pull");
     }
+
+    [Fact]
+    public async Task Two_workspaces_on_one_checkout_share_its_pull()
+    {
+        var root = Repo("app");
+        Directory.CreateDirectory(Path.Combine(root, "src"));
+        var app = Add("App", root);
+        var sub = Add("Sub", Path.Combine(root, "src"));
+        var yard = Yard(true, app, sub);
+        await yard.InitializeAsync(CancellationToken.None);
+        await Eventually(() => yard.FindTile(sub.Id)!.GitLines[0].GitDir is not null && yard.FindTile(app.Id)!.GitLines[0].GitHub is not null
+            && yard.FindTile(sub.Id)!.GitLines[0].GitHub is not null);
+        var appLine = yard.FindTile(app.Id)!.GitLines[0];
+        var subLine = yard.FindTile(sub.Id)!.GitLines[0];
+        subLine.GitDir.ShouldBe(appLine.GitDir, "git walks up from the subfolder to the same checkout");
+        YardViewModel.SameCheckout(appLine, subLine).ShouldBeTrue();
+        _pullGit.Hold();
+        yard.OpenGitHubLineCommand.Execute(appLine);
+        yard.GitHubPanel.ShouldNotBeNull().PullCommand.Execute(null);
+
+        yard.OpenGitHubLineCommand.Execute(subLine);
+
+        var other = yard.GitHubPanel.ShouldNotBeNull();
+        other.IsBusy.ShouldBeTrue("the pull started from the root's line runs on this checkout too");
+        other.PullCommand.Execute(null);
+        _pullGit.Release();
+        await Eventually(() => !other.IsBusy);
+        _pullGit.Ran.Count(r => r.Contains("fetch", StringComparison.Ordinal)).ShouldBe(1, "one pull, not two on one .git");
+    }
+
+    [Theory]
+    [InlineData(@"C:\r\.git", @"C:\r", @"c:\R\.git", @"C:\r\src", true)]
+    [InlineData(@"C:\r\.git", @"C:\r", @"C:\s\.git", @"C:\r", false)]
+    [InlineData(null, @"C:\r", null, @"c:\R\", true)]
+    [InlineData(null, @"C:\r", @"C:\r\.git", @"C:\r\src", false)]
+    public void Same_checkout_is_the_same_git_directory_else_the_same_folder(string? gitDirA, string pathA, string? gitDirB, string pathB, bool same) =>
+        YardViewModel.SameCheckout(new GitLine(null, "main", 0, pathA, GitDir: gitDirA), new GitLine(null, "main", 0, pathB, GitDir: gitDirB)).ShouldBe(same);
 
     private sealed class FakeSource : IBrowserSource
     {

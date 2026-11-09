@@ -12,8 +12,9 @@ namespace CodeSwitchX.UI.Yard;
 /// <param name="Issues">The repository's open issues; null when there are none or nothing is known yet.</param>
 /// <param name="PullRequests">The repository's open pull requests; null when there are none or nothing is known yet.</param>
 /// <param name="IsRepository">The folder is in a repository of its own, whether or not its branch could be read; false before the first git round and when there is no repository. A repository whose branch cannot be read shows "no git" and keeps its pills.</param>
+/// <param name="GitDir">The checkout's git directory, full path (#412): two lines with the same one are one checkout, whatever their folders. Null when git could not tell.</param>
 /// <param name="GitHub">What was last read on GitHub for the line's repository, whatever its counts: with nothing open there are no pills, but the line still opens the panel (#406). Null when the repository is not on GitHub or has not been read.</param>
-public sealed record GitLine(string? Folder, string? Branch, int? DirtyCount, string? Path = null, GitHubPill? Issues = null, GitHubPill? PullRequests = null, bool IsRepository = false, RepoActivity? GitHub = null)
+public sealed record GitLine(string? Folder, string? Branch, int? DirtyCount, string? Path = null, GitHubPill? Issues = null, GitHubPill? PullRequests = null, bool IsRepository = false, RepoActivity? GitHub = null, string? GitDir = null)
 {
     /// <summary>Before the first git round: "no git" and no pill.</summary>
     public static readonly GitLine Unknown = new(null, null, null);
