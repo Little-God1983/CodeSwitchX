@@ -38,8 +38,10 @@ public sealed class GitHubMerger
         var answer = await _gh.ListAsAsync(account, arguments, ct).ConfigureAwait(false);
         if (answer.Output is not null)
         {
-            // gh exits 0 when it only queued it: "will be added to the merge queue", "already in merge queue" (#414).
-            return $"{answer.Output}\n{answer.ErrorOutput}".Contains("merge queue", StringComparison.OrdinalIgnoreCase)
+            // gh exits 0 when it only queued it. Without a terminal it prints no "will be added to the merge queue"; what reaches here is its
+            // warning "The merge strategy for main is set by the merge queue", or "is already queued to merge" (#414, review).
+            var said = $"{answer.Output}\n{answer.ErrorOutput}";
+            return said.Contains("merge queue", StringComparison.OrdinalIgnoreCase) || said.Contains("queued to merge", StringComparison.OrdinalIgnoreCase)
                 ? new MergeOutcome(false, "it will be added to the merge queue.", Queued: true)
                 : new MergeOutcome(true);
         }
@@ -81,7 +83,9 @@ public sealed class GitHubMerger
             return $"it has conflicts with {baseBranch}.";
         }
 
-        var first = printed.Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.Length > 0);
+        // gh's warning on a repository with a merge queue comes first and is no reason (review of #414).
+        var first = printed.Split('\n').Select(l => l.Trim())
+            .FirstOrDefault(l => l.Length > 0 && !l.Contains("is set by the merge queue", StringComparison.OrdinalIgnoreCase));
         if (first is null)
         {
             return null;

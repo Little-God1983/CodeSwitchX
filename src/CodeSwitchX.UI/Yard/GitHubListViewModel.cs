@@ -24,6 +24,8 @@ public sealed partial class GitHubListViewModel : ObservableObject
     private readonly CancellationTokenSource _stop = new();
     // 1 once a read has started: a tab is read once, however often it is shown.
     private int _started;
+    // Counts the reads started: only the newest one shows its rows and ends the loading (review of #414).
+    private int _generation;
     // The pull requests merged from the panel (#408); UI thread. A full list read before the merge still holds them.
     private readonly HashSet<int> _dropped = [];
 
@@ -132,37 +134,45 @@ public sealed partial class GitHubListViewModel : ObservableObject
     {
         Interlocked.Exchange(ref _started, 1);
         IsLoading = true;
-        return Task.Run(async () =>
-        {
-            try
-            {
-                await ReadAsync(_stop.Token).ConfigureAwait(false);
-            }
-            finally
-            {
-                _ui.Post(() => IsLoading = false);
-            }
-        });
+        IsRereading = true;
+        return Task.Run(() => ReadNewestAsync(CancellationToken.None));
     }
 
-    private async Task LoadOnceAsync(CancellationToken ct)
+    /// <summary>A read <see cref="RereadAsync"/> started has not ended: the rows still hold the heads read before, so Merge waits (review of #414).</summary>
+    [ObservableProperty] private bool _isRereading;
+
+    private Task LoadOnceAsync(CancellationToken ct) => ReadNewestAsync(ct);
+
+    /// <summary>
+    /// The one read path: a first load and a read again both come here. A read started later wins: an older one that ends after it shows
+    /// nothing and leaves the loading line alone. <see cref="Loaded"/> completes when the first read ends, however it ended.
+    /// </summary>
+    private async Task ReadNewestAsync(CancellationToken ct)
     {
+        var mine = Interlocked.Increment(ref _generation);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _stop.Token);
         try
         {
             if (!linked.IsCancellationRequested)
             {
-                await ReadAsync(linked.Token).ConfigureAwait(false);
+                await ReadAsync(linked.Token, mine).ConfigureAwait(false);
             }
         }
         finally
         {
-            _ui.Post(() => IsLoading = false);
+            _ui.Post(() =>
+            {
+                if (mine == Volatile.Read(ref _generation))
+                {
+                    IsLoading = false;
+                    IsRereading = false;
+                }
+            });
             _loaded.TrySetResult();
         }
     }
 
-    private async Task ReadAsync(CancellationToken ct)
+    private async Task ReadAsync(CancellationToken ct, int generation)
     {
         var activity = _pill.Activity;
         GitHubList? all;
@@ -199,12 +209,13 @@ public sealed partial class GitHubListViewModel : ObservableObject
             }
         }
 
-        _ui.Post(() => Show(all, stored));
+        _ui.Post(() => Show(all, stored, generation));
     }
 
-    private void Show(GitHubList? all, int? stored)
+    private void Show(GitHubList? all, int? stored, int generation)
     {
-        if (_stop.IsCancellationRequested)
+        // A newer read is on its way: an older answer, which may hold a head from before a push, does not replace it.
+        if (_stop.IsCancellationRequested || generation != Volatile.Read(ref _generation))
         {
             return;
         }

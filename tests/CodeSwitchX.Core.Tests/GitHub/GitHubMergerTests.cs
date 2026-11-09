@@ -54,8 +54,9 @@ public class GitHubMergerTests
     }
 
     [Theory]
-    [InlineData("! Pull request acme/tool#405 will be added to the merge queue for main when ready\n")]
-    [InlineData("! Pull request acme/tool#405 is already in merge queue\n")]
+    // what gh prints without a terminal: its strategy warning when it queues, and its warning for one queued before
+    [InlineData("! The merge strategy for main is set by the merge queue\n")]
+    [InlineData("! Pull request acme/tool#405 is already queued to merge\n")]
     public async Task A_merge_GitHub_only_queued_is_no_merge(string printed)
     {
         var gh = new FakeGh(new GhAnswer(string.Empty, ErrorOutput: printed));
@@ -63,6 +64,14 @@ public class GitHubMergerTests
         var outcome = await new GitHubMerger(gh).MergeAsync(Repo, "reader", 405, "main", CancellationToken.None);
 
         outcome.ShouldBe(new MergeOutcome(false, "it will be added to the merge queue.", Queued: true));
+    }
+
+    [Fact]
+    public async Task On_a_queue_repository_the_strategy_warning_is_no_reason()
+    {
+        var gh = new FakeGh(new GhAnswer(null, ErrorOutput: "! The merge strategy for main is set by the merge queue\nGraphQL: Resource not accessible by integration (enqueuePullRequest)\n"));
+
+        (await new GitHubMerger(gh).MergeAsync(Repo, "reader", 9, "main", CancellationToken.None)).Text.ShouldBe("GraphQL: Resource not accessible by integration (enqueuePullRequest)");
     }
 
     [Fact]

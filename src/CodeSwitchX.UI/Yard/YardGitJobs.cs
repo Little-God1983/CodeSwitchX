@@ -152,7 +152,7 @@ public sealed class YardGitJobs
 
             if (!merge.Merged)
             {
-                return new GitJobOutcome(checkout, name, false, $"Can't merge #{number}: {merge.Text}", ChangedGitHub: merge.Unknown, Reread: merge.Moved);
+                return new GitJobOutcome(checkout, name, false, $"Can't merge #{number}: {merge.Text}", ChangedGitHub: merge.Unknown || merge.Moved, Reread: merge.Moved);
             }
 
             var merged = merge.AlreadyMerged ? $"#{number} was merged already" : $"Merged #{number}";

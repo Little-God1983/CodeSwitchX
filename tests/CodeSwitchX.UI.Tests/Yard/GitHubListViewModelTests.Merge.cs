@@ -263,7 +263,7 @@ public partial class GitHubListViewModelTests
     [Fact]
     public async Task A_merge_GitHub_only_queued_keeps_the_row_and_pulls_nothing()
     {
-        _merge.Answer = new GhAnswer(string.Empty, ErrorOutput: "! Pull request acme/app#9 will be added to the merge queue for main when ready\n");
+        _merge.Answer = new GhAnswer(string.Empty, ErrorOutput: "! The merge strategy for main is set by the merge queue\n");
         var model = await OpenForMerge("b");
         model.OpenMergeCommand.Execute(Row(model));
 
@@ -293,6 +293,55 @@ public partial class GitHubListViewModelTests
         _gh.PullRequestList.SetResult(PullRequestsOf(1).Replace("\"number\":1", "\"number\":9", StringComparison.Ordinal).Replace("\"headRefName\":\"b1\"", "\"headRefName\":\"b\",\"headRefOid\":\"new\"", StringComparison.Ordinal));
         await Eventually(() => !model.PullRequests.IsLoading);
         Row(model).Item.HeadSha.ShouldBe("new");
+    }
+
+    [Fact]
+    public async Task A_moved_pull_request_refreshes_the_tiles_preview_too()
+    {
+        _merge.Answer = new GhAnswer(null, ErrorOutput: "GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)\n");
+        var jobs = MergingJobs();
+        var ended = new List<GitJobOutcome>();
+        jobs.Ended += (outcome, _) => ended.Add(outcome);
+
+        await jobs.MergeAsync(@"C:\app", "app", new GitHubRepo("acme", "app"), "me", 9, "main", null, () => false, headSha: "old");
+
+        ended.ShouldHaveSingleItem().ChangedGitHub.ShouldBeTrue("the tile's preview holds the old head too");
+        ended[0].Reread.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task While_the_list_is_read_again_merge_waits_until_the_new_head_is_there()
+    {
+        var model = await OpenForMerge("b", head: "old");
+        var first = model.PullRequests.LoadAsync(TestContext.Current.CancellationToken); // a slow first read, still on its way
+        await Eventually(() => _gh.Asked.Count(a => a == "pr") == 1);
+
+        var again = model.PullRequests.RereadAsync();
+
+        model.PullRequests.IsRereading.ShouldBeTrue();
+        model.OpenMergeCommand.Execute(Row(model));
+        model.MergeStrip.ShouldBeNull("the rows still hold the old head");
+        // both reads get gh's answer, which carries the new head (the fake answers every list read alike)
+        _gh.PullRequestList.SetResult(PullRequestsOf(1).Replace("\"number\":1", "\"number\":9", StringComparison.Ordinal).Replace("\"headRefName\":\"b1\"", "\"headRefName\":\"b\",\"headRefOid\":\"new\"", StringComparison.Ordinal));
+        await Task.WhenAll(first, again);
+        await Eventually(() => !model.PullRequests.IsRereading && !model.PullRequests.IsLoading);
+        await model.PullRequests.Loaded.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Row(model).Item.HeadSha.ShouldBe("new");
+        model.OpenMergeCommand.Execute(Row(model));
+        model.MergeStrip.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task A_read_again_before_the_first_load_still_completes_loaded()
+    {
+        var model = await OpenForMerge("b");
+
+        var again = model.PullRequests.RereadAsync();
+        _gh.PullRequestList.SetResult(PullRequestsOf(1));
+        await again;
+
+        await model.PullRequests.LoadAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
     }
 
     [Fact]

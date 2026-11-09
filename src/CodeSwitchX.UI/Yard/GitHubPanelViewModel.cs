@@ -222,7 +222,8 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     [RelayCommand]
     private void OpenMerge(GitHubRow row)
     {
-        if (_checkout is null || !CanMerge || IsBusy)
+        // While the list is read again after a refused move, the rows still hold the old head: a Merge now would be refused again (review of #414).
+        if (_checkout is null || !CanMerge || IsBusy || PullRequests.IsRereading)
         {
             return;
         }
