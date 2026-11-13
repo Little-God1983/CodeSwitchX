@@ -86,7 +86,35 @@ public class GitHubReaderTests
         var activity = await Read(gh);
 
         activity.ShouldNotBeNull().DefaultBranch.ShouldBe(branch);
-        gh.Commands[0].ShouldContain(a => a.Contains("defaultBranchRef{name}", StringComparison.Ordinal));
+        gh.Commands[0].ShouldContain(a => a.Contains("defaultBranchRef{name ", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("\"defaultBranchRef\":{\"name\":\"main\",\"target\":{\"oid\":\"7d6783b6\",\"history\":{\"totalCount\":1155}}},", "7d6783b6", 1155)]
+    [InlineData("\"defaultBranchRef\":{\"name\":\"main\",\"target\":{\"oid\":\"7d6783b6\"}},", "7d6783b6", null)]
+    [InlineData("\"defaultBranchRef\":{\"name\":\"main\",\"target\":{\"oid\":\"7d6783b6\",\"history\":{\"totalCount\":\"many\"}}},", "7d6783b6", null)]
+    [InlineData("\"defaultBranchRef\":{\"name\":\"main\",\"target\":null},", null, null)]
+    [InlineData("\"defaultBranchRef\":{\"name\":\"main\",\"target\":{\"oid\":7}},", null, null)]
+    [InlineData("\"defaultBranchRef\":{\"name\":\"main\"},", null, null)]
+    [InlineData("\"defaultBranchRef\":null,", null, null)]
+    public async Task The_default_branchs_newest_commit_and_commit_count_are_read_with_it(string field, string? sha, int? commits)
+    {
+        var gh = Fake(["acme"], new() { ["acme"] = Graphql("ADMIN").Replace("\"viewerPermission\"", field + "\"viewerPermission\"", StringComparison.Ordinal) });
+
+        var activity = await Read(gh);
+
+        activity.ShouldNotBeNull().DefaultHead.ShouldBe(sha is null ? null : new GitHubHead(sha, commits));
+        gh.Commands[0].ShouldContain(a => a.Contains("defaultBranchRef{name target{oid ... on Commit{history{totalCount}}}}", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_default_branch_that_moved_is_another_result()
+    {
+        var read = new RepoActivity(Repo, "acme", 0, 0, [], [], "main", new GitHubHead("a1", 10));
+
+        read.SameAs(read with { DefaultHead = new GitHubHead("a1", 10) }).ShouldBeTrue();
+        read.SameAs(read with { DefaultHead = new GitHubHead("b2", 11) }).ShouldBeFalse("the tiles must hear of it: their lines may be behind now");
+        read.SameAs(read with { DefaultHead = null }).ShouldBeFalse();
     }
 
     [Fact]

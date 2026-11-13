@@ -85,6 +85,20 @@ public sealed class YardDirectoryTests
     }
 
     [Fact]
+    public async Task A_line_behind_GitHub_says_so_in_place_of_clean()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+        await _yard.CurrentGitRefresh;
+        _yard.FindTile(_codeSwitchX.Id)!.ShowGit([new GitLine(null, "main", 0, Behind: new GitBehind(12))]);
+        _yard.FindTile(_diffusion.Id)!.ShowGit([new GitLine("Nexus app", "main", 3, Behind: new GitBehind(null))]);
+
+        var workspaces = await Directory().WorkspacesAsync(CancellationToken.None);
+
+        workspaces[0].Git.ShouldBe([new YardGitLine(null, "main", "12 behind")]);
+        workspaces[1].Git.ShouldBe([new YardGitLine("Nexus app", "main", "3 changed, behind")]);
+    }
+
+    [Fact]
     public async Task A_workspace_file_s_folders_are_named_as_the_file_names_them()
     {
         await _yard.InitializeAsync(CancellationToken.None);

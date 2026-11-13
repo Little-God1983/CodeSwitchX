@@ -50,7 +50,7 @@ public sealed class YardDirectory : IYardDirectory
                 t.Track,
                 t.Workspace.RootPath,
                 FoldersOf(t.Workspace),
-                t.Git.Select(l => new YardGitLine(l.Folder, l.Branch, l.GitStateLabel)).ToList(),
+                t.Git.Select(l => new YardGitLine(l.Folder, l.Branch, l.GitStateText)).ToList(),
                 t.Workspace.Number))
             .ToList();
     }

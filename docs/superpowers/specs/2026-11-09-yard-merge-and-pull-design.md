@@ -84,6 +84,10 @@ done." (user's choice: refuse, not ask, not just do it). Nothing is switched.
   "Merge #405 into main?" plus one line about the checkout.
 - When this workspace (the repository line the panel was opened from) is on the PR's branch, the strip offers
   **Merge and pull** (default), **Merge only**, **Cancel**. Otherwise **Merge** and **Cancel**.
+- Since #426 the strip offers **Merge and pull** too when the workspace is on the default branch the PR merges into
+  ("This workspace is on main. Merge and pull brings it up to date."): the merge alone left that `main` behind GitHub
+  with no pull on offer. The tile then also says so: a line on the default branch that lacks GitHub's newest commit
+  shows "12 behind" in place of "clean", from the GitHub read the Yard already makes (no fetch).
 - Merge and pull = the merge, then the pull above.
 
 ## Calls made by Claude (the user read them in the playback and said "looks good")

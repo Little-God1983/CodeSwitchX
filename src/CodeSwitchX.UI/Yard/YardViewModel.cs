@@ -777,7 +777,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private async Task RefreshGitAsync(WorkspaceTileViewModel tile, List<string> paths, CancellationToken ct)
     {
         var info = await _git.InspectAsync(tile.RootPath, ct).ConfigureAwait(false);
-        var lines = await GitLinesAsync(tile, info, ct).ConfigureAwait(false);
+        // Read once for both steps: the second tells the lines the first carried over by their instances.
+        var previous = tile.GitLines;
+        var lines = await WithBehindAsync(await GitLinesAsync(tile, info, previous, ct).ConfigureAwait(false), previous, ct).ConfigureAwait(false);
         paths.AddRange(lines.Where(HasRepository).Select(l => l.Path).OfType<string>());
         // The pills are taken from the GitHub side when the tile shows the lines, not before: a result stored meanwhile is not overwritten by an older one.
         _ui.Post(() =>
@@ -811,6 +813,33 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             PullRequests = activity is { OpenPullRequests: > 0 } ? new GitHubPill(activity, GitHubItemKind.PullRequest) : null,
             GitHub = activity,
         };
+    }
+
+    /// <summary>
+    /// Each line with how far it is behind GitHub (#426): a line on its repository's default branch is compared with the commit GitHub was last
+    /// read to have there, by git and without a fetch. A line carried over from <paramref name="previous"/> is left as it is: its folder could
+    /// not be looked at this round (an offline share blocks every look for about 20 s).
+    /// </summary>
+    private async Task<IReadOnlyList<GitLine>> WithBehindAsync(IReadOnlyList<GitLine> lines, IReadOnlyList<GitLine> previous, CancellationToken ct)
+    {
+        if (_gitHub is null)
+        {
+            return lines;
+        }
+
+        return await Task.WhenAll(lines.Select(async line =>
+        {
+            if (previous.Any(p => ReferenceEquals(p, line)))
+            {
+                return line;
+            }
+
+            var behind = HasRepository(line) && line is { Path: { } path, Branch: { } branch, Head: { } head }
+                && _gitHub.ForFolder(path) is { DefaultHead: { } onGitHub } activity && activity.DefaultBranch == branch
+                    ? await _git.BehindAsync(path, head, onGitHub.Sha, onGitHub.Commits, ct).ConfigureAwait(false)
+                    : null;
+            return behind == line.Behind ? line : line with { Behind = behind };
+        })).ConfigureAwait(false);
     }
 
     /// <summary>The line's folder is in a repository of its own, whatever its branch: a git above the user profile is not this folder's repository, and its origin is not the folder's.</summary>
@@ -900,9 +929,19 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
     private void OnGitHubChanged(object? sender, EventArgs e) => _ui.Post(() =>
     {
+        var moved = false;
         foreach (var tile in Tiles)
         {
-            tile.ShowGit(tile.GitLines.Select(WithGitHub).ToList());
+            var lines = tile.GitLines.Select(WithGitHub).ToList();
+            moved |= tile.GitLines.Zip(lines).Any(p => p.First.GitHub?.DefaultHead != p.Second.GitHub?.DefaultHead);
+            tile.ShowGit(lines);
+        }
+
+        // Where a default branch stands on GitHub now decides which lines are behind (#426), and only git can say: asked at once, not at
+        // the next round, up to 30 s on. A merge from the Yard reads GitHub again, so its line says "behind" as soon as that read is in.
+        if (moved && !_disposed)
+        {
+            _ = RequestGitRefresh(CancellationToken.None, again: true);
         }
     });
 
@@ -949,9 +988,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// whose check fails, and a file that cannot be read for a moment, keep last round's lines. Runs off the UI thread: it
     /// reads the file.
     /// </summary>
-    private async Task<IReadOnlyList<GitLine>> GitLinesAsync(WorkspaceTileViewModel tile, GitInfo root, CancellationToken ct)
+    /// <param name="previous">The tile's lines as last shown: what a folder that cannot be checked this round keeps.</param>
+    private async Task<IReadOnlyList<GitLine>> GitLinesAsync(WorkspaceTileViewModel tile, GitInfo root, IReadOnlyList<GitLine> previous, CancellationToken ct)
     {
-        var previous = tile.GitLines;
         // The stable-build scripts (#423) are read where a line is made afresh: a line carried over keeps what it had, as its
         // folder could not be checked (an offline share blocks every look for about 20 s). The root just answered git.
         var rootStableBuild = root.IsRepository ? StableBuildRepo.Find(tile.RootPath) : null;
@@ -964,7 +1003,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
                 : [previous[0] with
                 {
                     Branch = root.Branch, DirtyCount = root.DirtyCount, Path = tile.RootPath, IsRepository = root.IsRepository, GitDir = root.GitDir,
-                    StableBuild = rootStableBuild,
+                    StableBuild = rootStableBuild, Head = root.Head,
                 }, .. previous.Skip(1)];
         }
 
@@ -976,7 +1015,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             tile.RootPath,
             IsRepository: root.IsRepository,
             GitDir: root.GitDir,
-            StableBuild: rootStableBuild);
+            StableBuild: rootStableBuild,
+            Head: root.Head);
         var others = folders.Where(f => PathNormalizer.Normalize(f.Path) != rootKey).ToList();
 
         // Each folder's git directory first, which reads a file or two, so git status runs once per checkout, not once per
@@ -1049,7 +1089,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             {
                 var info = await _git.InspectAsync(folder.Path, ct).ConfigureAwait(false);
                 return new GitLine(folder.Label, info.Branch, info.DirtyCount, folder.Path, IsRepository: info.IsRepository, GitDir: info.GitDir,
-                    StableBuild: info.IsRepository ? StableBuildRepo.Find(folder.Path) : null);
+                    StableBuild: info.IsRepository ? StableBuildRepo.Find(folder.Path) : null, Head: info.Head);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

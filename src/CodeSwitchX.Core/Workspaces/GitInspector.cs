@@ -1,11 +1,18 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using CodeSwitchX.Core.Paths;
 
 namespace CodeSwitchX.Core.Workspaces;
 
 /// <param name="DirtyCount">Changed and untracked files; null when git could not report them (not a repository, git missing, refused or timed out).</param>
 /// <param name="GitDir">The repository's git directory, full path; two folders with the same one are in the same checkout.</param>
-public sealed record GitInfo(bool IsRepository, string? Branch, int? DirtyCount, string? GitDir = null);
+/// <param name="Head">The commit the checkout is at, the full hash (#426); null when git could not tell, or there is no commit yet.</param>
+public sealed record GitInfo(bool IsRepository, string? Branch, int? DirtyCount, string? GitDir = null, string? Head = null);
+
+/// <summary>A checkout's branch lacks commits its branch on GitHub has (#426).</summary>
+/// <param name="Commits">How many; null when only "behind" can be told (a shallow clone, commits of its own, no count from GitHub).</param>
+public sealed record GitBehind(int? Commits);
 
 /// <param name="Output">Stdout when the process exited with code 0; otherwise null.</param>
 /// <param name="TimedOut">The process was killed because it outlived the timeout.</param>
@@ -20,10 +27,16 @@ public sealed record ProcessRunResult(string? Output, bool TimedOut, int? Pid, i
     public bool DidNotStart => Pid is null && ExitCode is null && !TimedOut;
 }
 
-/// <summary>Cheap git facts for tiles: branch from HEAD (no process), dirty count from <c>git status --porcelain</c>.</summary>
+/// <summary>
+/// Cheap git facts for tiles: branch from HEAD (no process), dirty count and commit from one <c>git status --porcelain=v2</c>, and how
+/// far the checkout is behind a commit GitHub named (#426), without a fetch.
+/// </summary>
 public sealed class GitInspector
 {
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(5);
+
+    /// <summary>The status line that carries the commit; "(initial)" stands there before the first one.</summary>
+    private const string HeadLinePrefix = "# branch.oid ";
 
     /// <summary>Repositories using the reftable ref storage keep this placeholder in HEAD; only git can read the real ref.</summary>
     private const string ReftablePlaceholderBranch = ".invalid";
@@ -92,12 +105,61 @@ public sealed class GitInspector
             branch = await ReadBranchFromGitAsync(root, ct).ConfigureAwait(false);
         }
 
-        var status = await _runGit(root, "status --porcelain --untracked-files=normal", ct).ConfigureAwait(false);
-        int? dirty = status is null
-            ? null
-            : status.Split('\n', StringSplitOptions.RemoveEmptyEntries).Count(l => l.Trim('\r').Length > 0);
-        return new GitInfo(true, branch, dirty, Path.GetFullPath(gitDir));
+        // Format 2 with the branch header: the commit comes with the files, at no process of its own (#426). Its "# ..." lines are no
+        // files. Without the count against the upstream, which costs a walk nobody reads.
+        var status = await _runGit(root, "status --porcelain=v2 --branch --no-ahead-behind --untracked-files=normal", ct).ConfigureAwait(false);
+        var lines = status?.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.Trim('\r')).Where(l => l.Length > 0).ToList();
+        int? dirty = lines?.Count(l => !l.StartsWith('#'));
+        var head = lines?.FirstOrDefault(l => l.StartsWith(HeadLinePrefix, StringComparison.Ordinal))?[HeadLinePrefix.Length..].Trim();
+        return new GitInfo(true, branch, dirty, Path.GetFullPath(gitDir), IsFullHash(head) ? head : null);
     }
+
+    /// <summary>
+    /// How far the checkout at <paramref name="head"/> is behind <paramref name="onGitHub"/>, the commit GitHub has for its branch (#426);
+    /// null when it is not behind (it is at that commit, or holds it already: ahead, or GitHub was read before a pull) and when git did
+    /// not answer: a made-up "behind" would send the user pulling for nothing. Nothing is fetched. A commit that is here is counted by
+    /// git. One that is not is the usual case right after a merge on GitHub: then the branch is behind, and by the difference of the
+    /// two totals when it has nothing of its own (its upstream, as last fetched, holds it whole) and the clone is not shallow.
+    /// </summary>
+    /// <param name="head">The checkout's commit, as <see cref="GitInfo.Head"/> has it.</param>
+    /// <param name="commitsOnGitHub">How many commits GitHub's branch holds in all; null when it did not say.</param>
+    public async Task<GitBehind?> BehindAsync(string root, string? head, string onGitHub, int? commitsOnGitHub, CancellationToken ct)
+    {
+        // What GitHub sent goes on git's command line only as a full hash.
+        if (!IsFullHash(head) || !IsFullHash(onGitHub) || string.Equals(head, onGitHub, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        if (await _runGit(root, $"cat-file -e {onGitHub}^{{commit}}", ct).ConfigureAwait(false) is not null)
+        {
+            return Count(await _runGit(root, $"rev-list --count HEAD..{onGitHub}", ct).ConfigureAwait(false)) is > 0 and var missing ? new GitBehind(missing) : null;
+        }
+
+        // The commit is not here, or git does not answer at all: only a git that answers the next question says which.
+        var shallow = (await _runGit(root, "rev-parse --is-shallow-repository", ct).ConfigureAwait(false))?.Trim();
+        if (shallow is null)
+        {
+            return null;
+        }
+
+        if (shallow != "false" || commitsOnGitHub is not { } total
+            || Count(await _runGit(root, "rev-list --count @{upstream}..HEAD", ct).ConfigureAwait(false)) != 0
+            || Count(await _runGit(root, "rev-list --count HEAD", ct).ConfigureAwait(false)) is not { } here
+            || total <= here)
+        {
+            return new GitBehind(null);
+        }
+
+        return new GitBehind(total - here);
+    }
+
+    private static int? Count(string? output) =>
+        int.TryParse(output?.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var count) ? count : null;
+
+    /// <summary>A commit's full hash: 40 hex digits, or 64 in a SHA-256 repository.</summary>
+    private static bool IsFullHash([NotNullWhen(true)] string? text) =>
+        text is { Length: 40 or 64 } && text.All(char.IsAsciiHexDigit);
 
     /// <summary>
     /// The git directory of the repository <paramref name="folder"/> is in, full path as <see cref="GitInfo.GitDir"/> has

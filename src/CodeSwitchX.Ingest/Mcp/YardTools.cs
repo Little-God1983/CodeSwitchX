@@ -176,7 +176,7 @@ public sealed class YardTools(IYardDirectory yard, ChatAsks? asks = null, ChatSc
 }
 
 /// <param name="Number">The workspace's number, on its tile: the user may name the workspace by it ("chat 3").</param>
-/// <param name="Git">One line per repository: "main, clean", or "DiffusionNexus: main, 3 changed" on a tile with several.</param>
+/// <param name="Git">One line per repository: "main, clean", "main, 12 behind" (GitHub has commits the checkout lacks), or "DiffusionNexus: main, 3 changed" on a tile with several.</param>
 public sealed record WorkspaceView(int Number, string Name, string Track, IReadOnlyList<string> Folders, IReadOnlyList<string> Git, int ChatsNeedingYou,
     int ChatsWorking, int Chats)
 {

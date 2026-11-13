@@ -34,6 +34,12 @@ public partial class YardGitHubTests : IDisposable
 
         public int PullRequests { get; set; }
 
+        /// <summary>The default branch's newest commit on GitHub (#426); none is an answer without one.</summary>
+        public string? DefaultHead { get; set; }
+
+        /// <summary>How many commits the default branch holds on GitHub.</summary>
+        public int Commits { get; set; } = 1155;
+
         public bool Hang { get; set; }
 
         /// <summary>Every read comes back with no answer, as when gh is logged out or offline.</summary>
@@ -88,7 +94,8 @@ public partial class YardGitHubTests : IDisposable
                 return null;
             }
 
-            return "{\"data\":{\"repository\":{\"viewerPermission\":\"ADMIN\",\"defaultBranchRef\":{\"name\":\"main\"},"
+            var head = DefaultHead is null ? string.Empty : ",\"target\":{\"oid\":\"" + DefaultHead + "\",\"history\":{\"totalCount\":" + Commits + "}}";
+            return "{\"data\":{\"repository\":{\"viewerPermission\":\"ADMIN\",\"defaultBranchRef\":{\"name\":\"main\"" + head + "},"
                 + "\"issues\":{\"totalCount\":" + Issues + ",\"nodes\":[]},"
                 + "\"pullRequests\":{\"totalCount\":" + PullRequests + ",\"nodes\":[]}}}}";
         }

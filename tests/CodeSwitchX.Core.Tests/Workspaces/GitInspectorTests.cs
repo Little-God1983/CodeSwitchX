@@ -52,11 +52,134 @@ public class GitInspectorTests : IDisposable
     {
         Directory.CreateDirectory(Path.Combine(_root, ".git"));
         File.WriteAllText(Path.Combine(_root, ".git", "HEAD"), "ref: refs/heads/main\n");
-        var inspector = new GitInspector((_, args, _) => Task.FromResult<string?>(args.Contains("status") ? " M a.cs\n?? b.cs\n" : null));
+        var asked = new List<string>();
+        var inspector = new GitInspector((_, args, _) =>
+        {
+            asked.Add(args);
+            return Task.FromResult<string?>(args.Contains("status")
+                ? $"# branch.oid {Here}\n# branch.head main\n1 .M N... 100644 100644 100644 92cd 92cd a.cs\n? b.cs\n"
+                : null);
+        });
 
         var info = await inspector.InspectAsync(_root, CancellationToken.None);
 
-        info.ShouldBe(new GitInfo(true, "main", 2, Path.Combine(_root, ".git")), "the git directory tells folders of one checkout apart from another repository");
+        info.ShouldBe(new GitInfo(true, "main", 2, Path.Combine(_root, ".git"), Here), "the git directory tells folders of one checkout apart from another repository");
+        asked.ShouldBe(["status --porcelain=v2 --branch --no-ahead-behind --untracked-files=normal"], "the commit comes with the status, at no process of its own");
+    }
+
+    [Theory]
+    [InlineData("# branch.oid (initial)\n# branch.head main\n? a.cs\n", 1)]
+    [InlineData(" M a.cs\n", 1)]
+    [InlineData("", 0)]
+    public async Task A_status_without_a_commit_still_counts_the_files(string status, int dirty)
+    {
+        Directory.CreateDirectory(Path.Combine(_root, ".git"));
+        File.WriteAllText(Path.Combine(_root, ".git", "HEAD"), "ref: refs/heads/main\n");
+        var inspector = new GitInspector((_, _, _) => Task.FromResult<string?>(status));
+
+        var info = await inspector.InspectAsync(_root, CancellationToken.None);
+
+        info.DirtyCount.ShouldBe(dirty);
+        info.Head.ShouldBeNull();
+    }
+
+    private const string Here = "defa35d0aa11defa35d0aa11defa35d0aa11defa";
+
+    private const string OnGitHub = "7d6783b6e4ca65062d1ab6cdfe82e5b5f29e0728";
+
+    /// <summary>Git scripted by the start of its arguments; anything else fails, as a missing object or a git that does not answer does.</summary>
+    private static GitInspector Scripted(List<string> ran, params (string Start, string? Output)[] answers) =>
+        new((_, args, _) =>
+        {
+            ran.Add(args);
+            return Task.FromResult(answers.FirstOrDefault(a => args.StartsWith(a.Start, StringComparison.Ordinal)).Output);
+        });
+
+    [Fact]
+    public async Task A_checkout_at_GitHubs_commit_is_not_behind_and_asks_git_nothing()
+    {
+        var ran = new List<string>();
+
+        (await Scripted(ran).BehindAsync(_root, OnGitHub, OnGitHub.ToUpperInvariant(), 1155, CancellationToken.None)).ShouldBeNull();
+
+        ran.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task With_GitHubs_commit_fetched_git_counts_how_far_behind()
+    {
+        var ran = new List<string>();
+        var git = Scripted(ran, ("cat-file", string.Empty), ("rev-list", "12\n"));
+
+        (await git.BehindAsync(_root, Here, OnGitHub, 1155, CancellationToken.None)).ShouldBe(new GitBehind(12));
+
+        ran.ShouldBe([$"cat-file -e {OnGitHub}^{{commit}}", $"rev-list --count HEAD..{OnGitHub}"]);
+    }
+
+    [Fact]
+    public async Task A_checkout_that_holds_GitHubs_commit_already_is_not_behind()
+    {
+        // Ahead of GitHub, or GitHub was read before the pull: its commit is part of this branch.
+        var git = Scripted([], ("cat-file", string.Empty), ("rev-list", "0\n"));
+
+        (await git.BehindAsync(_root, Here, OnGitHub, 1155, CancellationToken.None)).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Without_GitHubs_commit_the_count_is_the_difference_of_the_two_totals()
+    {
+        // The usual case right after a merge on GitHub: nothing fetched it. The branch has nothing of its own, so GitHub's holds it whole.
+        var ran = new List<string>();
+        var git = Scripted(ran, ("rev-parse --is-shallow-repository", "false\n"), ("rev-list --count @{upstream}..HEAD", "0\n"), ("rev-list --count HEAD", "1143\n"));
+
+        (await git.BehindAsync(_root, Here, OnGitHub, 1155, CancellationToken.None)).ShouldBe(new GitBehind(12));
+
+        ran.ShouldBe([$"cat-file -e {OnGitHub}^{{commit}}", "rev-parse --is-shallow-repository", "rev-list --count @{upstream}..HEAD", "rev-list --count HEAD"]);
+    }
+
+    [Theory]
+    [InlineData("true\n", "0\n", "1143\n", 1155, "a shallow clone holds fewer commits than its branch has")]
+    [InlineData("false\n", "2\n", "1143\n", 1155, "commits of its own are not in GitHub's total")]
+    [InlineData("false\n", null, "1143\n", 1155, "no upstream to say the branch has nothing of its own")]
+    [InlineData("false\n", "0\n", null, 1155, "git did not count")]
+    [InlineData("false\n", "0\n", "1143\n", null, "GitHub did not count")]
+    [InlineData("false\n", "0\n", "1155\n", 1155, "the totals say level, the commits differ: the history was rewritten")]
+    [InlineData("false\n", "0\n", "1160\n", 1155, "more commits than GitHub has")]
+    public async Task Where_the_count_cannot_be_told_it_is_behind_without_a_number(string shallow, string? own, string? total, int? onGitHub, string why)
+    {
+        var git = Scripted([], ("rev-parse --is-shallow-repository", shallow), ("rev-list --count @{upstream}..HEAD", own), ("rev-list --count HEAD", total));
+
+        (await git.BehindAsync(_root, Here, OnGitHub, onGitHub, CancellationToken.None)).ShouldBe(new GitBehind(null), why);
+    }
+
+    [Fact]
+    public async Task A_git_that_does_not_answer_says_nothing_about_being_behind()
+    {
+        var git = Scripted([]);
+
+        (await git.BehindAsync(_root, Here, OnGitHub, 1155, CancellationToken.None)).ShouldBeNull("a made-up \"behind\" would send the user pulling for nothing");
+    }
+
+    [Fact]
+    public async Task A_count_git_could_not_make_says_nothing_about_being_behind()
+    {
+        var git = Scripted([], ("cat-file", string.Empty));
+
+        (await git.BehindAsync(_root, Here, OnGitHub, 1155, CancellationToken.None)).ShouldBeNull();
+    }
+
+    [Theory]
+    [InlineData(null, OnGitHub)]
+    [InlineData(Here, "7d6783b")]
+    [InlineData(Here, "7d6783b6e4ca65062d1ab6cdfe82e5b5f29e0728 --output=x")]
+    [InlineData(Here, "")]
+    public async Task Without_both_commits_in_full_nothing_is_asked(string? head, string onGitHub)
+    {
+        var ran = new List<string>();
+
+        (await Scripted(ran).BehindAsync(_root, head, onGitHub, 1155, CancellationToken.None)).ShouldBeNull();
+
+        ran.ShouldBeEmpty("what GitHub sent goes on git's command line only as a full hash");
     }
 
     [Fact]

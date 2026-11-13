@@ -37,9 +37,15 @@ public sealed record GitHubList(IReadOnlyList<GitHubItem> Items, int Skipped = 0
     public int TotalGiven(int known) => ReachedLimit ? Math.Max(known, Items.Count + Skipped) : Items.Count + Skipped;
 }
 
+/// <summary>A branch as GitHub has it (#426): what a checkout on it is compared with, without a fetch.</summary>
+/// <param name="Sha">Its newest commit, the full hash.</param>
+/// <param name="Commits">How many commits it holds in all, as <c>git rev-list --count</c> counts them; null when GitHub did not say.</param>
+public sealed record GitHubHead(string Sha, int? Commits);
+
 /// <param name="Account">The login that read it.</param>
 /// <param name="OpenIssues">The total of open issues, not the number of rows in <paramref name="NewestIssues"/>.</param>
 /// <param name="DefaultBranch">The branch GitHub calls the default: where pull requests merge into, and what the Yard pulls (#407). Null when the repository has none (an empty one) or it was not read.</param>
+/// <param name="DefaultHead">Where <paramref name="DefaultBranch"/> stood when this was read (#426): a checkout on it that lacks this commit is behind. Null when it was not read.</param>
 public sealed record RepoActivity(
     GitHubRepo Repo,
     string Account,
@@ -47,18 +53,20 @@ public sealed record RepoActivity(
     int OpenPullRequests,
     IReadOnlyList<GitHubItem> NewestIssues,
     IReadOnlyList<GitHubItem> NewestPullRequests,
-    string? DefaultBranch = null)
+    string? DefaultBranch = null,
+    GitHubHead? DefaultHead = null)
 {
     /// <summary>How many of the newest items a result keeps for the preview; the GraphQL read asks for the same number.</summary>
     public const int PreviewCount = 5;
 
-    /// <summary>Same repository, account, counts, previews and default branch; the lists are compared by content.</summary>
+    /// <summary>Same repository, account, counts, previews, default branch and where it stands; the lists are compared by content.</summary>
     public bool SameAs(RepoActivity other) =>
         Repo == other.Repo
         && Account == other.Account
         && OpenIssues == other.OpenIssues
         && OpenPullRequests == other.OpenPullRequests
         && DefaultBranch == other.DefaultBranch
+        && DefaultHead == other.DefaultHead
         && SameItems(NewestIssues, other.NewestIssues)
         && SameItems(NewestPullRequests, other.NewestPullRequests);
 
