@@ -598,6 +598,69 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         }
     }
 
+    /// <summary>
+    /// Asks the user what Exit does with the open VS Code windows (#420): the question and the line under it. Set by the main
+    /// window; null in tests that do not ask, which closes nothing.
+    /// </summary>
+    public Func<string, string, ExitChoice>? AskBeforeExit { get; set; }
+
+    private bool _exiting;
+
+    /// <summary>
+    /// Exit, from the Yard's bar and the tray (#420). With VS Code windows open it asks whether they close too; the window's
+    /// own X never asks and leaves them open.
+    /// </summary>
+    [RelayCommand]
+    private void Exit()
+    {
+        // The tray's menu stays live while the question is open: a second Exit would stack a second question over it.
+        if (_exiting)
+        {
+            return;
+        }
+
+        // Checked before asking: "Close all" must not close VS Code while CodeSwitchX itself stays (and launches no more).
+        if (Window is not { } window)
+        {
+            _logger.LogWarning("Not exiting: there is no window to close yet");
+            return;
+        }
+
+        _exiting = true;
+        try
+        {
+            var open = _host.OpenWorkspaces();
+            if (open.Count > 0)
+            {
+                if (AskBeforeExit is not { } ask)
+                {
+                    _logger.LogWarning("Not exiting: {Open} VS Code window(s) are open and there is no window to ask in", open.Count);
+                    return;
+                }
+
+                // Waiting for the user mid-turn counts too: closing VS Code cuts that turn off as well (as the Yard's pull guard counts).
+                var working = open.Count(id => Yard.FindTile(id) is { } tile && (tile.IsWorking || tile.NeedsAttention));
+                switch (ask(ExitQuestion.Question(open.Count, working), ExitQuestion.Detail(working)))
+                {
+                    case ExitChoice.CloseAll:
+                        var closed = _host.CloseAll();
+                        _logger.LogInformation("Exit: asked {Closed} VS Code window(s) to close", closed);
+                        break;
+                    case ExitChoice.CloseOnly:
+                        break;
+                    default:
+                        return;
+                }
+            }
+
+            window.Close();
+        }
+        finally
+        {
+            _exiting = false;
+        }
+    }
+
     /// <summary>The window, set by it once it is made; null before, and in tests that do not need one.</summary>
     public IShellWindow? Window { get; set; }
 

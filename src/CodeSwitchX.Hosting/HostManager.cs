@@ -618,17 +618,57 @@ public sealed class HostManager : IDisposable
     {
         lock (_gate)
         {
-            _released = true;
-            foreach (var hosted in _hosted.Values.Where(h => h.State == HostState.Running && _docker.IsAlive(h.Hwnd)))
-            {
-                _docker.Uncloak(hosted.Hwnd);
-                hosted.Visible = true;
-                hosted.TargetRect = null;
-            }
-
-            PublishShownLocked();
+            ReleaseLocked(OpenLocked());
         }
     }
+
+    private void ReleaseLocked(List<HostedWorkspace> open)
+    {
+        _released = true;
+        foreach (var hosted in open)
+        {
+            _docker.Uncloak(hosted.Hwnd);
+            hosted.Visible = true;
+            hosted.TargetRect = null;
+        }
+
+        PublishShownLocked();
+    }
+
+    /// <summary>
+    /// Exit's "Close all" (#420): every hosted window is shown again, as by <see cref="ReleaseAll"/>, and asked to close as by
+    /// its own X, so unsaved files are not lost (VS Code asks, or its hot exit keeps them); one that asks stays in sight. Returns how many
+    /// were asked. Only for an exit: after it nothing is launched or hidden any more, so the caller must be sure CodeSwitchX closes.
+    /// </summary>
+    public int CloseAll()
+    {
+        lock (_gate)
+        {
+            // One list for both: a window that dies between two checks would be released by one and closed by the other.
+            var open = OpenLocked();
+            ReleaseLocked(open);
+            foreach (var hosted in open)
+            {
+                _docker.Close(hosted.Hwnd);
+            }
+
+            return open.Count;
+        }
+    }
+
+    /// <summary>
+    /// The workspaces whose VS Code window is open: running, and the window still there. One the user closed by its own X
+    /// counts no more, though the liveness check has not marked it stopped yet (Exit's question counts these, #420).
+    /// </summary>
+    public IReadOnlyList<Guid> OpenWorkspaces()
+    {
+        lock (_gate)
+        {
+            return [.. OpenLocked().Select(h => h.WorkspaceId)];
+        }
+    }
+
+    private List<HostedWorkspace> OpenLocked() => [.. _hosted.Values.Where(h => h.State == HostState.Running && _docker.IsAlive(h.Hwnd))];
 
     /// <summary>
     /// Called from the WinEvent watcher when the user starts to drag or resize a window by its frame: a docked window

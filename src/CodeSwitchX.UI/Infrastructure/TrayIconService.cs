@@ -21,8 +21,8 @@ public sealed class TrayIconService
             WindowActivation.BringUp(window);
         }));
         menu.Items.Add(new Separator());
-        // Through the window, not a shutdown: closing it asks first while a chat Raven started is working.
-        menu.Items.Add(MenuItem("Exit", window.Close));
+        // The Yard's Exit (#420): it asks whether the VS Code windows close too, then closes through the window, not a shutdown.
+        menu.Items.Add(MenuItem("Exit", () => shell.ExitCommand.Execute(null)));
 
         _image = LoadAppIcon(TrayIconSize());
         _icon = new TaskbarIcon

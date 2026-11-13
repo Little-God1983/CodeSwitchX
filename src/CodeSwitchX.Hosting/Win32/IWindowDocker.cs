@@ -27,6 +27,12 @@ public interface IWindowDocker
     /// waiting for the window's thread. Nothing happens when the window is not in a drag or resize any more.
     /// </summary>
     void CancelMoveSize(nint hwnd);
+
+    /// <summary>
+    /// Asks the window to close, as a click on its own X does: VS Code asks about unsaved files (or keeps them by hot exit when it is its last window). Posted, never
+    /// awaited (#420).
+    /// </summary>
+    void Close(nint hwnd);
     bool IsAlive(nint hwnd);
 
     /// <summary>

@@ -160,6 +160,15 @@ public sealed class SnapWindowDocker : IWindowDocker
             && (info.flags & GUITHREADINFO_FLAGS.GUI_INMOVESIZE) != 0 && info.hwndMoveSize == h;
     }
 
+    /// <summary>Posted: CodeSwitchX exits right after, and a VS Code that asks to save must not hold it (#420).</summary>
+    public void Close(nint hwnd)
+    {
+        if (!PInvoke.PostMessage(new HWND(hwnd), PInvoke.WM_CLOSE, default, default))
+        {
+            _logger?.LogWarning("Windows refused to ask window {Hwnd} to close (error {Error}); it stays open", hwnd, Marshal.GetLastPInvokeError());
+        }
+    }
+
     public bool IsAlive(nint hwnd) => PInvoke.IsWindow(new HWND(hwnd));
 
     /// <summary>

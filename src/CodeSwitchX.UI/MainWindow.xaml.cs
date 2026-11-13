@@ -43,6 +43,7 @@ public partial class MainWindow : Window, IShellWindow
         // What Raven opens by voice comes to the front with the keyboard, past Windows' foreground lock (#224).
         shell.ForwardRequested += BringForwardAsAsked;
         shell.AskBeforeRemove = (workspace, cards) => Task.FromResult(RemoveWorkspaceWindow.Ask(this, workspace, cards));
+        shell.AskBeforeExit = (question, detail) => ExitWindow.Ask(this, question, detail);
         // The first use of the Raven panel: open at the start, Settings → Voice opens once the window shows.
         ContentRendered += (_, _) => shell.OfferVoiceSetup();
     }

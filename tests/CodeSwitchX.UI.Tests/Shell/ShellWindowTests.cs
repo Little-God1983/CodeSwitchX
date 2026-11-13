@@ -191,5 +191,7 @@ public sealed class ShellWindowTests
         }
 
         public nint Dialog { get; set; }
+
+        public void Close() => Calls.Add("close");
     }
 }
