@@ -10,8 +10,9 @@
     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
       <Button Content="Close all" Click="CloseAll" Margin="0,0,8,0" Padding="12,4"
               ToolTip="Closes CodeSwitchX and asks each of these VS Code windows to close" />
-      <!-- Enter takes the choice that loses nothing. -->
+      <!-- Enter takes the choice that loses nothing; the accent shows which one that is (Fluent draws IsDefault plain). -->
       <Button Content="Close only CodeSwitchX" Click="CloseOnly" Margin="0,0,8,0" Padding="12,4" IsDefault="True"
+              Style="{DynamicResource AccentButtonStyle}"
               ToolTip="Closes CodeSwitchX; the VS Code windows stay open on the desktop" />
       <Button Content="Cancel" Click="Cancel" Padding="12,4" IsCancel="True" />
     </StackPanel>
