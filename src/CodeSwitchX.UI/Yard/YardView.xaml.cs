@@ -9,6 +9,9 @@ namespace CodeSwitchX.UI.Yard;
 /// </summary>
 public partial class YardView : UserControl
 {
+    /// <summary>Marks the items <see cref="OnTileMenuOpened"/> put in, so the next opening takes them out first.</summary>
+    private static readonly object StableBuildItem = new();
+
     private IDataObject? _dragData;
     private string? _dragPath;
 
@@ -49,6 +52,40 @@ public partial class YardView : UserControl
     private void OnChatMenuOpening(object sender, ContextMenuEventArgs e) => ((sender as FrameworkElement)?.DataContext as ChatRowViewModel)?.MenuOpening();
 
     private void OnTileMenuClosing(object sender, ContextMenuEventArgs e) => (DataContext as YardViewModel)?.MenuOpen(false);
+
+    /// <summary>
+    /// A tile's menu opens (#423): its Build new version / Run entries go in above Unregister, made afresh, so a branch
+    /// switched or a shortcut written since the last opening counts. In code, because the list changes beside fixed items.
+    /// </summary>
+    private void OnTileMenuOpened(object sender, RoutedEventArgs e)
+    {
+        var menu = (ContextMenu)sender;
+        foreach (var old in menu.Items.OfType<Control>().Where(i => i.Tag == StableBuildItem).ToList())
+        {
+            menu.Items.Remove(old);
+        }
+
+        if (menu.DataContext is not WorkspaceTileViewModel tile || tile.StableBuildEntries() is not { Count: > 0 } entries)
+        {
+            return;
+        }
+
+        // Above the separator that sets Unregister apart.
+        var at = menu.Items.IndexOf(menu.Items.OfType<Separator>().Last());
+        menu.Items.Insert(at++, new Separator { Tag = StableBuildItem });
+        foreach (var entry in entries)
+        {
+            menu.Items.Insert(at++, Item(entry.BuildHeader, entry.BuildCommand, entry.BuildBlock));
+            menu.Items.Insert(at++, Item(entry.RunHeader, entry.RunCommand, entry.RunBlock));
+        }
+
+        static MenuItem Item(string header, System.Windows.Input.ICommand command, string? block)
+        {
+            var item = new MenuItem { Header = header, Command = command, IsEnabled = block is null, ToolTip = block, Tag = StableBuildItem };
+            ToolTipService.SetShowOnDisabled(item, true);
+            return item;
+        }
+    }
 
     private void OnDragOver(object sender, DragEventArgs e)
     {
