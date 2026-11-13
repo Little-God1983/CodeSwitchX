@@ -65,20 +65,32 @@ public sealed partial record StableBuildRepo(string RepoPath, string ShortcutNam
 
     /// <summary>
     /// The file's code without its comments (#425): a <c>#</c> line comment and a <c>&lt;# … #&gt;</c> block (they do not nest) give way,
-    /// so an assignment inside one is no setting. Quoted strings are stepped over, so a <c>#</c> or <c>&lt;#</c> inside one starts no
-    /// comment. Line breaks stay, so a setting after a comment still starts its line. Here-strings are not told apart: none of the
-    /// scripts has one.
+    /// so an assignment inside one is no setting. Quoted strings and here-strings are stepped over, so a <c>#</c> or <c>&lt;#</c> inside
+    /// one starts no comment, and neither does a <c>#</c> within a word or escaped with a backtick, as in PowerShell. Line breaks stay,
+    /// so a setting after a comment still starts its line.
     /// </summary>
     internal static string WithoutComments(string text)
     {
         var code = new StringBuilder(text.Length);
         var inBlock = false;
         var quote = '\0';
+        var hereString = '\0';
         for (var i = 0; i < text.Length; i++)
         {
             var c = text[i];
             var next = i + 1 < text.Length ? text[i + 1] : '\0';
-            if (inBlock)
+            if (hereString != '\0')
+            {
+                code.Append(c);
+                // It ends with its quote and @ at the start of a line.
+                if (c == '\n' && i + 2 < text.Length && text[i + 1] == hereString && text[i + 2] == '@')
+                {
+                    code.Append(hereString).Append('@');
+                    i += 2;
+                    hereString = '\0';
+                }
+            }
+            else if (inBlock)
             {
                 if (c == '#' && next == '>')
                 {
@@ -103,17 +115,28 @@ public sealed partial record StableBuildRepo(string RepoPath, string ShortcutNam
                     quote = '\0'; // a doubled quote closes and opens again
                 }
             }
+            else if (c == '@' && next is '\'' or '"' && LineEndsAfter(text, i + 2))
+            {
+                hereString = next;
+                code.Append(c).Append(next);
+                i++;
+            }
             else if (c is '\'' or '"')
             {
                 quote = c;
                 code.Append(c);
+            }
+            else if (c == '`' && next != '\0')
+            {
+                code.Append(c).Append(next); // an escaped character is no quote and no comment
+                i++;
             }
             else if (c == '<' && next == '#')
             {
                 inBlock = true;
                 i++;
             }
-            else if (c == '#')
+            else if (c == '#' && (i == 0 || char.IsWhiteSpace(text[i - 1]) || text[i - 1] is ';' or '(' or '{' or '|' or ','))
             {
                 while (i + 1 < text.Length && text[i + 1] != '\n')
                 {
@@ -127,6 +150,20 @@ public sealed partial record StableBuildRepo(string RepoPath, string ShortcutNam
         }
 
         return code.ToString();
+
+        // A here-string's opening is the last thing on its line, but for spaces.
+        static bool LineEndsAfter(string text, int at)
+        {
+            for (; at < text.Length && text[at] != '\n'; at++)
+            {
+                if (!char.IsWhiteSpace(text[at]))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
     }
 
     /// <summary>
@@ -266,25 +303,26 @@ public sealed partial class StableBuildEntry
     private readonly string _shortcutPath;
     private readonly IStableBuildLauncher _launcher;
     private readonly IYardDialogs _dialogs;
-    private readonly Func<Task<IReadOnlyList<GitLine>?>>? _freshLines;
+    private readonly GitLine _line;
+    private readonly Func<GitLine, Task<GitLine?>>? _freshLine;
 
     /// <param name="line">A line with stable-build scripts; its git state is what the precheck reads.</param>
     /// <param name="named">The tile has several such repositories: Build says which.</param>
-    /// <param name="run">The entry's Run (#425); by default as <paramref name="named"/> says.</param>
-    /// <param name="freshLines">Reads the tile's git again and gives its lines; null when it could not. Build checks them before it asks (#425).</param>
-    public StableBuildEntry(GitLine line, bool named, IStableBuildLauncher launcher, IYardDialogs dialogs, StableBuildRun? run = null,
-        Func<Task<IReadOnlyList<GitLine>?>>? freshLines = null)
+    /// <param name="run">The entry's Run (#425).</param>
+    /// <param name="freshLine">The line as git has it now; null when it could not be read. Build checks it before it asks (#425).</param>
+    public StableBuildEntry(GitLine line, bool named, StableBuildRun run, IStableBuildLauncher launcher, IYardDialogs dialogs, Func<GitLine, Task<GitLine?>>? freshLine = null)
     {
         var repo = line.StableBuild ?? throw new ArgumentException("The line has no stable-build scripts.", nameof(line));
         _repo = repo;
+        _line = line;
         _launcher = launcher;
         _dialogs = dialogs;
-        _freshLines = freshLines;
+        _freshLine = freshLine;
         var folder = Path.TrimEndingDirectorySeparator(repo.RepoPath);
         // The name the tile's line shows (a workspace file's label), else the folder's; a drive root has no folder name: "E:\".
         Name = line.Folder ?? (Path.GetFileName(folder) is { Length: > 0 } name ? name : folder);
         BuildHeader = named ? $"Build {Name}" : "Build new version";
-        RunHeader = (run ?? (named ? StableBuildRun.Named : StableBuildRun.Plain)) switch
+        RunHeader = run switch
         {
             StableBuildRun.Plain => "Run",
             StableBuildRun.Named => $"Run {Name}",
@@ -329,19 +367,21 @@ public sealed partial class StableBuildEntry
         }
     }
 
-    /// <summary>Why the repository cannot be built as its git stands now; null when it can, or a fresh read found nothing to say.</summary>
+    /// <summary>Why the repository cannot be built as it stands now; null when it can, or a fresh read found nothing to say.</summary>
     private async Task<string?> FreshBlockAsync()
     {
-        if (_freshLines is null || await _freshLines().ConfigureAwait(true) is not { } lines)
+        if (_freshLine is null || await _freshLine(_line).ConfigureAwait(true) is not { } line)
         {
             return null;
         }
 
-        var key = PathNormalizer.Normalize(_repo.RepoPath);
-        // A line git gave no state for says nothing new either.
-        return lines.FirstOrDefault(l => l.StableBuild is { } scripts && PathNormalizer.Normalize(scripts.RepoPath) == key) is { Branch: not null, DirtyCount: not null } line
-            ? StableBuildCheck.BuildBlock(line)
-            : null;
+        return line switch
+        {
+            // Not a repository right now (a share gone offline, git gave no state): nothing new either.
+            { IsRepository: false } or { Branch: null } or { DirtyCount: null } => null,
+            { StableBuild: null } => "its build scripts are not there any more",
+            _ => StableBuildCheck.BuildBlock(line),
+        };
     }
 
     [RelayCommand(CanExecute = nameof(CanRun))]

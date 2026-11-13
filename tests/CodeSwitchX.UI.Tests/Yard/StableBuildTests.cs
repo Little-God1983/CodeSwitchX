@@ -171,6 +171,21 @@ public class StableBuildTests : IDisposable
     }
 
     [Fact]
+    public void A_here_string_hides_neither_its_quote_nor_a_comment_after_it()
+    {
+        // An apostrophe inside a here-string must not leave a quote open, or a commented-out setting below it would count.
+        var repo = Repo(("build.ps1", "# build"), ("_common.ps1", "$script:ShortcutName = 'App.lnk'\n$help = @'\nDon't #edit\n'@\n# $script:ShortcutName = 'Old.lnk'\n"));
+
+        StableBuildRepo.Find(repo).ShouldNotBeNull().ShortcutName.ShouldBe("App.lnk");
+    }
+
+    [Fact]
+    public void A_hash_within_a_word_or_escaped_starts_no_comment()
+    {
+        StableBuildRepo.WithoutComments("$a = C:\\tools#1 `#tag # gone\n").ShouldBe("$a = C:\\tools#1 `#tag \n");
+    }
+
+    [Fact]
     public void Comments_go_and_line_breaks_stay()
     {
         StableBuildRepo.WithoutComments("a # one\nb <# two\nthree #> c\n'#' \"<#\" 'it''s'\n").ShouldBe("a \nb \n c\n'#' \"<#\" 'it''s'\n");

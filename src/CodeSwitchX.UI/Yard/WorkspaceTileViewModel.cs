@@ -493,8 +493,8 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
         var lines = GitLines.Where(l => l.StableBuild is not null).DistinctBy(l => PathNormalizer.Normalize(l.StableBuild!.RepoPath)).ToList();
         var shortcuts = new HashSet<string>(StringComparer.OrdinalIgnoreCase); // file names, as Windows compares them
         var named = lines.Select(l => l.StableBuild!.ShortcutName).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1 ? StableBuildRun.Named : StableBuildRun.Plain;
-        return [.. lines.Select(l => new StableBuildEntry(l, named: lines.Count > 1, _owner.StableBuilds, _owner.Dialogs,
-            run: shortcuts.Add(l.StableBuild!.ShortcutName) ? named : StableBuildRun.None, freshLines: () => _owner.ReadGitOfAsync(this)))];
+        return [.. lines.Select(l => new StableBuildEntry(l, named: lines.Count > 1, run: shortcuts.Add(l.StableBuild!.ShortcutName) ? named : StableBuildRun.None,
+            _owner.StableBuilds, _owner.Dialogs, _owner.FreshLineAsync))];
     }
 
     [RelayCommand]

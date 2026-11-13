@@ -74,7 +74,20 @@ public class StableBuildEntryTests : IDisposable
         _dialogs.Told.ShouldBe(["Not building app: On feature/x - a stable build runs from main or develop."]);
         _dialogs.Asked.ShouldBeEmpty("nothing to confirm");
         _launcher.Built.ShouldBeEmpty();
-        tile.GitLines.ShouldHaveSingleItem().Branch.ShouldBe("feature/x", "the tile shows what the press found");
+    }
+
+    [Fact]
+    public async Task Build_says_so_when_the_scripts_went_since_the_menu_opened()
+    {
+        var root = RepoOn("main");
+        var tile = Tile(root, (_, _, _) => Task.FromResult<string?>(string.Empty));
+        tile.ShowGit([Line(root)]);
+        File.Delete(Path.Combine(root, "scripts", "build.ps1"));
+
+        await tile.StableBuildEntries()[0].BuildCommand.ExecuteAsync(null);
+
+        _dialogs.Told.ShouldBe(["Not building app: its build scripts are not there any more."]);
+        _launcher.Built.ShouldBeEmpty();
     }
 
     [Fact]

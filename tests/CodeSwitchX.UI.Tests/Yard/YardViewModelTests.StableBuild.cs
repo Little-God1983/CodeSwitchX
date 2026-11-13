@@ -75,7 +75,7 @@ public partial class YardViewModelTests
         read.Clear();
 
         yard.RefreshGitOf(yard.FindTile(opened.Id)!);
-        await yard.CurrentTileGitRefresh;
+        await yard.FindTile(opened.Id)!.MenuGitRead!;
 
         read.ShouldBe(["opened"]);
     }
@@ -145,7 +145,7 @@ public partial class YardViewModelTests
         status = "? a.cs\n? b.cs\n? c.cs\n";                      // the user's edits land meanwhile
 
         yard.RefreshGitOf(yard.FindTile(app.Id)!);
-        await yard.CurrentTileGitRefresh;
+        await yard.FindTile(app.Id)!.MenuGitRead!;
         yard.FindTile(app.Id)!.GitLines[0].DirtyCount.ShouldBe(3);
         held.SetResult();
         await round;

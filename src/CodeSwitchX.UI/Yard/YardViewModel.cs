@@ -691,16 +691,13 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// </summary>
     public Task RefreshGitAsync(CancellationToken ct) => RequestGitRefresh(ct, again: true);
 
-    /// <summary>The last read of one tile's git <see cref="ReadGitOfAsync"/> started; tests await it.</summary>
-    internal Task CurrentTileGitRefresh { get; private set; } = Task.CompletedTask;
-
     /// <summary>A tile's menu opens with Build new version on it (#425): <see cref="ReadGitOfAsync"/>, not waited for.</summary>
     public void RefreshGitOf(WorkspaceTileViewModel tile) => _ = ReadGitOfAsync(tile);
 
     /// <summary>
-    /// Reads one tile's git now, beside any round that runs (#425): a tile's menu opens, or its Build is pressed, and the precheck must not
-    /// go by lines up to a round old (a branch switched a moment ago). Only its git: no worktree list, no GitHub. The tile shows the lines;
-    /// a round that started before this read cannot put older ones back. A read already under way for the tile is the one. UI thread.
+    /// Reads one tile's git now, beside any round that runs (#425): a tile's menu opens, and its Build entries must not go by lines up to a
+    /// round old (a branch switched a moment ago). Only its git: no worktree list, no GitHub. The tile shows the lines; a round that started
+    /// before this read cannot put older ones back. A read already under way for the tile is the one (open, Esc, open). UI thread.
     /// </summary>
     /// <returns>The lines the read found; null when it failed or the Yard closed.</returns>
     internal Task<IReadOnlyList<GitLine>?> ReadGitOfAsync(WorkspaceTileViewModel tile)
@@ -733,8 +730,40 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             }
         });
         tile.MenuGitRead = read;
-        CurrentTileGitRefresh = read;
         return read;
+    }
+
+    /// <summary>
+    /// <paramref name="line"/>'s repository as it is now, for a Build pressed (#425): its git, its scripts and how far it is behind, read
+    /// for that one repository and nothing else on the tile, so the answer comes quickly and from after the press. Null when it could not
+    /// be read, or the Yard closed.
+    /// </summary>
+    internal async Task<GitLine?> FreshLineAsync(GitLine line)
+    {
+        if (_disposed || line.StableBuild is not { } scripts)
+        {
+            return null;
+        }
+
+        try
+        {
+            var info = await _git.InspectAsync(scripts.RepoPath, _gitHubStop.Token).ConfigureAwait(false);
+            var fresh = line with
+            {
+                Branch = info.Branch, DirtyCount = info.DirtyCount, Head = info.Head, IsRepository = info.IsRepository, GitDir = info.GitDir,
+                StableBuild = StableBuildOf(info, [line]),
+            };
+            return (await WithBehindAsync([fresh], [line], _gitHubStop.Token).ConfigureAwait(false))[0];
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Reading {Folder} for its build failed", scripts.RepoPath);
+            return null;
+        }
     }
 
     /// <summary>Whether a round runs and whether another was asked for are decided under one lock, so a request never falls between a round's last look and its end.</summary>
