@@ -148,7 +148,7 @@ public class StableBuildTests : IDisposable
 
         using (new FileStream(common, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
         {
-            StableBuildRepo.Find(repo, before).ShouldBeSameAs(before, "an editor or a scanner holding the file is no reason to drop the entries (#425)");
+            StableBuildRepo.Find(repo, [before]).ShouldBeSameAs(before, "an editor or a scanner holding the file is no reason to drop the entries (#425)");
             StableBuildRepo.Find(repo).ShouldBeNull("with nothing found before, nothing is made up");
         }
     }
@@ -159,13 +159,45 @@ public class StableBuildTests : IDisposable
         var common = Path.Combine(Repo(("build.ps1", "# build"), ("_common.ps1", Common)), "scripts", "_common.ps1");
         var before = StableBuildRepo.Find(_root).ShouldNotBeNull();
         var written = File.GetLastWriteTimeUtc(common);
+        File.WriteAllText(common, Common.Replace("Some App.lnk", "Some Bpp.lnk"));
+        File.SetLastWriteTimeUtc(common, written);
+
+        StableBuildRepo.Find(_root, [before]).ShouldBeSameAs(before, "the same write time and size say the same text (#425)");
+
+        File.SetLastWriteTimeUtc(common, written.AddSeconds(5));
+        StableBuildRepo.Find(_root, [before]).ShouldNotBeNull().ShortcutName.ShouldBe("Some Bpp.lnk", "a file written since is read again");
+    }
+
+    [Fact]
+    public void A_common_file_of_another_size_is_read_again_whatever_its_write_time()
+    {
+        // A copy that keeps the original's time (a restore, an unzip) is still another text.
+        var common = Path.Combine(Repo(("build.ps1", "# build"), ("_common.ps1", Common)), "scripts", "_common.ps1");
+        var before = StableBuildRepo.Find(_root).ShouldNotBeNull();
+        var written = File.GetLastWriteTimeUtc(common);
         File.WriteAllText(common, "$script:ShortcutName = 'Other.lnk'\n");
         File.SetLastWriteTimeUtc(common, written);
 
-        StableBuildRepo.Find(_root, before).ShouldBeSameAs(before, "the same write time says the same text (#425)");
+        StableBuildRepo.Find(_root, [before]).ShouldNotBeNull().ShortcutName.ShouldBe("Other.lnk");
+    }
 
-        File.SetLastWriteTimeUtc(common, written.AddSeconds(5));
-        StableBuildRepo.Find(_root, before).ShouldNotBeNull().ShortcutName.ShouldBe("Other.lnk", "a file written since is read again");
+    [Fact]
+    public void A_block_comment_mark_inside_a_line_starts_no_comment()
+    {
+        // In a string or after a # it is no comment for PowerShell, and the settings below it are real.
+        var repo = Repo(("build.ps1", "# build"), ("_common.ps1", "# usage: build.ps1 <#args>\n$script:Marker = '<#'\n$script:ShortcutName = 'App.lnk'\n# done #>\n"));
+
+        StableBuildRepo.Find(repo).ShouldNotBeNull().ShortcutName.ShouldBe("App.lnk");
+    }
+
+    [Fact]
+    public void A_common_file_that_is_gone_keeps_nothing()
+    {
+        var repo = Repo(("build.ps1", "# build"), ("_common.ps1", Common));
+        var before = StableBuildRepo.Find(repo).ShouldNotBeNull();
+        File.Delete(Path.Combine(repo, "scripts", "_common.ps1"));
+
+        StableBuildRepo.Find(repo, [before]).ShouldBeNull("only a file held for a moment keeps the last round's scripts");
     }
 
     [Fact]
@@ -173,7 +205,7 @@ public class StableBuildTests : IDisposable
     {
         var before = new StableBuildRepo(Path.Combine(_root, "elsewhere"), "Else.lnk");
 
-        StableBuildRepo.Find(_root, before).ShouldBeNull("this folder has no scripts, whatever another one had");
+        StableBuildRepo.Find(_root, [before]).ShouldBeNull("this folder has no scripts, whatever another one had");
     }
 
     [Theory]

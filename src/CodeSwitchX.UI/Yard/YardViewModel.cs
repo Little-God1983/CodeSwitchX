@@ -691,21 +691,32 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// </summary>
     public Task RefreshGitAsync(CancellationToken ct) => RequestGitRefresh(ct, again: true);
 
-    /// <summary>The tile whose git the next round reads before the others' (#425); taken by that round. Under <see cref="_gitGate"/>.</summary>
-    private WorkspaceTileViewModel? _gitFirst;
+    /// <summary>The last read of one tile's git <see cref="RefreshGitOf"/> started; tests await it.</summary>
+    internal Task CurrentTileGitRefresh { get; private set; } = Task.CompletedTask;
 
     /// <summary>
-    /// A tile's menu opens with Build new version on it (#425): its git is read again now, ahead of the other tiles, so the precheck is
-    /// not up to a round old (a branch switched a moment ago). The menu takes the new entries when the round shows the lines.
+    /// A tile's menu opens with Build new version on it (#425): that tile's git is read now, beside any round that runs, so the
+    /// precheck is not up to a round old (a branch switched a moment ago). Only its git: no worktree list, no GitHub. The menu takes
+    /// the new entries when the lines show; a round that started before this read cannot put older lines back.
     /// </summary>
     public void RefreshGitOf(WorkspaceTileViewModel tile)
     {
-        lock (_gitGate)
+        if (_disposed)
         {
-            _gitFirst = tile;
+            return;
         }
 
-        _ = RequestGitRefresh(CancellationToken.None, again: true);
+        CurrentTileGitRefresh = Task.Run(async () =>
+        {
+            try
+            {
+                await RefreshGitAsync(tile, [], CancellationToken.None, worktrees: false).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "Git refresh of {Root} for its menu failed", tile.RootPath);
+            }
+        });
     }
 
     /// <summary>Whether a round runs and whether another was asked for are decided under one lock, so a request never falls between a round's last look and its end.</summary>
@@ -733,16 +744,6 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             do
             {
                 var tiles = await TilesOnUiThreadAsync().ConfigureAwait(false);
-                lock (_gitGate)
-                {
-                    if (_gitFirst is { } first && tiles.Remove(first))
-                    {
-                        tiles.Insert(0, first);
-                    }
-
-                    _gitFirst = null;
-                }
-
                 var pathsOf = new Dictionary<WorkspaceTileViewModel, List<string>>();
                 var shownBefore = tiles.ToDictionary(t => t, t => ShownFolders([t]));
                 foreach (var tile in tiles)
@@ -801,8 +802,11 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     }
 
     /// <param name="paths">Gets the folder of each line computed, before the lines are posted: the tile shows them later.</param>
-    private async Task RefreshGitAsync(WorkspaceTileViewModel tile, List<string> paths, CancellationToken ct)
+    /// <param name="worktrees">Also bring the tile's worktrees up to date, as a round does.</param>
+    private async Task RefreshGitAsync(WorkspaceTileViewModel tile, List<string> paths, CancellationToken ct, bool worktrees = true)
     {
+        // Taken before git is asked: of two reads of one tile, the one started later knows more, whichever ends first (#425).
+        var read = tile.StartGitRead();
         var info = await _git.InspectAsync(tile.RootPath, ct).ConfigureAwait(false);
         // Read once for both steps: the second tells the lines the first carried over by their instances.
         var previous = tile.GitLines;
@@ -811,14 +815,16 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         // The pills are taken from the GitHub side when the tile shows the lines, not before: a result stored meanwhile is not overwritten by an older one.
         _ui.Post(() =>
         {
-            tile.ShowGit(lines.Select(WithGitHub).ToList());
-            FollowPanelBranch();
+            if (tile.ShowGit(lines.Select(WithGitHub).ToList(), read))
+            {
+                FollowPanelBranch();
+            }
         });
 
         // A worktree added next to the repository after the registration is a child root from here on, so the chat started
         // in it lands on this tile within one refresh; a removed one stops being one. Git that fails to answer changes nothing.
         // The process runs only where git records a linked worktree, or one is registered and may have been removed.
-        if (!info.IsRepository || (tile.Workspace.Worktrees.Count == 0 && !_git.HasLinkedWorktrees(tile.RootPath)))
+        if (!worktrees || !info.IsRepository || (tile.Workspace.Worktrees.Count == 0 && !_git.HasLinkedWorktrees(tile.RootPath)))
         {
             return;
         }
@@ -1146,8 +1152,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             return null;
         }
 
-        var key = PathNormalizer.Normalize(top);
-        return StableBuildRepo.Find(top, previous.Select(l => l.StableBuild).FirstOrDefault(s => s is not null && PathNormalizer.Normalize(s.RepoPath) == key));
+        return StableBuildRepo.Find(top, previous.Select(l => l.StableBuild));
     }
 
     private async Task<(string? GitDir, bool Failed)> GitDirOfAsync(WorkspaceFolder folder, CancellationToken ct)

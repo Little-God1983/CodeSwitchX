@@ -51,9 +51,9 @@ public partial class YardViewModelTests
     }
 
     [Fact]
-    public async Task A_tile_whose_menu_opens_is_read_before_the_others()
+    public async Task A_tile_whose_menu_opens_is_read_at_once_and_alone()
     {
-        // The precheck reads the tile's lines, which can be up to a round old: its git is read again at once, first (#425).
+        // The precheck reads the tile's lines, which can be up to a round old: its git is read again at once, and only its (#425).
         var first = new Workspace { Name = "First", RootPath = Repo("first"), TrackId = _general.Id };
         var opened = new Workspace { Name = "Opened", RootPath = Repo("opened"), TrackId = _general.Id };
         _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([first, opened]));
@@ -75,15 +75,50 @@ public partial class YardViewModelTests
         read.Clear();
 
         yard.RefreshGitOf(yard.FindTile(opened.Id)!);
-        await yard.CurrentGitRefresh;
+        await yard.CurrentTileGitRefresh;
 
-        read.ShouldBe(["opened", "first"]);
-        read.Clear();
+        read.ShouldBe(["opened"]);
+    }
 
-        yard.RefreshGitOf(yard.FindTile(first.Id)!);
-        await yard.CurrentGitRefresh;
+    [Fact]
+    public async Task A_round_that_started_before_the_menus_read_does_not_put_older_lines_back()
+    {
+        var app = new Workspace { Name = "App", RootPath = Repo("app"), TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([app]));
+        var status = "";
+        TaskCompletionSource? gate = null;
+        var entered = new TaskCompletionSource();
+        var yard = Yard(async (_, args, _) =>
+        {
+            if (!args.StartsWith("status", StringComparison.Ordinal))
+            {
+                return string.Empty;
+            }
 
-        read.ShouldBe(["first", "opened"], "whichever tile the menu opened on goes first");
+            var answer = status; // what git sees as the call starts
+            if (Interlocked.Exchange(ref gate, null) is { } held)
+            {
+                entered.SetResult();
+                await held.Task;
+            }
+
+            return answer;
+        });
+        await yard.InitializeAsync(CancellationToken.None);
+        await yard.RefreshGitAsync(CancellationToken.None);
+        var held = new TaskCompletionSource();
+        gate = held;
+        var round = yard.RefreshGitAsync(CancellationToken.None); // reads "clean", and is held there
+        await entered.Task;
+        status = "? a.cs\n? b.cs\n? c.cs\n";                      // the user's edits land meanwhile
+
+        yard.RefreshGitOf(yard.FindTile(app.Id)!);
+        await yard.CurrentTileGitRefresh;
+        yard.FindTile(app.Id)!.GitLines[0].DirtyCount.ShouldBe(3);
+        held.SetResult();
+        await round;
+
+        yard.FindTile(app.Id)!.GitLines[0].DirtyCount.ShouldBe(3, "the round's read began before the menu's, so it knows less");
     }
 
     [Fact]

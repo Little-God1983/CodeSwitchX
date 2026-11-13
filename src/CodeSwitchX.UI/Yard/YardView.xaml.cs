@@ -71,34 +71,37 @@ public partial class YardView : UserControl
         }
 
         StopFollowingBuildMenu();
-        if (PutStableBuildItems(menu, tile.StableBuildEntries()) && DataContext is YardViewModel yard)
+        if (PutStableBuildItems(menu, tile.OpenBuildMenu()))
         {
             _buildMenu = (menu, tile);
             tile.PropertyChanged += OnBuildMenuTileChanged;
             menu.Closed += OnBuildMenuClosed;
-            yard.RefreshGitOf(tile);
         }
     }
 
-    /// <summary>The tile of the open menu shows a new git round: its entries are made again, if they say anything new.</summary>
+    /// <summary>
+    /// The tile of the open menu shows new git lines (#425): its entries are made again. The same headers keep their items, which only
+    /// take the new commands and tooltips, so the item under the pointer or the keyboard stays where it is.
+    /// </summary>
     private void OnBuildMenuTileChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(WorkspaceTileViewModel.GitLines) && _buildMenu is var (menu, tile) && menu.IsOpen)
+        if (e.PropertyName != nameof(WorkspaceTileViewModel.GitLines) || _buildMenu is not var (menu, tile) || !menu.IsOpen)
         {
-            var entries = tile.StableBuildEntries();
-            if (!entries.SelectMany(Look).SequenceEqual(menu.Items.OfType<MenuItem>().Where(i => i.Tag == StableBuildItem).Select(i => (i.Header, (object?)i.ToolTip, i.Command.CanExecute(null)))))
-            {
-                PutStableBuildItems(menu, entries);
-            }
+            return;
         }
 
-        static IEnumerable<(object Header, object? ToolTip, bool Enabled)> Look(StableBuildEntry entry)
+        var wanted = Items(tile.StableBuildEntries()).ToList();
+        var shown = menu.Items.OfType<MenuItem>().Where(i => i.Tag == StableBuildItem).ToList();
+        if (!wanted.Select(w => Header(w.Header)).SequenceEqual(shown.Select(i => i.Header as string)))
         {
-            yield return (Header(entry.BuildHeader), entry.BuildBlock, entry.CanBuild);
-            if (entry.RunHeader is { } run)
-            {
-                yield return (Header(run), entry.RunBlock, entry.CanRun);
-            }
+            PutStableBuildItems(menu, wanted);
+            return;
+        }
+
+        foreach (var (item, (_, command, block)) in shown.Zip(wanted))
+        {
+            item.Command = command;
+            item.ToolTip = block;
         }
     }
 
@@ -117,15 +120,30 @@ public partial class YardView : UserControl
     /// <summary>"__" shows a folder's underscore, which a header would otherwise take for an access key.</summary>
     private static string Header(string text) => text.Replace("_", "__");
 
-    /// <summary>The Build / Run items of <paramref name="entries"/> in place of the ones the menu has; false when there are none.</summary>
-    private static bool PutStableBuildItems(ContextMenu menu, IReadOnlyList<StableBuildEntry> entries)
+    /// <summary>The menu items the entries make, in order: each Build, and its Run where it has one.</summary>
+    private static IEnumerable<(string Header, System.Windows.Input.ICommand Command, string? Block)> Items(IEnumerable<StableBuildEntry> entries)
+    {
+        foreach (var entry in entries)
+        {
+            yield return (entry.BuildHeader, entry.BuildCommand, entry.BuildBlock);
+            if (entry.RunHeader is { } run)
+            {
+                yield return (run, entry.RunCommand, entry.RunBlock);
+            }
+        }
+    }
+
+    private static bool PutStableBuildItems(ContextMenu menu, IReadOnlyList<StableBuildEntry> entries) => PutStableBuildItems(menu, Items(entries).ToList());
+
+    /// <summary>The Build / Run items in place of the ones the menu has; false when there are none.</summary>
+    private static bool PutStableBuildItems(ContextMenu menu, IReadOnlyList<(string Header, System.Windows.Input.ICommand Command, string? Block)> items)
     {
         foreach (var old in menu.Items.OfType<Control>().Where(i => i.Tag == StableBuildItem).ToList())
         {
             menu.Items.Remove(old);
         }
 
-        if (entries.Count == 0)
+        if (items.Count == 0)
         {
             return false;
         }
@@ -133,13 +151,9 @@ public partial class YardView : UserControl
         // Above the separator that sets Unregister apart; at the end should the menu ever have none.
         var at = menu.Items.OfType<Separator>().LastOrDefault() is { } separator ? menu.Items.IndexOf(separator) : menu.Items.Count;
         menu.Items.Insert(at++, new Separator { Tag = StableBuildItem });
-        foreach (var entry in entries)
+        foreach (var (header, command, block) in items)
         {
-            menu.Items.Insert(at++, Item(entry.BuildHeader, entry.BuildCommand, entry.BuildBlock));
-            if (entry.RunHeader is { } run)
-            {
-                menu.Items.Insert(at++, Item(run, entry.RunCommand, entry.RunBlock));
-            }
+            menu.Items.Insert(at++, Item(header, command, block));
         }
 
         return true;

@@ -19,35 +19,40 @@ public sealed partial record StableBuildRepo(string RepoPath, string ShortcutNam
 {
     public string BuildScript => Path.Combine(RepoPath, "scripts", "build.ps1");
 
-    /// <summary>When <c>_common.ps1</c> was last written as of the read this was made from (#425): the same time again needs no new read.</summary>
-    public DateTime CommonWrittenAt { get; init; }
+    /// <summary>
+    /// <c>_common.ps1</c>'s write time and size as of the read this was made from (#425): the same two again need no new read. Part of
+    /// the record's equality on purpose: the line keeps what it was compared with, for the next round.
+    /// </summary>
+    public (DateTime WrittenAt, long Length) CommonStamp { get; init; }
 
     /// <summary>
     /// The scripts of the repository whose top is <paramref name="top"/> (git found it, <see cref="Core.Workspaces.GitInfo.Top"/>); null
-    /// when it has none. A lookup that goes wrong in any way must not cost the tile its git round: it gives what the last round found,
-    /// <paramref name="before"/>, as a read that fails for a moment (an editor or a scanner holds the file) says nothing new (#425).
+    /// when it has none. A lookup that goes wrong in any way must not cost the tile its git round. A read the file refuses for a moment
+    /// (an editor or a scanner holds it) says nothing new: it gives what the last round found there (#425).
     /// </summary>
-    /// <param name="before">The scripts the folder's line had after the last round; read again only when <c>_common.ps1</c> was written since.</param>
-    public static StableBuildRepo? Find(string top, StableBuildRepo? before = null)
+    /// <param name="known">The scripts the tile's lines had after the last round; the one at <paramref name="top"/> is used again while <c>_common.ps1</c> is not written since.</param>
+    public static StableBuildRepo? Find(string top, IEnumerable<StableBuildRepo?>? known = null)
     {
-        // What another repository had says nothing about this one.
-        var last = before is not null && PathNormalizer.Normalize(before.RepoPath) == PathNormalizer.Normalize(top) ? before : null;
+        StableBuildRepo? last = null;
         try
         {
+            // What another repository had says nothing about this one.
+            var key = PathNormalizer.Normalize(top);
+            last = known?.FirstOrDefault(s => s is not null && PathNormalizer.Normalize(s.RepoPath) == key);
             var scripts = Path.Combine(top, "scripts");
-            var common = Path.Combine(scripts, "_common.ps1");
-            if (!File.Exists(Path.Combine(scripts, "build.ps1")) || !File.Exists(common))
+            var common = new FileInfo(Path.Combine(scripts, "_common.ps1"));
+            if (!File.Exists(Path.Combine(scripts, "build.ps1")) || !common.Exists)
             {
                 return null;
             }
 
-            var written = File.GetLastWriteTimeUtc(common);
-            if (last is not null && last.CommonWrittenAt == written)
+            var stamp = (common.LastWriteTimeUtc, common.Length);
+            if (last is not null && last.CommonStamp == stamp)
             {
                 return last;
             }
 
-            var text = BlockComment().Replace(File.ReadAllText(common), string.Empty);
+            var text = BlockComment().Replace(File.ReadAllText(common.FullName), string.Empty);
             if (Setting(text, "ShortcutName") is not { } shortcut
                 || shortcut != Path.GetFileName(shortcut) || !shortcut.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase))
             {
@@ -55,11 +60,16 @@ public sealed partial record StableBuildRepo(string RepoPath, string ShortcutNam
                 return null;
             }
 
-            return new StableBuildRepo(top, shortcut, Setting(text, "ReleaseBranch")) { CommonWrittenAt = written };
+            return new StableBuildRepo(top, shortcut, Setting(text, "ReleaseBranch")) { CommonStamp = stamp };
+        }
+        catch (IOException ex) when (ex is not (FileNotFoundException or DirectoryNotFoundException))
+        {
+            // Held by another program for a moment. A file that is gone, or may not be read, has no scripts to offer.
+            return last;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return last;
+            return null;
         }
     }
 
@@ -84,8 +94,11 @@ public sealed partial record StableBuildRepo(string RepoPath, string ShortcutNam
         return value.Length > 0 && value.IndexOfAny(['$', '`']) < 0 ? value : null;
     }
 
-    /// <summary>A <c>&lt;# … #&gt;</c> block comment (#425): an assignment inside one is no setting. They do not nest.</summary>
-    [GeneratedRegex("<#.*?#>", RegexOptions.Singleline)]
+    /// <summary>
+    /// A <c>&lt;# … #&gt;</c> block comment (#425): an assignment inside one is no setting. They do not nest. Only one that starts a line:
+    /// a <c>&lt;#</c> inside a string or after a <c>#</c> starts none, and taking it for one would cut real settings out.
+    /// </summary>
+    [GeneratedRegex(@"^[ \t]*<#.*?#>", RegexOptions.Singleline | RegexOptions.Multiline)]
     private static partial Regex BlockComment();
 
     /// <summary><c>$script:Name = 'value'</c> or <c>"value"</c> at a line's start; PowerShell takes the scope in any casing.</summary>

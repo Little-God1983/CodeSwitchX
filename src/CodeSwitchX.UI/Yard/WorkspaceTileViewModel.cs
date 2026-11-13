@@ -118,6 +118,29 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
         }
     }
 
+    private long _gitReadsStarted;
+    private long _gitReadShown;
+
+    /// <summary>A read of this tile's git starts (#425): its number, for <see cref="ShowGit(IReadOnlyList{GitLine}, long)"/>. Any thread.</summary>
+    internal long StartGitRead() => Interlocked.Increment(ref _gitReadsStarted);
+
+    /// <summary>
+    /// Shows the lines of the read <paramref name="read"/>, unless one that started later is shown already (#425): a menu's read of one
+    /// tile runs beside the 30 s round, and the round's older lines must not put back what the menu's read found. UI thread.
+    /// </summary>
+    /// <returns>False when the lines were older than the ones shown, and left out.</returns>
+    internal bool ShowGit(IReadOnlyList<GitLine> lines, long read)
+    {
+        if (read < _gitReadShown)
+        {
+            return false;
+        }
+
+        _gitReadShown = read;
+        ShowGit(lines);
+        return true;
+    }
+
     /// <summary>Where a chat is in its turn (#287); a chat with neither has no turn running and none unseen.</summary>
     private enum Turn
     {
@@ -447,6 +470,21 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     /// scripts, in the order of the lines. Made afresh each time, so a shortcut the last build wrote counts at once. One Run per
     /// shortcut (#425): a checkout and a worktree of the same app build apart, but start the one app that is installed.
     /// </summary>
+    /// <summary>
+    /// The tile's menu opens (#425): its Build / Run entries as of now, and, where there are any, its git is read again at once, since
+    /// the lines the precheck reads can be a round old. The menu follows <see cref="GitLines"/> while it is open.
+    /// </summary>
+    public IReadOnlyList<StableBuildEntry> OpenBuildMenu()
+    {
+        var entries = StableBuildEntries();
+        if (entries.Count > 0)
+        {
+            _owner.RefreshGitOf(this);
+        }
+
+        return entries;
+    }
+
     public IReadOnlyList<StableBuildEntry> StableBuildEntries()
     {
         var lines = GitLines.Where(l => l.StableBuild is not null).DistinctBy(l => PathNormalizer.Normalize(l.StableBuild!.RepoPath)).ToList();
