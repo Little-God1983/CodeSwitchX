@@ -9,6 +9,9 @@ namespace CodeSwitchX.UI.Yard;
 /// </summary>
 public partial class YardView : UserControl
 {
+    /// <summary>Marks the items <see cref="OnTileContextMenuOpening"/> put in, so the next opening takes them out first.</summary>
+    private static readonly object StableBuildItem = new();
+
     private IDataObject? _dragData;
     private string? _dragPath;
 
@@ -49,6 +52,68 @@ public partial class YardView : UserControl
     private void OnChatMenuOpening(object sender, ContextMenuEventArgs e) => ((sender as FrameworkElement)?.DataContext as ChatRowViewModel)?.MenuOpening();
 
     private void OnTileMenuClosing(object sender, ContextMenuEventArgs e) => (DataContext as YardViewModel)?.MenuOpen(false);
+
+    /// <summary>
+    /// A tile's menu is about to open (#423): its Build new version / Run entries go in above Unregister, made afresh from the
+    /// tile's last git round (the state its lines show, up to one round old) and a shortcut written since counts at once.
+    /// Before the menu shows, so it does not grow on screen. In code, because the list changes beside fixed items. Not
+    /// handled: the board holds the tiles' order on it too.
+    /// </summary>
+    private void OnTileContextMenuOpening(object sender, ContextMenuEventArgs e)
+    {
+        if (sender is not FrameworkElement { ContextMenu: { } menu, DataContext: WorkspaceTileViewModel tile } || OpensAMenuOfItsOwn(e.OriginalSource, sender))
+        {
+            return;
+        }
+
+        foreach (var old in menu.Items.OfType<Control>().Where(i => i.Tag == StableBuildItem).ToList())
+        {
+            menu.Items.Remove(old);
+        }
+
+        if (tile.StableBuildEntries() is not { Count: > 0 } entries)
+        {
+            return;
+        }
+
+        // Above the separator that sets Unregister apart; at the end should the menu ever have none.
+        var at = menu.Items.OfType<Separator>().LastOrDefault() is { } separator ? menu.Items.IndexOf(separator) : menu.Items.Count;
+        menu.Items.Insert(at++, new Separator { Tag = StableBuildItem });
+        foreach (var entry in entries)
+        {
+            menu.Items.Insert(at++, Item(entry.BuildHeader, entry.BuildCommand, entry.BuildBlock));
+            menu.Items.Insert(at++, Item(entry.RunHeader, entry.RunCommand, entry.RunBlock));
+        }
+
+        // Enabled or not by the command's CanExecute; the tooltip says why on a greyed one. "__" shows a folder's underscore,
+        // which a header would otherwise take for an access key.
+        static MenuItem Item(string header, System.Windows.Input.ICommand command, string? block)
+        {
+            var item = new MenuItem { Header = header.Replace("_", "__"), Command = command, ToolTip = block, Tag = StableBuildItem };
+            ToolTipService.SetShowOnDisabled(item, true);
+            return item;
+        }
+    }
+
+    /// <summary>
+    /// The right-click was on something inside the tile with a menu of its own (a chat row): that menu opens, not the tile's,
+    /// so the tile's entries are not made for nothing. The event still bubbles up through the tile.
+    /// </summary>
+    private static bool OpensAMenuOfItsOwn(object source, object tile)
+    {
+        for (var node = source as DependencyObject; node is not null && !ReferenceEquals(node, tile); node = Parent(node))
+        {
+            if (node is FrameworkElement { ContextMenu: not null })
+            {
+                return true;
+            }
+        }
+
+        return false;
+
+        static DependencyObject? Parent(DependencyObject node) =>
+            node is System.Windows.Media.Visual or System.Windows.Media.Media3D.Visual3D ? System.Windows.Media.VisualTreeHelper.GetParent(node) : LogicalTreeHelper.GetParent(node);
+    }
 
     private void OnDragOver(object sender, DragEventArgs e)
     {

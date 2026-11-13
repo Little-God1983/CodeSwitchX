@@ -146,6 +146,12 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// <summary>What a chat row's right-click does (#386); null where the rows have no menu.</summary>
     internal IChatRowMenu? RowMenu { get; }
 
+    /// <summary>What the tiles' Build new version / Run entries start (#423).</summary>
+    internal IStableBuildLauncher StableBuilds { get; }
+
+    /// <summary>The Yard's questions to the user, the build's "are you sure" among them (#423).</summary>
+    internal IYardDialogs Dialogs { get; }
+
     private void Rearrange()
     {
         var now = Now;
@@ -290,9 +296,11 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         Func<string, TabConversation?>? writtenInAt = null, Func<IReadOnlyDictionary<string, bool>>? runningTabs = null,
         Func<CancellationToken, Task<IReadOnlyDictionary<Guid, DateTimeOffset>>>? storedLastUse = null, GitHubActivity? gitHub = null,
         GitHubReader? gitHubReader = null, GitHubBrowsers? gitHubBrowsers = null, ITextClipboard? clipboard = null, IChatRowMenu? rowMenu = null,
-        GitPuller? puller = null, GitHubMerger? merger = null)
+        GitPuller? puller = null, GitHubMerger? merger = null, IStableBuildLauncher? stableBuilds = null, IYardDialogs? dialogs = null)
     {
         RowMenu = rowMenu;
+        StableBuilds = stableBuilds ?? new StableBuildLauncher();
+        Dialogs = dialogs ?? new YardDialogs();
         GitJobs = new YardGitJobs(puller ?? new GitPuller(), ui, time, logger, merger);
         GitJobs.Ended += OnGitJobEnded;
         _gitHub = gitHub;
@@ -944,13 +952,20 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private async Task<IReadOnlyList<GitLine>> GitLinesAsync(WorkspaceTileViewModel tile, GitInfo root, CancellationToken ct)
     {
         var previous = tile.GitLines;
+        // The stable-build scripts (#423) are read where a line is made afresh: a line carried over keeps what it had, as its
+        // folder could not be checked (an offline share blocks every look for about 20 s). The root just answered git.
+        var rootStableBuild = root.IsRepository ? StableBuildRepo.Find(tile.RootPath) : null;
         var folders = tile.Workspace.WorkspaceFile is { } file ? WorkspaceProbe.FoldersOf(file) : [];
         if (folders is null)
         {
             // The root's own line is brought up to date where it leads; where repositories below the root took its place, they stay as they were.
             return previous[0].Path is { } first && PathNormalizer.Normalize(first) != PathNormalizer.Normalize(tile.RootPath)
                 ? previous
-                : [previous[0] with { Branch = root.Branch, DirtyCount = root.DirtyCount, Path = tile.RootPath, IsRepository = root.IsRepository, GitDir = root.GitDir }, .. previous.Skip(1)];
+                : [previous[0] with
+                {
+                    Branch = root.Branch, DirtyCount = root.DirtyCount, Path = tile.RootPath, IsRepository = root.IsRepository, GitDir = root.GitDir,
+                    StableBuild = rootStableBuild,
+                }, .. previous.Skip(1)];
         }
 
         var rootKey = PathNormalizer.Normalize(tile.RootPath);
@@ -960,7 +975,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             root.DirtyCount,
             tile.RootPath,
             IsRepository: root.IsRepository,
-            GitDir: root.GitDir);
+            GitDir: root.GitDir,
+            StableBuild: rootStableBuild);
         var others = folders.Where(f => PathNormalizer.Normalize(f.Path) != rootKey).ToList();
 
         // Each folder's git directory first, which reads a file or two, so git status runs once per checkout, not once per
@@ -1032,7 +1048,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             try
             {
                 var info = await _git.InspectAsync(folder.Path, ct).ConfigureAwait(false);
-                return new GitLine(folder.Label, info.Branch, info.DirtyCount, folder.Path, IsRepository: info.IsRepository, GitDir: info.GitDir);
+                return new GitLine(folder.Label, info.Branch, info.DirtyCount, folder.Path, IsRepository: info.IsRepository, GitDir: info.GitDir,
+                    StableBuild: info.IsRepository ? StableBuildRepo.Find(folder.Path) : null);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

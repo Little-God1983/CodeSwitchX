@@ -135,11 +135,13 @@
       <Border x:Name="TileBorder" Margin="8" Padding="12" CornerRadius="10" BorderThickness="2"
               Width="{Binding DataContext.TileWidth, RelativeSource={RelativeSource AncestorType=yard:YardView}}"
               MinHeight="{Binding DataContext.TileMinHeight, RelativeSource={RelativeSource AncestorType=yard:YardView}}"
-              Background="{DynamicResource CardBackgroundFillColorDefaultBrush}" Cursor="Hand">
+              Background="{DynamicResource CardBackgroundFillColorDefaultBrush}" Cursor="Hand"
+              ContextMenuOpening="OnTileContextMenuOpening">
         <Border.InputBindings>
           <MouseBinding MouseAction="LeftClick" Command="{Binding OpenCommand}" />
         </Border.InputBindings>
         <Border.ContextMenu>
+          <!-- Build new version / Run (#423) are put in before the menu opens: one pair per repository with the stable-build scripts -->
           <ContextMenu>
             <MenuItem Header="Open" Command="{Binding OpenCommand}" />
             <MenuItem Header="Reveal in Explorer" Command="{Binding RevealInExplorerCommand}" />
