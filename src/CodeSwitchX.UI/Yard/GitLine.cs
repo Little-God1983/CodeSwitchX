@@ -52,23 +52,24 @@ public sealed record GitLine(string? Folder, string? Branch, int? DirtyCount, st
 
     /// <summary>
     /// What <paramref name="before"/>, this folder's line as last shown, holds answers for this line too: the same commit here, the same
-    /// commit on GitHub. Git is then not asked again, round after round. A "behind" without a count is asked again: the count may be
-    /// there now.
+    /// commit on GitHub. Git is then not asked again, round after round: the same two commits give the same answer, and counting a
+    /// large history every 30 s would hold up the round.
     /// </summary>
-    internal bool IsAnsweredBy([NotNullWhen(true)] GitLine? before, string onGitHub) =>
-        SameCommitsAs(before, onGitHub) && before!.Behind is not { Commits: null };
+    internal bool IsAnsweredBy([NotNullWhen(true)] GitLine? before, string onGitHub) => SameCommitsAs(before, onGitHub);
 
     /// <summary>
     /// The line with git's answer against <paramref name="onGitHub"/>. An answer git did not give keeps what <paramref name="before"/>
-    /// knew of the same two commits ("12 behind" does not turn "clean" because git ran out of time once), and otherwise leaves the line
-    /// not compared, to be asked again next round.
+    /// knew of the same two commits ("12 behind" does not turn "clean" because git ran out of time once). Where GitHub's commit moved on
+    /// meanwhile, a checkout that was behind and has not moved still is, by a count nobody knows. Otherwise, and in that case too, the
+    /// line is left not compared, to be asked again next round.
     /// </summary>
     internal GitLine WithBehind(BehindAnswer answer, GitLine? before, string onGitHub) =>
         answer.Known ? this with { Behind = answer.Behind, BehindAgainst = onGitHub }
-        : SameCommitsAs(before, onGitHub) ? this with { Behind = before!.Behind, BehindAgainst = onGitHub }
+        : SameCommitsAs(before, onGitHub) ? this with { Behind = before.Behind, BehindAgainst = onGitHub }
+        : before is { Behind: not null } && before.Head == Head ? this with { Behind = new GitBehind(null), BehindAgainst = null }
         : this with { Behind = null, BehindAgainst = null };
 
-    private bool SameCommitsAs(GitLine? before, string onGitHub) => before is not null && before.Head == Head && before.BehindAgainst == onGitHub;
+    private bool SameCommitsAs([NotNullWhen(true)] GitLine? before, string onGitHub) => before is not null && before.Head == Head && before.BehindAgainst == onGitHub;
 
     /// <summary>The state pill: "clean" or "3 changed". A line that is behind GitHub is not clean (#426), so it has none for no changed files.</summary>
     public string? GitStateLabel => Label(DirtyCount, Behind is not null);

@@ -99,11 +99,22 @@ public class GitLineTests
     [Fact]
     public void An_answer_git_did_not_give_for_other_commits_leaves_the_line_not_compared()
     {
+        Compared(null).WithBehind(BehindAnswer.Unknown, Compared("old"), "new").ShouldBe(Compared(null), "it was not behind the old commit: nothing is known of the new one");
+        Compared(null, head: "moved").WithBehind(BehindAnswer.Unknown, Compared("new") with { Behind = new GitBehind(12) }, "new").ShouldBe(Compared(null, head: "moved"), "the checkout moved: it may have pulled");
+        Compared(null).WithBehind(BehindAnswer.Unknown, null, "new").ShouldBe(Compared(null));
+    }
+
+    [Fact]
+    public void A_checkout_that_was_behind_and_has_not_moved_is_still_behind_when_GitHub_moved_on_and_git_does_not_answer()
+    {
+        // "12 behind" must not turn "clean", and Build new version open up, because a commit landed on GitHub while git was slow (review of #426).
         var before = Compared("old") with { Behind = new GitBehind(12) };
 
-        Compared(null).WithBehind(BehindAnswer.Unknown, before, "new").ShouldBe(Compared(null), "asked again next round");
-        Compared(null, head: "moved").WithBehind(BehindAnswer.Unknown, Compared("new") with { Behind = new GitBehind(12) }, "new").BehindAgainst.ShouldBeNull();
-        Compared(null).WithBehind(BehindAnswer.Unknown, null, "new").ShouldBe(Compared(null));
+        var line = Compared(null).WithBehind(BehindAnswer.Unknown, before, "new");
+
+        line.Behind.ShouldBe(new GitBehind(null), "how far, nobody knows now");
+        line.BehindAgainst.ShouldBeNull("asked again next round");
+        line.BehindLabel.ShouldBe("behind");
     }
 
     [Fact]
@@ -122,7 +133,7 @@ public class GitLineTests
         Compared(null).IsAnsweredBy(Compared("new"), "new").ShouldBeTrue("not behind is an answer too");
         Compared(null).IsAnsweredBy(Compared("old"), "new").ShouldBeFalse("GitHub's commit moved");
         Compared(null, head: "moved").IsAnsweredBy(Compared("new"), "new").ShouldBeFalse("the checkout's commit moved");
-        Compared(null).IsAnsweredBy(Compared("new") with { Behind = new GitBehind(null) }, "new").ShouldBeFalse("the count may be there now");
+        Compared(null).IsAnsweredBy(Compared("new") with { Behind = new GitBehind(null) }, "new").ShouldBeTrue("behind without a count is an answer too");
         Compared(null).IsAnsweredBy(null, "new").ShouldBeFalse();
     }
 

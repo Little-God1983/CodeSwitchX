@@ -112,11 +112,22 @@ public class GitInspectorTests : IDisposable
     public async Task With_GitHubs_commit_fetched_git_counts_how_far_behind()
     {
         var ran = new List<string>();
-        var git = Scripted(ran, (Probe, OnGitHub + "\n"), ("rev-list --count", "12\n"));
+        var git = Scripted(ran, (Probe, OnGitHub + "\n"), ("rev-list --count", "12\n"), ("rev-parse --is-shallow-repository", "false\n"));
 
         (await git.BehindAsync(_root, Here, OnGitHub, 1155, CancellationToken.None)).ShouldBe(BehindAnswer.Of(new GitBehind(12)));
 
-        ran.ShouldBe([$"{Probe} {OnGitHub}", $"rev-list --count HEAD..{OnGitHub}"]);
+        ran.ShouldBe([$"{Probe} {OnGitHub}", $"rev-list --count HEAD..{OnGitHub}", "rev-parse --is-shallow-repository"]);
+    }
+
+    [Theory]
+    [InlineData("true\n")]
+    [InlineData(null)]
+    public async Task In_a_shallow_clone_a_fetched_commit_says_behind_without_a_number(string? shallow)
+    {
+        // Fetched with --depth 1, GitHub's commit has no parents here: git would count 1 where GitHub is 12 ahead (review of #426).
+        var git = Scripted([], (Probe, OnGitHub + "\n"), ("rev-list --count", "1\n"), ("rev-parse --is-shallow-repository", shallow));
+
+        (await git.BehindAsync(_root, Here, OnGitHub, 1155, CancellationToken.None)).ShouldBe(BehindAnswer.Of(new GitBehind(null)));
     }
 
     [Fact]

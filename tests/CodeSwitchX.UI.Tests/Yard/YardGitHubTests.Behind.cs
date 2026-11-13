@@ -22,6 +22,7 @@ public partial class YardGitHubTests
         return args.StartsWith("status", StringComparison.Ordinal) ? $"# branch.oid {head}\n# branch.head main\n"
             : args.StartsWith("rev-list --no-walk", StringComparison.Ordinal) ? args[(args.LastIndexOf(' ') + 1)..] + "\n"
             : args.StartsWith("rev-list --count HEAD..", StringComparison.Ordinal) ? $"{behind}\n"
+            : args.StartsWith("rev-parse --is-shallow-repository", StringComparison.Ordinal) ? "false\n"
             : string.Empty;
     };
 

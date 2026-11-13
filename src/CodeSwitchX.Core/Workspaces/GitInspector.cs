@@ -161,16 +161,20 @@ public sealed class GitInspector
 
         if (here.Length > 0)
         {
-            return Count(await _runGit(root, $"rev-list --count HEAD..{onGitHub}", ct).ConfigureAwait(false)) switch
+            switch (Count(await _runGit(root, $"rev-list --count HEAD..{onGitHub}", ct).ConfigureAwait(false)))
             {
-                null => BehindAnswer.Unknown,
-                0 => BehindAnswer.NotBehind,
-                var missing => BehindAnswer.Of(new GitBehind(missing)),
-            };
+                case null:
+                    return BehindAnswer.Unknown;
+                case 0:
+                    return BehindAnswer.NotBehind;
+                case var missing:
+                    // A shallow clone's history is cut off, and git counts only up to the cut: behind, by a count nobody knows.
+                    return BehindAnswer.Of(new GitBehind(await IsCompleteAsync(root, ct).ConfigureAwait(false) ? missing : null));
+            }
         }
 
         // GitHub has a commit this checkout lacks: behind. The count is an extra, and whatever fails from here on only costs the count.
-        if ((await _runGit(root, "rev-parse --is-shallow-repository", ct).ConfigureAwait(false))?.Trim() != "false"
+        if (!await IsCompleteAsync(root, ct).ConfigureAwait(false)
             || commitsOnGitHub is not { } total
             || Count(await _runGit(root, "rev-list --count @{upstream}..HEAD", ct).ConfigureAwait(false)) != 0
             || Count(await _runGit(root, "rev-list --count HEAD", ct).ConfigureAwait(false)) is not { } local
@@ -181,6 +185,10 @@ public sealed class GitInspector
 
         return BehindAnswer.Of(new GitBehind(total - local));
     }
+
+    /// <summary>Git says the clone holds its whole history: not a shallow one. No answer is not a yes.</summary>
+    private async Task<bool> IsCompleteAsync(string root, CancellationToken ct) =>
+        (await _runGit(root, "rev-parse --is-shallow-repository", ct).ConfigureAwait(false))?.Trim() == "false";
 
     /// <summary>What <c>git rev-list --count</c> printed, as a number; null when it printed none.</summary>
     internal static int? Count(string? output) =>
