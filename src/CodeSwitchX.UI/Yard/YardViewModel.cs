@@ -769,7 +769,10 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private async Task RefreshGitAsync(WorkspaceTileViewModel tile, List<string> paths, CancellationToken ct)
     {
         var info = await _git.InspectAsync(tile.RootPath, ct).ConfigureAwait(false);
-        var lines = await GitLinesAsync(tile, info, ct).ConfigureAwait(false);
+        // Every line, however GitLinesAsync came by it, looks for the stable-build scripts afresh: they come and go with a branch (#423).
+        var lines = (await GitLinesAsync(tile, info, ct).ConfigureAwait(false))
+            .Select(l => l with { StableBuild = HasRepository(l) && l.Path is { } path ? StableBuildRepo.Find(path) : null })
+            .ToList();
         paths.AddRange(lines.Where(HasRepository).Select(l => l.Path).OfType<string>());
         // The pills are taken from the GitHub side when the tile shows the lines, not before: a result stored meanwhile is not overwritten by an older one.
         _ui.Post(() =>
