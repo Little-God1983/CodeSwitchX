@@ -142,52 +142,38 @@ public class StableBuildTests : IDisposable
     public void A_common_file_that_cannot_be_read_for_a_moment_keeps_what_was_found_before()
     {
         var repo = Repo(("build.ps1", "# build"), ("_common.ps1", Common));
-        var common = Path.Combine(repo, "scripts", "_common.ps1");
         var before = StableBuildRepo.Find(repo).ShouldNotBeNull();
-        File.SetLastWriteTimeUtc(common, File.GetLastWriteTimeUtc(common).AddSeconds(5));
+        var other = new StableBuildRepo(Path.Combine(_root, "elsewhere"), "Else.lnk");
 
-        using (new FileStream(common, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        using (new FileStream(Path.Combine(repo, "scripts", "_common.ps1"), FileMode.Open, FileAccess.ReadWrite, FileShare.None))
         {
-            StableBuildRepo.Find(repo, [before]).ShouldBeSameAs(before, "an editor or a scanner holding the file is no reason to drop the entries (#425)");
+            StableBuildRepo.Find(repo, [other, before]).ShouldBeSameAs(before, "an editor or a scanner holding the file is no reason to drop the entries (#425)");
             StableBuildRepo.Find(repo).ShouldBeNull("with nothing found before, nothing is made up");
+            StableBuildRepo.Find(repo, [other]).ShouldBeNull("what another repository had says nothing about this one");
         }
-    }
-
-    [Fact]
-    public void A_common_file_not_written_since_is_not_read_again()
-    {
-        var common = Path.Combine(Repo(("build.ps1", "# build"), ("_common.ps1", Common)), "scripts", "_common.ps1");
-        var before = StableBuildRepo.Find(_root).ShouldNotBeNull();
-        var written = File.GetLastWriteTimeUtc(common);
-        File.WriteAllText(common, Common.Replace("Some App.lnk", "Some Bpp.lnk"));
-        File.SetLastWriteTimeUtc(common, written);
-
-        StableBuildRepo.Find(_root, [before]).ShouldBeSameAs(before, "the same write time and size say the same text (#425)");
-
-        File.SetLastWriteTimeUtc(common, written.AddSeconds(5));
-        StableBuildRepo.Find(_root, [before]).ShouldNotBeNull().ShortcutName.ShouldBe("Some Bpp.lnk", "a file written since is read again");
-    }
-
-    [Fact]
-    public void A_common_file_of_another_size_is_read_again_whatever_its_write_time()
-    {
-        // A copy that keeps the original's time (a restore, an unzip) is still another text.
-        var common = Path.Combine(Repo(("build.ps1", "# build"), ("_common.ps1", Common)), "scripts", "_common.ps1");
-        var before = StableBuildRepo.Find(_root).ShouldNotBeNull();
-        var written = File.GetLastWriteTimeUtc(common);
-        File.WriteAllText(common, "$script:ShortcutName = 'Other.lnk'\n");
-        File.SetLastWriteTimeUtc(common, written);
-
-        StableBuildRepo.Find(_root, [before]).ShouldNotBeNull().ShortcutName.ShouldBe("Other.lnk");
     }
 
     [Fact]
     public void A_block_comment_mark_inside_a_line_starts_no_comment()
     {
         // In a string or after a # it is no comment for PowerShell, and the settings below it are real.
-        var repo = Repo(("build.ps1", "# build"), ("_common.ps1", "# usage: build.ps1 <#args>\n$script:Marker = '<#'\n$script:ShortcutName = 'App.lnk'\n# done #>\n"));
+        var repo = Repo(("build.ps1", "# build"), ("_common.ps1", "# usage: build.ps1 <#args>\n$script:Marker = '<#'\n$script:Other = \"a`\"<#\"\n$script:ShortcutName = 'App.lnk'\n# done #>\n"));
 
         StableBuildRepo.Find(repo).ShouldNotBeNull().ShortcutName.ShouldBe("App.lnk");
+    }
+
+    [Fact]
+    public void A_block_comment_opened_after_code_hides_the_lines_up_to_its_end()
+    {
+        var repo = Repo(("build.ps1", "# build"), ("_common.ps1", "$script:ShortcutName = 'App.lnk'\n$x = 1 <#\n$script:ReleaseBranch = 'develop'\n#> $script:Late = 'x'\n"));
+
+        StableBuildRepo.Find(repo).ShouldNotBeNull().ReleaseBranch.ShouldBeNull("PowerShell never runs it");
+    }
+
+    [Fact]
+    public void Comments_go_and_line_breaks_stay()
+    {
+        StableBuildRepo.WithoutComments("a # one\nb <# two\nthree #> c\n'#' \"<#\" 'it''s'\n").ShouldBe("a \nb \n c\n'#' \"<#\" 'it''s'\n");
     }
 
     [Fact]
@@ -198,14 +184,6 @@ public class StableBuildTests : IDisposable
         File.Delete(Path.Combine(repo, "scripts", "_common.ps1"));
 
         StableBuildRepo.Find(repo, [before]).ShouldBeNull("only a file held for a moment keeps the last round's scripts");
-    }
-
-    [Fact]
-    public void What_another_repository_had_is_not_taken()
-    {
-        var before = new StableBuildRepo(Path.Combine(_root, "elsewhere"), "Else.lnk");
-
-        StableBuildRepo.Find(_root, [before]).ShouldBeNull("this folder has no scripts, whatever another one had");
     }
 
     [Theory]

@@ -466,11 +466,6 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     private void Open() => _owner.RequestOpen(Id);
 
     /// <summary>
-    /// The Build new version / Run entries for the menu that opens now (#423): one per repository with the stable-build
-    /// scripts, in the order of the lines. Made afresh each time, so a shortcut the last build wrote counts at once. One Run per
-    /// shortcut (#425): a checkout and a worktree of the same app build apart, but start the one app that is installed.
-    /// </summary>
-    /// <summary>
     /// The tile's menu opens (#425): its Build / Run entries as of now, and, where there are any, its git is read again at once, since
     /// the lines the precheck reads can be a round old. The menu follows <see cref="GitLines"/> while it is open.
     /// </summary>
@@ -485,13 +480,21 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
         return entries;
     }
 
+    /// <summary>The read of this tile's git a menu started, while it runs: a menu opened again, or Build pressed, waits for it (#425). UI thread.</summary>
+    internal Task<IReadOnlyList<GitLine>?>? MenuGitRead { get; set; }
+
+    /// <summary>
+    /// The Build new version / Run entries for the menu that opens now (#423): one per repository with the stable-build
+    /// scripts, in the order of the lines. Made afresh each time, so a shortcut the last build wrote counts at once. One Run per
+    /// shortcut (#425): a checkout and a worktree of the same app build apart, but start the one app that is installed.
+    /// </summary>
     public IReadOnlyList<StableBuildEntry> StableBuildEntries()
     {
         var lines = GitLines.Where(l => l.StableBuild is not null).DistinctBy(l => PathNormalizer.Normalize(l.StableBuild!.RepoPath)).ToList();
         var shortcuts = new HashSet<string>(StringComparer.OrdinalIgnoreCase); // file names, as Windows compares them
-        var runNamed = lines.Select(l => l.StableBuild!.ShortcutName).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1;
+        var named = lines.Select(l => l.StableBuild!.ShortcutName).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1 ? StableBuildRun.Named : StableBuildRun.Plain;
         return [.. lines.Select(l => new StableBuildEntry(l, named: lines.Count > 1, _owner.StableBuilds, _owner.Dialogs,
-            run: shortcuts.Add(l.StableBuild!.ShortcutName), runNamed: runNamed))];
+            run: shortcuts.Add(l.StableBuild!.ShortcutName) ? named : StableBuildRun.None, freshLines: () => _owner.ReadGitOfAsync(this)))];
     }
 
     [RelayCommand]

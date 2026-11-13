@@ -81,6 +81,38 @@ public partial class YardViewModelTests
     }
 
     [Fact]
+    public async Task A_menu_opened_again_while_its_read_runs_starts_no_second_one()
+    {
+        var app = new Workspace { Name = "App", RootPath = Repo("app"), TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([app]));
+        var reads = 0;
+        var hold = false;
+        var held = new TaskCompletionSource();
+        var yard = Yard(async (_, args, _) =>
+        {
+            if (args.StartsWith("status", StringComparison.Ordinal) && Volatile.Read(ref hold))
+            {
+                Interlocked.Increment(ref reads);
+                await held.Task;
+            }
+
+            return string.Empty;
+        });
+        await yard.InitializeAsync(CancellationToken.None);
+        await yard.RefreshGitAsync(CancellationToken.None);
+        var tile = yard.FindTile(app.Id)!;
+        Volatile.Write(ref hold, true);
+
+        var first = yard.ReadGitOfAsync(tile);
+        var again = yard.ReadGitOfAsync(tile);
+        held.SetResult();
+
+        again.ShouldBeSameAs(first, "open, Esc, open: one read of the tile (#425)");
+        (await first).ShouldNotBeNull().ShouldHaveSingleItem().Branch.ShouldBe("main");
+        reads.ShouldBe(1);
+    }
+
+    [Fact]
     public async Task A_round_that_started_before_the_menus_read_does_not_put_older_lines_back()
     {
         var app = new Workspace { Name = "App", RootPath = Repo("app"), TrackId = _general.Id };

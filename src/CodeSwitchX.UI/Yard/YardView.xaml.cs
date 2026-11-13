@@ -105,7 +105,18 @@ public partial class YardView : UserControl
         }
     }
 
-    private void OnBuildMenuClosed(object sender, RoutedEventArgs e) => StopFollowingBuildMenu();
+    /// <summary>Only the followed menu's own Closed lets go: another tile's menu may have opened before this one said it closed.</summary>
+    private void OnBuildMenuClosed(object sender, RoutedEventArgs e)
+    {
+        if (_buildMenu is var (menu, _) && ReferenceEquals(sender, menu))
+        {
+            StopFollowingBuildMenu();
+        }
+        else
+        {
+            ((ContextMenu)sender).Closed -= OnBuildMenuClosed;
+        }
+    }
 
     private void StopFollowingBuildMenu()
     {

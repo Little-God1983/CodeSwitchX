@@ -691,32 +691,50 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// </summary>
     public Task RefreshGitAsync(CancellationToken ct) => RequestGitRefresh(ct, again: true);
 
-    /// <summary>The last read of one tile's git <see cref="RefreshGitOf"/> started; tests await it.</summary>
+    /// <summary>The last read of one tile's git <see cref="ReadGitOfAsync"/> started; tests await it.</summary>
     internal Task CurrentTileGitRefresh { get; private set; } = Task.CompletedTask;
 
+    /// <summary>A tile's menu opens with Build new version on it (#425): <see cref="ReadGitOfAsync"/>, not waited for.</summary>
+    public void RefreshGitOf(WorkspaceTileViewModel tile) => _ = ReadGitOfAsync(tile);
+
     /// <summary>
-    /// A tile's menu opens with Build new version on it (#425): that tile's git is read now, beside any round that runs, so the
-    /// precheck is not up to a round old (a branch switched a moment ago). Only its git: no worktree list, no GitHub. The menu takes
-    /// the new entries when the lines show; a round that started before this read cannot put older lines back.
+    /// Reads one tile's git now, beside any round that runs (#425): a tile's menu opens, or its Build is pressed, and the precheck must not
+    /// go by lines up to a round old (a branch switched a moment ago). Only its git: no worktree list, no GitHub. The tile shows the lines;
+    /// a round that started before this read cannot put older ones back. A read already under way for the tile is the one. UI thread.
     /// </summary>
-    public void RefreshGitOf(WorkspaceTileViewModel tile)
+    /// <returns>The lines the read found; null when it failed or the Yard closed.</returns>
+    internal Task<IReadOnlyList<GitLine>?> ReadGitOfAsync(WorkspaceTileViewModel tile)
     {
         if (_disposed)
         {
-            return;
+            return Task.FromResult<IReadOnlyList<GitLine>?>(null);
         }
 
-        CurrentTileGitRefresh = Task.Run(async () =>
+        if (tile.MenuGitRead is { IsCompleted: false } running)
+        {
+            return running;
+        }
+
+        var stop = _gitHubStop.Token; // the Yard's own: closing it stops the read
+        var read = Task.Run<IReadOnlyList<GitLine>?>(async () =>
         {
             try
             {
-                await RefreshGitAsync(tile, [], CancellationToken.None, worktrees: false).ConfigureAwait(false);
+                return await RefreshGitAsync(tile, [], stop, worktrees: false).ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (OperationCanceledException)
+            {
+                return null;
+            }
+            catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Git refresh of {Root} for its menu failed", tile.RootPath);
+                return null;
             }
         });
+        tile.MenuGitRead = read;
+        CurrentTileGitRefresh = read;
+        return read;
     }
 
     /// <summary>Whether a round runs and whether another was asked for are decided under one lock, so a request never falls between a round's last look and its end.</summary>
@@ -803,7 +821,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
     /// <param name="paths">Gets the folder of each line computed, before the lines are posted: the tile shows them later.</param>
     /// <param name="worktrees">Also bring the tile's worktrees up to date, as a round does.</param>
-    private async Task RefreshGitAsync(WorkspaceTileViewModel tile, List<string> paths, CancellationToken ct, bool worktrees = true)
+    /// <returns>The lines the read found, as the tile shows them but for the GitHub pills.</returns>
+    private async Task<IReadOnlyList<GitLine>> RefreshGitAsync(WorkspaceTileViewModel tile, List<string> paths, CancellationToken ct, bool worktrees = true)
     {
         // Taken before git is asked: of two reads of one tile, the one started later knows more, whichever ends first (#425).
         var read = tile.StartGitRead();
@@ -826,7 +845,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         // The process runs only where git records a linked worktree, or one is registered and may have been removed.
         if (!worktrees || !info.IsRepository || (tile.Workspace.Worktrees.Count == 0 && !_git.HasLinkedWorktrees(tile.RootPath)))
         {
-            return;
+            return lines;
         }
 
         var porcelain = await _git.RunAsync(tile.RootPath, "worktree list --porcelain", ct).ConfigureAwait(false);
@@ -834,6 +853,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         {
             await _registry.UpdateWorktreesAsync(tile.Workspace, WorkspaceProbe.ParseWorktreeList(porcelain, tile.RootPath), ct).ConfigureAwait(false);
         }
+
+        return lines;
     }
 
     /// <summary>The line with the pills of the issues and pull requests last read for its repository (a count of zero has none), and what was read, which opens the panel (#406).</summary>

@@ -12,15 +12,29 @@ using NSubstitute;
 namespace CodeSwitchX.UI.Tests.Yard;
 
 /// <summary>#423: a tile's Build new version / Run entries.</summary>
-public class StableBuildEntryTests
+public class StableBuildEntryTests : IDisposable
 {
     private readonly Launcher _launcher = new();
     private readonly Dialogs _dialogs = new();
     private readonly WorkspaceTileViewModel _tile;
+    private readonly string _temp = Path.Combine(Path.GetTempPath(), "csx-entry-" + Guid.NewGuid().ToString("N"));
 
     public StableBuildEntryTests()
     {
-        var app = new Workspace { Name = "App", RootPath = @"c:\repo\app", TrackId = Guid.NewGuid() };
+        _tile = Tile(@"c:\repo\app", (_, _, _) => Task.FromResult<string?>(null));
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_temp))
+        {
+            Directory.Delete(_temp, recursive: true);
+        }
+    }
+
+    private WorkspaceTileViewModel Tile(string root, Func<string, string, CancellationToken, Task<string?>> runGit)
+    {
+        var app = new Workspace { Name = "App", RootPath = root, TrackId = Guid.NewGuid() };
         var store = Substitute.For<IWorkspaceStore>();
         var bus = new EventBus(NullLogger<EventBus>.Instance);
         var resolver = new WorkspaceResolver();
@@ -28,9 +42,52 @@ public class StableBuildEntryTests
         var pricing = Substitute.For<IPricingProvider>();
         pricing.Pricing.Returns(PricingTable.Default);
         var yard = new YardViewModel(store, new WorkspaceRegistry(store, resolver, bus), new SessionEngine(bus, resolver, time, NullLogger<SessionEngine>.Instance),
-            pricing, new GitInspector((_, _, _) => Task.FromResult<string?>(null)), bus, new ImmediateDispatcher(), time, NullLogger<YardViewModel>.Instance,
+            pricing, new GitInspector(runGit), bus, new ImmediateDispatcher(), time, NullLogger<YardViewModel>.Instance,
             stableBuilds: _launcher, dialogs: _dialogs);
-        _tile = new WorkspaceTileViewModel(app, yard);
+        return new WorkspaceTileViewModel(app, yard);
+    }
+
+    /// <summary>A repository on <paramref name="branch"/> with the stable-build scripts, naming no release branch.</summary>
+    private string RepoOn(string branch)
+    {
+        var root = Path.Combine(_temp, "app");
+        Directory.CreateDirectory(Path.Combine(root, ".git"));
+        File.WriteAllText(Path.Combine(root, ".git", "HEAD"), $"ref: refs/heads/{branch}\n");
+        Directory.CreateDirectory(Path.Combine(root, "scripts"));
+        File.WriteAllText(Path.Combine(root, "scripts", "build.ps1"), "# build");
+        File.WriteAllText(Path.Combine(root, "scripts", "_common.ps1"), "$script:ShortcutName = 'app.lnk'\n");
+        return root;
+    }
+
+    [Fact]
+    public async Task Build_reads_git_again_and_says_why_when_the_branch_moved_since_the_menu_opened()
+    {
+        // The menu went by a round up to 30 s old; the press reads the tile's git first (#425).
+        var root = RepoOn("feature/x");
+        var tile = Tile(root, (_, _, _) => Task.FromResult<string?>(string.Empty));
+        tile.ShowGit([Line(root)]); // main and clean, as the last round saw it
+        var entry = tile.StableBuildEntries().ShouldHaveSingleItem();
+        entry.CanBuild.ShouldBeTrue();
+
+        await entry.BuildCommand.ExecuteAsync(null);
+
+        _dialogs.Told.ShouldBe(["Not building app: On feature/x - a stable build runs from main or develop."]);
+        _dialogs.Asked.ShouldBeEmpty("nothing to confirm");
+        _launcher.Built.ShouldBeEmpty();
+        tile.GitLines.ShouldHaveSingleItem().Branch.ShouldBe("feature/x", "the tile shows what the press found");
+    }
+
+    [Fact]
+    public async Task Build_goes_by_the_menu_when_git_gives_no_state_at_the_press()
+    {
+        var root = RepoOn("main");
+        var tile = Tile(root, (_, _, _) => Task.FromResult<string?>(null)); // git status fails
+        tile.ShowGit([Line(root)]);
+
+        await tile.StableBuildEntries()[0].BuildCommand.ExecuteAsync(null);
+
+        _dialogs.Asked.ShouldHaveSingleItem().ShouldStartWith("Build a new version of app?");
+        _launcher.Built.ShouldBe([root]);
     }
 
     private static GitLine Line(string path, string? branch = "main", int? dirty = 0, bool scripts = true, string? folder = null) =>
