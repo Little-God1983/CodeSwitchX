@@ -59,6 +59,45 @@ public class StableBuildTests : IDisposable
     }
 
     [Fact]
+    public void Find_takes_an_apostrophe_inside_double_quotes()
+    {
+        var repo = Repo(("build.ps1", "# build"), ("_common.ps1", "$script:ShortcutName = \"Bob's App.lnk\"\n"));
+
+        StableBuildRepo.Find(repo).ShouldNotBeNull().ShortcutName.ShouldBe("Bob's App.lnk");
+    }
+
+    [Fact]
+    public void Find_does_not_take_a_name_powershell_would_fill_in_from_a_variable()
+    {
+        var repo = Repo(("build.ps1", "# build"), ("_common.ps1", "$script:ShortcutName = \"$AppName.lnk\"\n"));
+
+        StableBuildRepo.Find(repo).ShouldBeNull("the file's text is not the name PowerShell makes of it");
+    }
+
+    [Fact]
+    public void A_release_branch_powershell_would_fill_in_is_not_taken()
+    {
+        var repo = Repo(("build.ps1", "# build"), ("_common.ps1", "$script:ReleaseBranch = \"$branch\"\n$script:ShortcutName = 'X.lnk'\n"));
+
+        StableBuildRepo.Find(repo).ShouldNotBeNull().ReleaseBranch.ShouldBeNull("main or develop then, not a branch that cannot exist");
+    }
+
+    [Fact]
+    public void A_semicolon_in_the_path_is_escaped_for_windows_terminal()
+    {
+        // wt takes a bare ; as the start of its next command.
+        var arguments = StableBuildLauncher.TerminalArguments(new StableBuildRepo(@"E:\Repos\a;b", "X.lnk"), "pwsh.exe");
+
+        arguments.ShouldBe(@"-d ""E:\Repos\a\;b"" pwsh.exe -NoProfile -ExecutionPolicy Bypass -NoExit -File ""E:\Repos\a\;b\scripts\build.ps1""");
+    }
+
+    [Fact]
+    public void A_drive_root_goes_to_windows_terminal_without_a_separator_before_the_quote()
+    {
+        StableBuildLauncher.TerminalArguments(new StableBuildRepo(@"E:\", "X.lnk"), "pwsh.exe").ShouldStartWith(@"-d ""E:\."" pwsh.exe");
+    }
+
+    [Fact]
     public void Find_looks_at_the_top_of_the_repository_for_a_folder_inside_it()
     {
         var repo = Repo(("build.ps1", "# build"), ("_common.ps1", Common));

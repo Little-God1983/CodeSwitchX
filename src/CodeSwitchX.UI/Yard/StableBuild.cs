@@ -71,11 +71,28 @@ public sealed partial record StableBuildRepo(string RepoPath, string ShortcutNam
         static bool HasGit(string dir) => Directory.Exists(Path.Combine(dir, ".git")) || File.Exists(Path.Combine(dir, ".git"));
     }
 
-    private static string? Setting(string text, string name) =>
-        SettingLine().Matches(text).FirstOrDefault(m => string.Equals(m.Groups[1].Value, name, StringComparison.OrdinalIgnoreCase))?.Groups[2].Value;
+    /// <summary>
+    /// The setting's value as the file writes it; null when it is not there, or is a double-quoted string PowerShell would
+    /// fill in (a $ or a backtick in it): its text is then not the value the script uses.
+    /// </summary>
+    private static string? Setting(string text, string name)
+    {
+        if (SettingLine().Matches(text).FirstOrDefault(m => string.Equals(m.Groups["name"].Value, name, StringComparison.OrdinalIgnoreCase)) is not { } match)
+        {
+            return null;
+        }
 
-    /// <summary><c>$script:Name = 'value'</c> at a line's start; PowerShell takes the scope in any casing.</summary>
-    [GeneratedRegex("""^\s*\$script:(\w+)\s*=\s*['"]([^'"]+)['"]""", RegexOptions.Multiline | RegexOptions.IgnoreCase)]
+        if (match.Groups["single"].Success)
+        {
+            return match.Groups["single"].Value is { Length: > 0 } single ? single : null;
+        }
+
+        var value = match.Groups["double"].Value;
+        return value.Length > 0 && value.IndexOfAny(['$', '`']) < 0 ? value : null;
+    }
+
+    /// <summary><c>$script:Name = 'value'</c> or <c>"value"</c> at a line's start; PowerShell takes the scope in any casing.</summary>
+    [GeneratedRegex("""^\s*\$script:(?<name>\w+)\s*=\s*(?:'(?<single>[^']*)'|"(?<double>[^"]*)")""", RegexOptions.Multiline | RegexOptions.IgnoreCase)]
     private static partial Regex SettingLine();
 }
 
@@ -139,14 +156,22 @@ public sealed class StableBuildLauncher : IStableBuildLauncher
 
     public bool StartBuild(StableBuildRepo repo)
     {
+        var shell = OnPath("pwsh.exe") ? "pwsh.exe" : "powershell.exe";
+        return ShellStart.TryStart(new ProcessStartInfo("wt.exe", TerminalArguments(repo, shell)))
+            || ShellStart.TryStart(new ProcessStartInfo(shell, ShellArguments(repo.BuildScript)) { WorkingDirectory = Path.TrimEndingDirectorySeparator(repo.RepoPath) });
+    }
+
+    /// <summary>What wt.exe is given: a new window in the repository, running the build there.</summary>
+    internal static string TerminalArguments(StableBuildRepo repo, string shell)
+    {
         // No separator before the closing quote, which would escape it: a drive root goes as "E:\." (E: alone is drive-relative).
+        // A bare ; starts wt's next command, so it goes as \; in both paths.
         var folder = Path.TrimEndingDirectorySeparator(repo.RepoPath);
         var quoted = Path.EndsInDirectorySeparator(folder) ? folder + "." : folder;
-        var shell = OnPath("pwsh.exe") ? "pwsh.exe" : "powershell.exe";
-        var arguments = $"-NoProfile -ExecutionPolicy Bypass -NoExit -File \"{repo.BuildScript}\"";
-        return ShellStart.TryStart(new ProcessStartInfo("wt.exe", $"-d \"{quoted}\" {shell} {arguments}"))
-            || ShellStart.TryStart(new ProcessStartInfo(shell, arguments) { WorkingDirectory = folder });
+        return $"-d \"{quoted.Replace(";", "\\;")}\" {shell} {ShellArguments(repo.BuildScript.Replace(";", "\\;"))}";
     }
+
+    private static string ShellArguments(string script) => $"-NoProfile -ExecutionPolicy Bypass -NoExit -File \"{script}\"";
 
     public bool Run(string shortcutPath) => ShellStart.TryStart(new ProcessStartInfo(shortcutPath));
 
@@ -163,9 +188,11 @@ public sealed partial class StableBuildEntry
     private readonly IStableBuildLauncher _launcher;
     private readonly IYardDialogs _dialogs;
 
+    /// <param name="line">A line with stable-build scripts; its git state is what the precheck reads.</param>
     /// <param name="named">The tile has several such repositories: the entries say which.</param>
-    public StableBuildEntry(StableBuildRepo repo, GitLine line, bool named, IStableBuildLauncher launcher, IYardDialogs dialogs)
+    public StableBuildEntry(GitLine line, bool named, IStableBuildLauncher launcher, IYardDialogs dialogs)
     {
+        var repo = line.StableBuild ?? throw new ArgumentException("The line has no stable-build scripts.", nameof(line));
         _repo = repo;
         _launcher = launcher;
         _dialogs = dialogs;

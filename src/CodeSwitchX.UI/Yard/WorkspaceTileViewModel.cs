@@ -449,7 +449,7 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     public IReadOnlyList<StableBuildEntry> StableBuildEntries()
     {
         var lines = GitLines.Where(l => l.StableBuild is not null).DistinctBy(l => PathNormalizer.Normalize(l.StableBuild!.RepoPath)).ToList();
-        return [.. lines.Select(l => new StableBuildEntry(l.StableBuild!, l, named: lines.Count > 1, _owner.StableBuilds, _owner.Dialogs))];
+        return [.. lines.Select(l => new StableBuildEntry(l, named: lines.Count > 1, _owner.StableBuilds, _owner.Dialogs))];
     }
 
     [RelayCommand]

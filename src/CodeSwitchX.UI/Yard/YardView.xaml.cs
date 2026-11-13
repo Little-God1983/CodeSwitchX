@@ -60,7 +60,7 @@ public partial class YardView : UserControl
     /// </summary>
     private void OnTileContextMenuOpening(object sender, ContextMenuEventArgs e)
     {
-        if (sender is not FrameworkElement { ContextMenu: { } menu, DataContext: WorkspaceTileViewModel tile })
+        if (sender is not FrameworkElement { ContextMenu: { } menu, DataContext: WorkspaceTileViewModel tile } || OpensAMenuOfItsOwn(e.OriginalSource, sender))
         {
             return;
         }
@@ -84,13 +84,34 @@ public partial class YardView : UserControl
             menu.Items.Insert(at++, Item(entry.RunHeader, entry.RunCommand, entry.RunBlock));
         }
 
-        // Enabled or not by the command's CanExecute; the tooltip says why on a greyed one.
+        // Enabled or not by the command's CanExecute; the tooltip says why on a greyed one. "__" shows a folder's underscore,
+        // which a header would otherwise take for an access key.
         static MenuItem Item(string header, System.Windows.Input.ICommand command, string? block)
         {
-            var item = new MenuItem { Header = header, Command = command, ToolTip = block, Tag = StableBuildItem };
+            var item = new MenuItem { Header = header.Replace("_", "__"), Command = command, ToolTip = block, Tag = StableBuildItem };
             ToolTipService.SetShowOnDisabled(item, true);
             return item;
         }
+    }
+
+    /// <summary>
+    /// The right-click was on something inside the tile with a menu of its own (a chat row): that menu opens, not the tile's,
+    /// so the tile's entries are not made for nothing. The event still bubbles up through the tile.
+    /// </summary>
+    private static bool OpensAMenuOfItsOwn(object source, object tile)
+    {
+        for (var node = source as DependencyObject; node is not null && !ReferenceEquals(node, tile); node = Parent(node))
+        {
+            if (node is FrameworkElement { ContextMenu: not null })
+            {
+                return true;
+            }
+        }
+
+        return false;
+
+        static DependencyObject? Parent(DependencyObject node) =>
+            node is System.Windows.Media.Visual or System.Windows.Media.Media3D.Visual3D ? System.Windows.Media.VisualTreeHelper.GetParent(node) : LogicalTreeHelper.GetParent(node);
     }
 
     private void OnDragOver(object sender, DragEventArgs e)
