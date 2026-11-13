@@ -536,6 +536,59 @@ public class HostManagerTests
         _manager.Get(other.Id).ShouldBeNull();
     }
 
+    private async Task<Workspace> HostTwoWindowsAsync()
+    {
+        WindowAppearsAfterLaunch();
+        await _manager.OpenAsync(_workspace, CancellationToken.None);
+        var other = new Workspace { Name = "Other", RootPath = @"c:\repo\other" };
+        _windows.TopLevelWindows().Returns([], [new WindowInfo(600, 30, "Chrome_WidgetWin_1", "other - Visual Studio Code")]);
+        _launcher.Launch(other).Returns(new LaunchResult(true, 2, null));
+        await _manager.OpenAsync(other, CancellationToken.None);
+        _manager.HideAll();
+        _docker.ClearReceivedCalls();
+        return other;
+    }
+
+    [Fact]
+    public async Task CloseAll_shows_every_hosted_window_and_asks_it_to_close()
+    {
+        await HostTwoWindowsAsync();
+
+        var closed = _manager.CloseAll();
+
+        closed.ShouldBe(2);
+        _docker.Received(1).Uncloak(500);
+        _docker.Received(1).Uncloak(600);
+        _docker.Received(1).Close(500);
+        _docker.Received(1).Close(600);
+    }
+
+    [Fact]
+    public async Task CloseAll_leaves_out_a_window_that_is_gone_already()
+    {
+        await HostTwoWindowsAsync();
+        _docker.IsAlive(600).Returns(false);
+
+        var closed = _manager.CloseAll();
+
+        closed.ShouldBe(1);
+        _docker.DidNotReceive().Close(600);
+    }
+
+    [Fact]
+    public async Task After_CloseAll_no_vs_code_is_launched_any_more()
+    {
+        await HostTwoWindowsAsync();
+        _manager.CloseAll();
+        var late = new Workspace { Name = "Late", RootPath = @"c:\repo\late" };
+        _windows.TopLevelWindows().Returns([]);
+
+        var hosted = await _manager.OpenAsync(late, CancellationToken.None);
+
+        hosted.State.ShouldBe(HostState.Stopped);
+        _launcher.DidNotReceive().Launch(late);
+    }
+
     [Fact]
     public async Task Open_adopts_a_vscode_window_that_already_shows_the_workspace_instead_of_launching()
     {

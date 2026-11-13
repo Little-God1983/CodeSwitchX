@@ -83,3 +83,5 @@ BringWindowToTop
 IsHungAppWindow
 SendMessageTimeout
 WM_NULL
+PostMessage
+WM_CLOSE

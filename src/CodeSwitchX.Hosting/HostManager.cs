@@ -631,6 +631,25 @@ public sealed class HostManager : IDisposable
     }
 
     /// <summary>
+    /// Exit's "Close all" (#420): every hosted window is shown again, as by <see cref="ReleaseAll"/>, and asked to close as by
+    /// its own X, so VS Code still asks about unsaved files; one that asks stays in sight. Returns how many were asked.
+    /// </summary>
+    public int CloseAll()
+    {
+        lock (_gate)
+        {
+            ReleaseAll();
+            var open = _hosted.Values.Where(h => h.State == HostState.Running && _docker.IsAlive(h.Hwnd)).ToList();
+            foreach (var hosted in open)
+            {
+                _docker.Close(hosted.Hwnd);
+            }
+
+            return open.Count;
+        }
+    }
+
+    /// <summary>
     /// Called from the WinEvent watcher when the user starts to drag or resize a window by its frame: a docked window
     /// does not go. Windows' move loop is ended as it starts, so nothing has moved, and nothing fights: snapped back
     /// after each step instead, the window flipped between the cursor and the Cab at every move of the mouse. The odd
