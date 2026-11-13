@@ -36,8 +36,8 @@ public class ExitTests
     [Fact]
     public void The_detail_warns_about_cut_off_chats_only_when_one_works()
     {
-        ExitQuestion.Detail(1).ShouldBe("Closing them stops those chats mid-turn. VS Code still asks about unsaved files.");
-        ExitQuestion.Detail(0).ShouldBe("VS Code still asks about unsaved files.");
+        ExitQuestion.Detail(1).ShouldBe("Closing them stops those chats mid-turn. Unsaved files are not lost: VS Code asks about them, or keeps them for its next start.");
+        ExitQuestion.Detail(0).ShouldBe("Unsaved files are not lost: VS Code asks about them, or keeps them for its next start.");
     }
 
     private async Task AppIsOpenAsync()
@@ -78,7 +78,7 @@ public class ExitTests
         _h.Shell.ExitCommand.Execute(null);
 
         _asked.ShouldBe([("1 VS Code window is open, and a chat in it is still working.",
-            "Closing them stops those chats mid-turn. VS Code still asks about unsaved files.")]);
+            "Closing them stops those chats mid-turn. Unsaved files are not lost: VS Code asks about them, or keeps them for its next start.")]);
     }
 
     [Fact]

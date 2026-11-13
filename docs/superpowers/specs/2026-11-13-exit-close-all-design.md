@@ -38,7 +38,7 @@ VS Code windows, in one go.
 - **Wording** (built in the ViewModel, tested):
   - "3 VS Code windows are open, and 2 of them have a chat that is still working." /
     "1 VS Code window is open, and a chat in it is still working." / "2 VS Code windows are open."
-  - Under it: "Closing them stops those chats mid-turn." when one works, then "VS Code still asks about unsaved files."
+  - Under it: "Closing them stops those chats mid-turn." when one works, then "Unsaved files are not lost: VS Code asks about them, or keeps them for its next start." (round 3: the last VS Code window keeps them by hot exit instead of asking)
 - **Dialog.** `ExitWindow` beside the shell, like `RemoveWorkspaceWindow`: three buttons, Cancel on Esc and on closing
   the dialog; Enter is "Close only CodeSwitchX", the choice that loses nothing.
 - **Close all.** `HostManager.CloseAll()`: as `ReleaseAll` (shows every hosted window, nothing is hidden again after it)

@@ -637,7 +637,8 @@ public sealed class HostManager : IDisposable
 
     /// <summary>
     /// Exit's "Close all" (#420): every hosted window is shown again, as by <see cref="ReleaseAll"/>, and asked to close as by
-    /// its own X, so VS Code still asks about unsaved files; one that asks stays in sight. Returns how many were asked.
+    /// its own X, so unsaved files are not lost (VS Code asks, or its hot exit keeps them); one that asks stays in sight. Returns how many
+    /// were asked. Only for an exit: after it nothing is launched or hidden any more, so the caller must be sure CodeSwitchX closes.
     /// </summary>
     public int CloseAll()
     {

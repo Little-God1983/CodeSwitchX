@@ -29,7 +29,7 @@ public interface IWindowDocker
     void CancelMoveSize(nint hwnd);
 
     /// <summary>
-    /// Asks the window to close, as a click on its own X does: VS Code still asks to save unsaved files. Posted, never
+    /// Asks the window to close, as a click on its own X does: VS Code asks about unsaved files (or keeps them by hot exit when it is its last window). Posted, never
     /// awaited (#420).
     /// </summary>
     void Close(nint hwnd);

@@ -27,6 +27,8 @@ public static class ExitQuestion
         };
     }
 
+    // Each window closes as by its own X: VS Code asks about unsaved files, except that the last of its windows, with hot exit
+    // on (its default), keeps them for the next start instead of asking.
     public static string Detail(int working) =>
-        working > 0 ? "Closing them stops those chats mid-turn. VS Code still asks about unsaved files." : "VS Code still asks about unsaved files.";
+        working > 0 ? "Closing them stops those chats mid-turn. Unsaved files are not lost: VS Code asks about them, or keeps them for its next start." : "Unsaved files are not lost: VS Code asks about them, or keeps them for its next start.";
 }
