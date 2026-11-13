@@ -604,6 +604,8 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     /// </summary>
     public Func<string, string, ExitChoice>? AskBeforeExit { get; set; }
 
+    private bool _exiting;
+
     /// <summary>
     /// Exit, from the Yard's bar and the tray (#420). With VS Code windows open it asks whether they close too; the window's
     /// own X never asks and leaves them open.
@@ -611,37 +613,51 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     [RelayCommand]
     private void Exit()
     {
-        var open = _host.All.Where(h => h.State == HostState.Running).Select(h => h.WorkspaceId).ToList();
-        if (open.Count > 0)
+        // The tray's menu stays live while the question is open: a second Exit would stack a second question over it.
+        if (_exiting)
         {
-            if (AskBeforeExit is not { } ask)
-            {
-                _logger.LogWarning("Not exiting: {Open} VS Code window(s) are open and there is no window to ask in", open.Count);
-                return;
-            }
-
-            // Waiting for the user mid-turn counts too: closing VS Code cuts that turn off as well (as the Yard's pull guard counts).
-            var working = open.Count(id => Yard.FindTile(id) is { } tile && (tile.IsWorking || tile.NeedsAttention));
-            switch (ask(ExitQuestion.Question(open.Count, working), ExitQuestion.Detail(working)))
-            {
-                case ExitChoice.CloseAll:
-                    var closed = _host.CloseAll();
-                    _logger.LogInformation("Exit: asked {Closed} VS Code window(s) to close", closed);
-                    break;
-                case ExitChoice.CloseOnly:
-                    break;
-                default:
-                    return;
-            }
+            return;
         }
 
-        if (Window is { } window)
-        {
-            window.Close();
-        }
-        else
+        // Checked before asking: "Close all" must not close VS Code while CodeSwitchX itself stays (and launches no more).
+        if (Window is not { } window)
         {
             _logger.LogWarning("Not exiting: there is no window to close yet");
+            return;
+        }
+
+        _exiting = true;
+        try
+        {
+            var open = _host.OpenWorkspaces();
+            if (open.Count > 0)
+            {
+                if (AskBeforeExit is not { } ask)
+                {
+                    _logger.LogWarning("Not exiting: {Open} VS Code window(s) are open and there is no window to ask in", open.Count);
+                    return;
+                }
+
+                // Waiting for the user mid-turn counts too: closing VS Code cuts that turn off as well (as the Yard's pull guard counts).
+                var working = open.Count(id => Yard.FindTile(id) is { } tile && (tile.IsWorking || tile.NeedsAttention));
+                switch (ask(ExitQuestion.Question(open.Count, working), ExitQuestion.Detail(working)))
+                {
+                    case ExitChoice.CloseAll:
+                        var closed = _host.CloseAll();
+                        _logger.LogInformation("Exit: asked {Closed} VS Code window(s) to close", closed);
+                        break;
+                    case ExitChoice.CloseOnly:
+                        break;
+                    default:
+                        return;
+                }
+            }
+
+            window.Close();
+        }
+        finally
+        {
+            _exiting = false;
         }
     }
 

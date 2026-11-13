@@ -619,7 +619,7 @@ public sealed class HostManager : IDisposable
         lock (_gate)
         {
             _released = true;
-            foreach (var hosted in _hosted.Values.Where(h => h.State == HostState.Running && _docker.IsAlive(h.Hwnd)))
+            foreach (var hosted in OpenLocked())
             {
                 _docker.Uncloak(hosted.Hwnd);
                 hosted.Visible = true;
@@ -638,8 +638,8 @@ public sealed class HostManager : IDisposable
     {
         lock (_gate)
         {
+            var open = OpenLocked();
             ReleaseAll();
-            var open = _hosted.Values.Where(h => h.State == HostState.Running && _docker.IsAlive(h.Hwnd)).ToList();
             foreach (var hosted in open)
             {
                 _docker.Close(hosted.Hwnd);
@@ -648,6 +648,20 @@ public sealed class HostManager : IDisposable
             return open.Count;
         }
     }
+
+    /// <summary>
+    /// The workspaces whose VS Code window is open: running, and the window still there. One the user closed by its own X
+    /// counts no more, though the liveness check has not marked it stopped yet (Exit's question counts these, #420).
+    /// </summary>
+    public IReadOnlyList<Guid> OpenWorkspaces()
+    {
+        lock (_gate)
+        {
+            return [.. OpenLocked().Select(h => h.WorkspaceId)];
+        }
+    }
+
+    private List<HostedWorkspace> OpenLocked() => [.. _hosted.Values.Where(h => h.State == HostState.Running && _docker.IsAlive(h.Hwnd))];
 
     /// <summary>
     /// Called from the WinEvent watcher when the user starts to drag or resize a window by its frame: a docked window

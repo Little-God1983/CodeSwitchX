@@ -18,17 +18,24 @@ public partial class ExitWindow : Window
 
     /// <summary>
     /// Shows the question over <paramref name="owner"/> until it is answered. The tray's Exit can come while the owner is
-    /// minimized, and a minimized owner hides the windows it owns: it comes up first.
+    /// minimized, and a minimized owner hides the windows it owns: it comes up first, and goes back down when the answer is
+    /// Cancel.
     /// </summary>
     public static ExitChoice Ask(Window owner, string question, string detail)
     {
-        if (owner.WindowState == WindowState.Minimized || !owner.IsVisible)
+        var wasMinimized = owner.WindowState == WindowState.Minimized;
+        if (wasMinimized || !owner.IsVisible)
         {
             WindowActivation.BringUp(owner);
         }
 
         var dialog = new ExitWindow(question, detail) { Owner = owner };
         dialog.ShowDialog();
+        if (dialog.Choice == ExitChoice.Cancel && wasMinimized)
+        {
+            owner.WindowState = WindowState.Minimized;
+        }
+
         return dialog.Choice;
     }
 

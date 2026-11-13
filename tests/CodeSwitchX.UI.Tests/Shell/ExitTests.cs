@@ -128,6 +128,61 @@ public class ExitTests
         _window.Closed.ShouldBeFalse();
     }
 
+    [Fact]
+    public async Task A_window_the_user_closed_already_is_not_counted()
+    {
+        await AppIsOpenAsync();
+        _h.Docker.IsAlive(500).Returns(false);
+
+        _h.Shell.ExitCommand.Execute(null);
+
+        _asked.ShouldBeEmpty();
+        _window.Closed.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Without_a_window_to_close_nothing_is_asked_and_no_vs_code_closes()
+    {
+        await AppIsOpenAsync();
+        _h.Shell.Window = null;
+        _answer = ExitChoice.CloseAll;
+
+        _h.Shell.ExitCommand.Execute(null);
+
+        _asked.ShouldBeEmpty();
+        _h.Docker.DidNotReceive().Close(Arg.Any<nint>());
+    }
+
+    [Fact]
+    public async Task A_second_Exit_while_the_question_is_open_asks_nothing_more()
+    {
+        await AppIsOpenAsync();
+        _h.Shell.AskBeforeExit = (question, detail) =>
+        {
+            _asked.Add((question, detail));
+            _h.Shell.ExitCommand.Execute(null);
+            return ExitChoice.Cancel;
+        };
+
+        _h.Shell.ExitCommand.Execute(null);
+
+        _asked.Count.ShouldBe(1);
+        _window.Closed.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task After_a_cancelled_question_Exit_asks_again()
+    {
+        await AppIsOpenAsync();
+        _h.Shell.ExitCommand.Execute(null);
+        _answer = ExitChoice.CloseOnly;
+
+        _h.Shell.ExitCommand.Execute(null);
+
+        _asked.Count.ShouldBe(2);
+        _window.Closed.ShouldBeTrue();
+    }
+
     private sealed class ClosingWindow : IShellWindow
     {
         public bool Closed { get; private set; }

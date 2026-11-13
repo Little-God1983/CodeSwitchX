@@ -576,6 +576,15 @@ public class HostManagerTests
     }
 
     [Fact]
+    public async Task OpenWorkspaces_leaves_out_a_window_that_is_gone_already()
+    {
+        var other = await HostTwoWindowsAsync();
+        _docker.IsAlive(500).Returns(false);
+
+        _manager.OpenWorkspaces().ShouldBe([other.Id]);
+    }
+
+    [Fact]
     public async Task After_CloseAll_no_vs_code_is_launched_any_more()
     {
         await HostTwoWindowsAsync();
