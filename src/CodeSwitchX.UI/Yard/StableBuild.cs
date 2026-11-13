@@ -39,6 +39,16 @@ public sealed partial record StableBuildRepo(string RepoPath, string ShortcutNam
         }
     }
 
+    /// <summary>
+    /// The round's lines, each with its repository's scripts, looked for afresh: they come and go with a branch. A line the
+    /// round carried over from <paramref name="previous"/> (the same instance) keeps what it had: its folder could not be
+    /// checked, and on an offline share every look blocks for about 20 s, one line after another.
+    /// </summary>
+    internal static List<GitLine> Mark(IReadOnlyList<GitLine> lines, IReadOnlyList<GitLine> previous, Func<string, StableBuildRepo?> find) =>
+        [.. lines.Select(l => previous.Any(p => ReferenceEquals(p, l))
+            ? l
+            : l with { StableBuild = l.IsRepository && l.Path is { } path ? find(path) : null })];
+
     [GeneratedRegex("""^\s*\$script:ShortcutName\s*=\s*['"]([^'"]+)['"]""", RegexOptions.Multiline)]
     private static partial Regex ShortcutLine();
 }

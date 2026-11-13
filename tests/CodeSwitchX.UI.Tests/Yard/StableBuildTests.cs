@@ -91,6 +91,35 @@ public class StableBuildTests : IDisposable
     }
 
     [Fact]
+    public void A_line_carried_over_from_the_last_round_keeps_its_scripts_without_reading_the_folder()
+    {
+        // A line the round carried over is one whose folder could not be checked, an offline share say: each look there
+        // blocks for about 20 s, one after another.
+        var scripts = new StableBuildRepo(@"\\nas\share\app", "App.lnk");
+        var carried = new GitLine("app", "main", 0, @"\\nas\share\app", IsRepository: true, StableBuild: scripts);
+        var fresh = new GitLine("tool", "main", 0, @"c:\repo\tool", IsRepository: true);
+        var looked = new List<string>();
+
+        var lines = StableBuildRepo.Mark([carried, fresh], previous: [carried], path =>
+        {
+            looked.Add(path);
+            return new StableBuildRepo(path, "Tool.lnk");
+        });
+
+        looked.ShouldBe([@"c:\repo\tool"]);
+        lines[0].StableBuild.ShouldBe(scripts);
+        lines[1].StableBuild.ShouldNotBeNull().ShortcutName.ShouldBe("Tool.lnk");
+    }
+
+    [Fact]
+    public void A_line_without_a_repository_has_no_scripts()
+    {
+        var lines = StableBuildRepo.Mark([new GitLine(null, null, null, @"c:\plain")], previous: [], _ => throw new InvalidOperationException("not looked at"));
+
+        lines.ShouldHaveSingleItem().StableBuild.ShouldBeNull();
+    }
+
+    [Fact]
     public void An_unknown_git_state_blocks_the_build()
     {
         StableBuildCheck.BuildBlock(new GitLine(null, "main", null)).ShouldBe("Git state unknown");
