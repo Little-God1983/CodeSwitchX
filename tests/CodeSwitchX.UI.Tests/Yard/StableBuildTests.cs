@@ -15,11 +15,12 @@ public class StableBuildTests : IDisposable
         }
     }
 
-    /// <summary>A repository folder whose scripts folder holds the given files, each with the given text.</summary>
+    /// <summary>A repository (a .git folder at its top) whose scripts folder holds the given files, each with the given text.</summary>
     private string Repo(params (string Name, string Text)[] scripts)
     {
         var dir = Path.Combine(_root, "scripts");
         Directory.CreateDirectory(dir);
+        Directory.CreateDirectory(Path.Combine(_root, ".git"));
         foreach (var (name, text) in scripts)
         {
             File.WriteAllText(Path.Combine(dir, name), text);
@@ -28,26 +29,59 @@ public class StableBuildTests : IDisposable
         return _root;
     }
 
-    private const string Common = "$script:DefaultInstallRoot = 'E:\\StableVersion'\r\n$script:ShortcutName       = 'Some App.lnk'\r\n";
+    private const string Common = "$script:DefaultInstallRoot = 'E:\\StableVersion'\r\n$script:ReleaseBranch = 'main'\r\n$script:ShortcutName       = 'Some App.lnk'\r\n";
+
+    private static GitLine Line(string? branch, int? dirty, string? release = null) =>
+        new(null, branch, dirty, StableBuild: new StableBuildRepo(@"c:\repo\app", "App.lnk", release));
 
     [Fact]
-    public void Find_reads_the_shortcut_name_from_common()
+    public void Find_reads_the_shortcut_name_and_the_release_branch_from_common()
     {
         var repo = Repo(("build.ps1", "# build"), ("_common.ps1", Common));
 
         var found = StableBuildRepo.Find(repo).ShouldNotBeNull();
 
         found.ShortcutName.ShouldBe("Some App.lnk");
+        found.ReleaseBranch.ShouldBe("main");
         found.RepoPath.ShouldBe(repo);
         found.BuildScript.ShouldBe(Path.Combine(repo, "scripts", "build.ps1"));
     }
 
     [Fact]
-    public void Find_accepts_the_name_in_double_quotes()
+    public void Find_accepts_the_name_in_double_quotes_and_any_casing_of_script()
     {
-        var repo = Repo(("build.ps1", "# build"), ("_common.ps1", "  $script:ShortcutName = \"X.lnk\"\n"));
+        var repo = Repo(("build.ps1", "# build"), ("_common.ps1", "  $Script:ShortcutName = \"X.lnk\"\n"));
 
-        StableBuildRepo.Find(repo).ShouldNotBeNull().ShortcutName.ShouldBe("X.lnk");
+        var found = StableBuildRepo.Find(repo).ShouldNotBeNull();
+
+        found.ShortcutName.ShouldBe("X.lnk");
+        found.ReleaseBranch.ShouldBeNull("no line names it");
+    }
+
+    [Fact]
+    public void Find_looks_at_the_top_of_the_repository_for_a_folder_inside_it()
+    {
+        var repo = Repo(("build.ps1", "# build"), ("_common.ps1", Common));
+        var src = Path.Combine(repo, "src");
+        Directory.CreateDirectory(Path.Combine(src, "scripts"));
+        File.WriteAllText(Path.Combine(src, "scripts", "build.ps1"), "# not the stable build");
+        File.WriteAllText(Path.Combine(src, "scripts", "_common.ps1"), "$script:ShortcutName = 'Other.lnk'\n");
+
+        var found = StableBuildRepo.Find(src).ShouldNotBeNull();
+
+        found.RepoPath.ShouldBe(repo);
+        found.ShortcutName.ShouldBe("Some App.lnk");
+    }
+
+    [Theory]
+    [InlineData(@"C:\Tools\x.lnk")]
+    [InlineData(@"..\..\x.lnk")]
+    [InlineData("x.exe")]
+    public void Find_takes_only_a_bare_shortcut_name(string name)
+    {
+        var repo = Repo(("build.ps1", "# build"), ("_common.ps1", $"$script:ShortcutName = '{name}'\n"));
+
+        StableBuildRepo.Find(repo).ShouldBeNull();
     }
 
     [Fact]
@@ -68,18 +102,38 @@ public class StableBuildTests : IDisposable
         StableBuildRepo.Find(Path.Combine(_root, "missing")).ShouldBeNull();
     }
 
+    [Fact]
+    public void Find_returns_null_for_a_path_windows_cannot_take()
+    {
+        StableBuildRepo.Find("c:\\repo\\a\0b").ShouldBeNull();
+    }
+
+    [Theory]
+    [InlineData("main", "main")]
+    [InlineData("develop", "develop")]
+    public void A_clean_release_branch_may_build(string branch, string release)
+    {
+        StableBuildCheck.BuildBlock(Line(branch, 0, release)).ShouldBeNull();
+    }
+
+    [Fact]
+    public void The_other_of_main_and_develop_is_not_the_release_branch()
+    {
+        StableBuildCheck.BuildBlock(Line("develop", 0, "main")).ShouldBe("On develop - this repository's stable build runs from main");
+    }
+
     [Theory]
     [InlineData("main")]
     [InlineData("develop")]
-    public void A_clean_main_or_develop_may_build(string branch)
+    public void Without_a_named_release_branch_main_or_develop_may_build(string branch)
     {
-        StableBuildCheck.BuildBlock(new GitLine(null, branch, 0)).ShouldBeNull();
+        StableBuildCheck.BuildBlock(Line(branch, 0)).ShouldBeNull();
     }
 
     [Fact]
     public void Another_branch_is_named_in_the_block()
     {
-        StableBuildCheck.BuildBlock(new GitLine(null, "feature/x", 0)).ShouldBe("On feature/x - a stable build runs from main or develop");
+        StableBuildCheck.BuildBlock(Line("feature/x", 0)).ShouldBe("On feature/x - a stable build runs from main or develop");
     }
 
     [Theory]
@@ -87,42 +141,13 @@ public class StableBuildTests : IDisposable
     [InlineData(3, "3 uncommitted changes - commit or stash first")]
     public void Uncommitted_changes_block_the_build(int dirty, string block)
     {
-        StableBuildCheck.BuildBlock(new GitLine(null, "main", dirty)).ShouldBe(block);
-    }
-
-    [Fact]
-    public void A_line_carried_over_from_the_last_round_keeps_its_scripts_without_reading_the_folder()
-    {
-        // A line the round carried over is one whose folder could not be checked, an offline share say: each look there
-        // blocks for about 20 s, one after another.
-        var scripts = new StableBuildRepo(@"\\nas\share\app", "App.lnk");
-        var carried = new GitLine("app", "main", 0, @"\\nas\share\app", IsRepository: true, StableBuild: scripts);
-        var fresh = new GitLine("tool", "main", 0, @"c:\repo\tool", IsRepository: true);
-        var looked = new List<string>();
-
-        var lines = StableBuildRepo.Mark([carried, fresh], previous: [carried], path =>
-        {
-            looked.Add(path);
-            return new StableBuildRepo(path, "Tool.lnk");
-        });
-
-        looked.ShouldBe([@"c:\repo\tool"]);
-        lines[0].StableBuild.ShouldBe(scripts);
-        lines[1].StableBuild.ShouldNotBeNull().ShortcutName.ShouldBe("Tool.lnk");
-    }
-
-    [Fact]
-    public void A_line_without_a_repository_has_no_scripts()
-    {
-        var lines = StableBuildRepo.Mark([new GitLine(null, null, null, @"c:\plain")], previous: [], _ => throw new InvalidOperationException("not looked at"));
-
-        lines.ShouldHaveSingleItem().StableBuild.ShouldBeNull();
+        StableBuildCheck.BuildBlock(Line("main", dirty, "main")).ShouldBe(block);
     }
 
     [Fact]
     public void An_unknown_git_state_blocks_the_build()
     {
-        StableBuildCheck.BuildBlock(new GitLine(null, "main", null)).ShouldBe("Git state unknown");
-        StableBuildCheck.BuildBlock(new GitLine(null, null, 0)).ShouldBe("Git state unknown");
+        StableBuildCheck.BuildBlock(Line("main", null)).ShouldBe("Git state unknown");
+        StableBuildCheck.BuildBlock(Line(null, 0)).ShouldBe("Git state unknown");
     }
 }

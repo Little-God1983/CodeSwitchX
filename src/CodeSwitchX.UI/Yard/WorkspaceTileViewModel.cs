@@ -6,6 +6,7 @@ using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Hosting;
 using CodeSwitchX.Hosting.VsCode;
 using CodeSwitchX.Telemetry;
+using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Raven;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -466,16 +467,5 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     [RelayCommand]
     private Task UnregisterAsync() => _owner.UnregisterAsync(Id);
 
-    private static bool TryStart(string file, string arguments)
-    {
-        try
-        {
-            Process.Start(new ProcessStartInfo(file, arguments) { UseShellExecute = true });
-            return true;
-        }
-        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
-        {
-            return false;
-        }
-    }
+    private static bool TryStart(string file, string arguments) => ShellStart.TryStart(new ProcessStartInfo(file, arguments));
 }

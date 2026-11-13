@@ -1,7 +1,7 @@
-using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Text.RegularExpressions;
+using CodeSwitchX.UI.Infrastructure;
 using CommunityToolkit.Mvvm.Input;
 using Path = System.IO.Path;
 
@@ -11,46 +11,72 @@ namespace CodeSwitchX.UI.Yard;
 /// A repository that carries the stable-build scripts (#423): <c>scripts\build.ps1</c> next to a <c>scripts\_common.ps1</c>
 /// that names the Start Menu shortcut the build writes. The tile's menu builds it and starts it.
 /// </summary>
-/// <param name="RepoPath">The repository's folder, as its git line has it.</param>
-/// <param name="ShortcutName">The shortcut's file name in the Start Menu's Programs folder, e.g. "Some App.lnk".</param>
-public sealed partial record StableBuildRepo(string RepoPath, string ShortcutName)
+/// <param name="RepoPath">The repository's top folder, where its scripts folder is.</param>
+/// <param name="ShortcutName">The shortcut's bare file name in the Start Menu's Programs folder, e.g. "Some App.lnk".</param>
+/// <param name="ReleaseBranch">The branch the script builds from (<c>$script:ReleaseBranch</c>); null when the file names none.</param>
+public sealed partial record StableBuildRepo(string RepoPath, string ShortcutName, string? ReleaseBranch = null)
 {
     public string BuildScript => Path.Combine(RepoPath, "scripts", "build.ps1");
 
-    /// <summary>The repository's scripts, or null when it has none, or they cannot be read.</summary>
-    public static StableBuildRepo? Find(string repoPath)
+    /// <summary>
+    /// The scripts of the repository <paramref name="folder"/> is in, looked for at its top; null when it has none, or they
+    /// cannot be read. A lookup that goes wrong in any way only means no entries: it must not cost the tile its git round.
+    /// </summary>
+    public static StableBuildRepo? Find(string folder)
     {
         try
         {
-            var scripts = Path.Combine(repoPath, "scripts");
+            var top = TopOf(folder);
+            var scripts = Path.Combine(top, "scripts");
             var common = Path.Combine(scripts, "_common.ps1");
             if (!File.Exists(Path.Combine(scripts, "build.ps1")) || !File.Exists(common))
             {
                 return null;
             }
 
-            return ShortcutLine().Match(File.ReadAllText(common)) is { Success: true } match
-                ? new StableBuildRepo(repoPath, match.Groups[1].Value)
-                : null;
+            var text = File.ReadAllText(common);
+            if (Setting(text, "ShortcutName") is not { } shortcut
+                || shortcut != Path.GetFileName(shortcut) || !shortcut.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase))
+            {
+                // Only a bare shortcut name: Run opens what it names, and must not open a program from elsewhere.
+                return null;
+            }
+
+            return new StableBuildRepo(top, shortcut, Setting(text, "ReleaseBranch"));
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return null;
         }
     }
 
-    /// <summary>
-    /// The round's lines, each with its repository's scripts, looked for afresh: they come and go with a branch. A line the
-    /// round carried over from <paramref name="previous"/> (the same instance) keeps what it had: its folder could not be
-    /// checked, and on an offline share every look blocks for about 20 s, one line after another.
-    /// </summary>
-    internal static List<GitLine> Mark(IReadOnlyList<GitLine> lines, IReadOnlyList<GitLine> previous, Func<string, StableBuildRepo?> find) =>
-        [.. lines.Select(l => previous.Any(p => ReferenceEquals(p, l))
-            ? l
-            : l with { StableBuild = l.IsRepository && l.Path is { } path ? find(path) : null })];
+    /// <summary>The folder itself or the nearest one above it with a .git (a folder, or a file in a worktree): the repository's top.</summary>
+    private static string TopOf(string folder)
+    {
+        if (HasGit(folder))
+        {
+            return folder;
+        }
 
-    [GeneratedRegex("""^\s*\$script:ShortcutName\s*=\s*['"]([^'"]+)['"]""", RegexOptions.Multiline)]
-    private static partial Regex ShortcutLine();
+        for (var dir = new DirectoryInfo(folder).Parent; dir is not null; dir = dir.Parent)
+        {
+            if (HasGit(dir.FullName))
+            {
+                return dir.FullName;
+            }
+        }
+
+        return folder;
+
+        static bool HasGit(string dir) => Directory.Exists(Path.Combine(dir, ".git")) || File.Exists(Path.Combine(dir, ".git"));
+    }
+
+    private static string? Setting(string text, string name) =>
+        SettingLine().Matches(text).FirstOrDefault(m => string.Equals(m.Groups[1].Value, name, StringComparison.OrdinalIgnoreCase))?.Groups[2].Value;
+
+    /// <summary><c>$script:Name = 'value'</c> at a line's start; PowerShell takes the scope in any casing.</summary>
+    [GeneratedRegex("""^\s*\$script:(\w+)\s*=\s*['"]([^'"]+)['"]""", RegexOptions.Multiline | RegexOptions.IgnoreCase)]
+    private static partial Regex SettingLine();
 }
 
 /// <summary>Whether a line's git state lets a stable build start (#423): the user's precheck, before the script's own stricter ones.</summary>
@@ -64,7 +90,15 @@ public static class StableBuildCheck
             return "Git state unknown";
         }
 
-        if (line.Branch is not ("main" or "develop"))
+        // The branch the script names is the one it builds from; a file that names none falls back to the user's main or develop.
+        if (line.StableBuild?.ReleaseBranch is { } release)
+        {
+            if (line.Branch != release)
+            {
+                return $"On {line.Branch} - this repository's stable build runs from {release}";
+            }
+        }
+        else if (line.Branch is not ("main" or "develop"))
         {
             return $"On {line.Branch} - a stable build runs from main or develop";
         }
@@ -105,31 +139,20 @@ public sealed class StableBuildLauncher : IStableBuildLauncher
 
     public bool StartBuild(StableBuildRepo repo)
     {
-        var folder = repo.RepoPath.TrimEnd('\\', '/');
+        // No separator before the closing quote, which would escape it: a drive root goes as "E:\." (E: alone is drive-relative).
+        var folder = Path.TrimEndingDirectorySeparator(repo.RepoPath);
+        var quoted = Path.EndsInDirectorySeparator(folder) ? folder + "." : folder;
         var shell = OnPath("pwsh.exe") ? "pwsh.exe" : "powershell.exe";
         var arguments = $"-NoProfile -ExecutionPolicy Bypass -NoExit -File \"{repo.BuildScript}\"";
-        return TryStart(new ProcessStartInfo("wt.exe", $"-d \"{folder}\" {shell} {arguments}") { UseShellExecute = true })
-            || TryStart(new ProcessStartInfo(shell, arguments) { UseShellExecute = true, WorkingDirectory = folder });
+        return ShellStart.TryStart(new ProcessStartInfo("wt.exe", $"-d \"{quoted}\" {shell} {arguments}"))
+            || ShellStart.TryStart(new ProcessStartInfo(shell, arguments) { WorkingDirectory = folder });
     }
 
-    public bool Run(string shortcutPath) => TryStart(new ProcessStartInfo(shortcutPath) { UseShellExecute = true });
+    public bool Run(string shortcutPath) => ShellStart.TryStart(new ProcessStartInfo(shortcutPath));
 
     private static bool OnPath(string exe) =>
         (Environment.GetEnvironmentVariable("PATH") ?? string.Empty).Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Any(dir => File.Exists(Path.Combine(dir, exe)));
-
-    private static bool TryStart(ProcessStartInfo start)
-    {
-        try
-        {
-            using var process = Process.Start(start);
-            return true;
-        }
-        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or IOException)
-        {
-            return false;
-        }
-    }
 }
 
 /// <summary>One repository's pair of entries on a tile's menu (#423), made when the menu opens.</summary>
@@ -146,7 +169,8 @@ public sealed partial class StableBuildEntry
         _repo = repo;
         _launcher = launcher;
         _dialogs = dialogs;
-        Name = Path.GetFileName(repo.RepoPath.TrimEnd('\\', '/'));
+        var folder = Path.TrimEndingDirectorySeparator(repo.RepoPath);
+        Name = Path.GetFileName(folder) is { Length: > 0 } name ? name : folder; // a drive root has no folder name: "E:\"
         BuildHeader = named ? $"Build {Name}" : "Build new version";
         RunHeader = named ? $"Run {Name}" : "Run";
         BuildBlock = StableBuildCheck.BuildBlock(line);
@@ -163,7 +187,7 @@ public sealed partial class StableBuildEntry
     public bool CanBuild => BuildBlock is null;
     public bool CanRun => RunBlock is null;
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanBuild))]
     private void Build()
     {
         if (!_dialogs.Confirm($"Build a new version of {Name}?\n\nThe build script bumps the version, commits and pushes it, and may close the running {Name} and start the new one. Its window shows every step."))
@@ -177,7 +201,7 @@ public sealed partial class StableBuildEntry
         }
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanRun))]
     private void Run()
     {
         if (!_launcher.Run(_shortcutPath))

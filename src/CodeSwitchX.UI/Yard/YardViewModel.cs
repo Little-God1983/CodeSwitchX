@@ -777,9 +777,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private async Task RefreshGitAsync(WorkspaceTileViewModel tile, List<string> paths, CancellationToken ct)
     {
         var info = await _git.InspectAsync(tile.RootPath, ct).ConfigureAwait(false);
-        // The stable-build scripts of each line (#423), read here whichever way GitLinesAsync came by the line.
-        var previous = tile.GitLines;
-        var lines = StableBuildRepo.Mark(await GitLinesAsync(tile, info, ct).ConfigureAwait(false), previous, StableBuildRepo.Find);
+        var lines = await GitLinesAsync(tile, info, ct).ConfigureAwait(false);
         paths.AddRange(lines.Where(HasRepository).Select(l => l.Path).OfType<string>());
         // The pills are taken from the GitHub side when the tile shows the lines, not before: a result stored meanwhile is not overwritten by an older one.
         _ui.Post(() =>
@@ -960,7 +958,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             // The root's own line is brought up to date where it leads; where repositories below the root took its place, they stay as they were.
             return previous[0].Path is { } first && PathNormalizer.Normalize(first) != PathNormalizer.Normalize(tile.RootPath)
                 ? previous
-                : [previous[0] with { Branch = root.Branch, DirtyCount = root.DirtyCount, Path = tile.RootPath, IsRepository = root.IsRepository, GitDir = root.GitDir }, .. previous.Skip(1)];
+                : [previous[0] with { Branch = root.Branch, DirtyCount = root.DirtyCount, Path = tile.RootPath, IsRepository = root.IsRepository, GitDir = root.GitDir, StableBuild = root.IsRepository ? StableBuildRepo.Find(tile.RootPath) : null }, .. previous.Skip(1)];
         }
 
         var rootKey = PathNormalizer.Normalize(tile.RootPath);
@@ -970,7 +968,10 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             root.DirtyCount,
             tile.RootPath,
             IsRepository: root.IsRepository,
-            GitDir: root.GitDir);
+            GitDir: root.GitDir,
+            // The stable-build scripts (#423) are read where a line is made afresh: a line carried over keeps what it had, as
+            // its folder could not be checked (an offline share blocks every look for about 20 s).
+            StableBuild: root.IsRepository ? StableBuildRepo.Find(tile.RootPath) : null);
         var others = folders.Where(f => PathNormalizer.Normalize(f.Path) != rootKey).ToList();
 
         // Each folder's git directory first, which reads a file or two, so git status runs once per checkout, not once per
@@ -1042,7 +1043,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             try
             {
                 var info = await _git.InspectAsync(folder.Path, ct).ConfigureAwait(false);
-                return new GitLine(folder.Label, info.Branch, info.DirtyCount, folder.Path, IsRepository: info.IsRepository, GitDir: info.GitDir);
+                return new GitLine(folder.Label, info.Branch, info.DirtyCount, folder.Path, IsRepository: info.IsRepository, GitDir: info.GitDir,
+                    StableBuild: info.IsRepository ? StableBuildRepo.Find(folder.Path) : null);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

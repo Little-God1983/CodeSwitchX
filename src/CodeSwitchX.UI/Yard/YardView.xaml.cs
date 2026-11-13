@@ -9,7 +9,7 @@ namespace CodeSwitchX.UI.Yard;
 /// </summary>
 public partial class YardView : UserControl
 {
-    /// <summary>Marks the items <see cref="OnTileMenuOpened"/> put in, so the next opening takes them out first.</summary>
+    /// <summary>Marks the items <see cref="OnTileContextMenuOpening"/> put in, so the next opening takes them out first.</summary>
     private static readonly object StableBuildItem = new();
 
     private IDataObject? _dragData;
@@ -54,24 +54,29 @@ public partial class YardView : UserControl
     private void OnTileMenuClosing(object sender, ContextMenuEventArgs e) => (DataContext as YardViewModel)?.MenuOpen(false);
 
     /// <summary>
-    /// A tile's menu opens (#423): its Build new version / Run entries go in above Unregister, made afresh, so a branch
-    /// switched or a shortcut written since the last opening counts. In code, because the list changes beside fixed items.
+    /// A tile's menu is about to open (#423): its Build new version / Run entries go in above Unregister, made afresh, so a
+    /// branch switched or a shortcut written since the last opening counts. Before the menu shows, so it does not grow on
+    /// screen. In code, because the list changes beside fixed items. Not handled: the board holds the tiles' order on it too.
     /// </summary>
-    private void OnTileMenuOpened(object sender, RoutedEventArgs e)
+    private void OnTileContextMenuOpening(object sender, ContextMenuEventArgs e)
     {
-        var menu = (ContextMenu)sender;
+        if (sender is not FrameworkElement { ContextMenu: { } menu, DataContext: WorkspaceTileViewModel tile })
+        {
+            return;
+        }
+
         foreach (var old in menu.Items.OfType<Control>().Where(i => i.Tag == StableBuildItem).ToList())
         {
             menu.Items.Remove(old);
         }
 
-        if (menu.DataContext is not WorkspaceTileViewModel tile || tile.StableBuildEntries() is not { Count: > 0 } entries)
+        if (tile.StableBuildEntries() is not { Count: > 0 } entries)
         {
             return;
         }
 
-        // Above the separator that sets Unregister apart.
-        var at = menu.Items.IndexOf(menu.Items.OfType<Separator>().Last());
+        // Above the separator that sets Unregister apart; at the end should the menu ever have none.
+        var at = menu.Items.OfType<Separator>().LastOrDefault() is { } separator ? menu.Items.IndexOf(separator) : menu.Items.Count;
         menu.Items.Insert(at++, new Separator { Tag = StableBuildItem });
         foreach (var entry in entries)
         {
@@ -79,9 +84,10 @@ public partial class YardView : UserControl
             menu.Items.Insert(at++, Item(entry.RunHeader, entry.RunCommand, entry.RunBlock));
         }
 
+        // Enabled or not by the command's CanExecute; the tooltip says why on a greyed one.
         static MenuItem Item(string header, System.Windows.Input.ICommand command, string? block)
         {
-            var item = new MenuItem { Header = header, Command = command, IsEnabled = block is null, ToolTip = block, Tag = StableBuildItem };
+            var item = new MenuItem { Header = header, Command = command, ToolTip = block, Tag = StableBuildItem };
             ToolTipService.SetShowOnDisabled(item, true);
             return item;
         }

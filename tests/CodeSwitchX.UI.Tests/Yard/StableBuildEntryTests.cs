@@ -83,7 +83,19 @@ public class StableBuildEntryTests
 
         entry.CanBuild.ShouldBeFalse();
         entry.BuildBlock.ShouldBe("On feature/x - a stable build runs from main or develop");
+        entry.BuildCommand.CanExecute(null).ShouldBeFalse("the command itself holds the precheck, not only the menu item");
         entry.CanRun.ShouldBeTrue("Run starts what is installed, whatever the branch");
+    }
+
+    [Fact]
+    public void A_repository_at_a_drive_root_is_named_after_the_drive()
+    {
+        _launcher.Shortcuts.Add(@"programs\Root.lnk");
+        _tile.ShowGit([new GitLine(null, "main", 0, @"E:\", IsRepository: true, StableBuild: new StableBuildRepo(@"E:\", "Root.lnk"))]);
+
+        _tile.StableBuildEntries()[0].BuildCommand.Execute(null);
+
+        _dialogs.Asked.ShouldHaveSingleItem().ShouldStartWith(@"Build a new version of E:\?");
     }
 
     [Fact]
