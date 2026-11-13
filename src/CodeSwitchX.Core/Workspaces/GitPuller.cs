@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Globalization;
 
 namespace CodeSwitchX.Core.Workspaces;
 
@@ -249,8 +248,7 @@ public sealed class GitPuller
     private static List<string> Lines(string text) =>
         text.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).ToList();
 
-    private static int? Count(string? output) =>
-        int.TryParse(output?.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var count) ? count : null;
+    private static int? Count(string? output) => GitInspector.Count(output);
 
     private static Task<ProcessRunResult> RunGitAsync(string folder, IReadOnlyList<string> arguments, TimeSpan timeout, CancellationToken ct)
     {

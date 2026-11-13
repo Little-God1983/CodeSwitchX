@@ -17,9 +17,10 @@ namespace CodeSwitchX.UI.Yard;
 /// <param name="GitHub">What was last read on GitHub for the line's repository, whatever its counts: with nothing open there are no pills, but the line still opens the panel (#406). Null when the repository is not on GitHub or has not been read.</param>
 /// <param name="StableBuild">The repository's stable-build scripts (#423), which the tile's menu builds and runs; null when it has none.</param>
 /// <param name="Head">The commit the checkout is at, the full hash (#426); null when git could not tell.</param>
+/// <param name="BehindAgainst">The commit of GitHub's default branch that <paramref name="Behind"/> was worked out against; null when the line was not compared. One that differs from what <paramref name="GitHub"/> has now says <paramref name="Behind"/> is out of date.</param>
 /// <param name="Behind">The line is on its repository's default branch and lacks commits GitHub has there (#426), as of the last read of GitHub; null when it is not behind, on another branch, or nothing is known.</param>
 public sealed record GitLine(string? Folder, string? Branch, int? DirtyCount, string? Path = null, GitHubPill? Issues = null, GitHubPill? PullRequests = null, bool IsRepository = false, RepoActivity? GitHub = null, string? GitDir = null,
-    StableBuildRepo? StableBuild = null, string? Head = null, GitBehind? Behind = null)
+    StableBuildRepo? StableBuild = null, string? Head = null, GitBehind? Behind = null, string? BehindAgainst = null)
 {
     /// <summary>Before the first git round: "no git" and no pill.</summary>
     public static readonly GitLine Unknown = new(null, null, null);
@@ -34,6 +35,19 @@ public sealed record GitLine(string? Folder, string? Branch, int? DirtyCount, st
 
     /// <summary>The whole line, and the folder's path under it.</summary>
     public string ToolTipText => Path is null ? Text : $"{Text}\n{Path}";
+
+    /// <summary>
+    /// The commit this line is compared with (#426): where GitHub's default branch stands, for a line that is on that branch and knows
+    /// its own commit; null for any other line, which is never behind.
+    /// </summary>
+    internal static GitHubHead? ComparedHead(GitLine line, RepoActivity? activity) =>
+        line is { IsRepository: true, Path: not null, Branch: { } branch, Head: not null } && activity is { DefaultHead: { } head } && activity.DefaultBranch == branch ? head : null;
+
+    /// <summary>
+    /// <see cref="Behind"/> was worked out against another commit than GitHub has for the line now, or not at all: git must be asked
+    /// again. Told by the line itself, not by comparing two reads of GitHub: a git round can show the new read beside the old answer.
+    /// </summary>
+    internal bool BehindIsOutOfDate => ComparedHead(this, GitHub)?.Sha != BehindAgainst;
 
     /// <summary>The state pill: "clean" or "3 changed". A line that is behind GitHub is not clean (#426), so it has none for no changed files.</summary>
     public string? GitStateLabel => Label(DirtyCount, Behind is not null);
@@ -57,7 +71,8 @@ public sealed record GitLine(string? Folder, string? Branch, int? DirtyCount, st
         var (state, behind) => state ?? behind,
     };
 
-    private static string CommitsText(int? commits) => commits switch
+    /// <summary>"1 commit", "12 commits", or "commits" where the count is not known.</summary>
+    internal static string CommitsText(int? commits) => commits switch
     {
         null => "commits",
         1 => "1 commit",

@@ -127,9 +127,8 @@ public static class StableBuildCheck
             0 => line.Behind switch
             {
                 null => null,
-                { Commits: 1 } => "1 commit behind GitHub - pull first",
-                { Commits: { } commits } => $"{commits} commits behind GitHub - pull first",
-                _ => "Behind GitHub - pull first",
+                { Commits: null } => "Behind GitHub - pull first",
+                { Commits: var commits } => $"{GitLine.CommitsText(commits)} behind GitHub - pull first",
             },
             1 => "1 uncommitted change - commit or stash first",
             var n => $"{n} uncommitted changes - commit or stash first",

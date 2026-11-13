@@ -154,7 +154,8 @@ public sealed class GitInspector
         return new GitBehind(total - here);
     }
 
-    private static int? Count(string? output) =>
+    /// <summary>What <c>git rev-list --count</c> printed, as a number; null when it printed none.</summary>
+    internal static int? Count(string? output) =>
         int.TryParse(output?.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var count) ? count : null;
 
     /// <summary>A commit's full hash: 40 hex digits, or 64 in a SHA-256 repository.</summary>
@@ -207,12 +208,17 @@ public sealed class GitInspector
 
     /// <summary>
     /// Git without optional locks: a plain <c>git status</c> refreshes the index under <c>.git/index.lock</c>, which collides
-    /// with the user's own git commands and is left behind when the timeout kills the process.
+    /// with the user's own git commands and is left behind when the timeout kills the process. And without the network.
     /// </summary>
     internal static ProcessStartInfo GitStartInfo(string workingDirectory, string arguments)
     {
         var info = new ProcessStartInfo("git", arguments) { WorkingDirectory = workingDirectory };
         info.Environment["GIT_OPTIONAL_LOCKS"] = "0";
+        // These are reads of what is on the disk. In a partial clone git would fetch an object it lacks from the remote, the commit
+        // BehindAsync asks about for one (#426): never from here, and nobody could answer a prompt for a password.
+        info.Environment["GIT_NO_LAZY_FETCH"] = "1";
+        info.Environment["GIT_TERMINAL_PROMPT"] = "0";
+        info.Environment["GCM_INTERACTIVE"] = "never";
         return info;
     }
 

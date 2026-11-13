@@ -834,11 +834,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
                 return line;
             }
 
-            var behind = HasRepository(line) && line is { Path: { } path, Branch: { } branch, Head: { } head }
-                && _gitHub.ForFolder(path) is { DefaultHead: { } onGitHub } activity && activity.DefaultBranch == branch
-                    ? await _git.BehindAsync(path, head, onGitHub.Sha, onGitHub.Commits, ct).ConfigureAwait(false)
-                    : null;
-            return behind == line.Behind ? line : line with { Behind = behind };
+            var onGitHub = line.Path is { } path ? GitLine.ComparedHead(line, _gitHub.ForFolder(path)) : null;
+            var behind = onGitHub is null ? null : await _git.BehindAsync(line.Path!, line.Head, onGitHub.Sha, onGitHub.Commits, ct).ConfigureAwait(false);
+            return behind == line.Behind && onGitHub?.Sha == line.BehindAgainst ? line : line with { Behind = behind, BehindAgainst = onGitHub?.Sha };
         })).ConfigureAwait(false);
     }
 
@@ -933,7 +931,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         foreach (var tile in Tiles)
         {
             var lines = tile.GitLines.Select(WithGitHub).ToList();
-            moved |= tile.GitLines.Zip(lines).Any(p => p.First.GitHub?.DefaultHead != p.Second.GitHub?.DefaultHead);
+            moved |= lines.Any(l => l.BehindIsOutOfDate);
             tile.ShowGit(lines);
         }
 

@@ -1,3 +1,4 @@
+using CodeSwitchX.Core.GitHub;
 using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.UI.Yard;
 
@@ -58,6 +59,29 @@ public class GitLineTests
 
         line.GitStateLabel.ShouldBeNull("a made-up \"clean\" would hide changes");
         line.BehindLabel.ShouldBe("1 behind");
+    }
+
+    private static readonly RepoActivity OnGitHub = new(new GitHubRepo("acme", "app"), "me", 0, 0, [], [], "main", new GitHubHead("new", 10));
+
+    private static GitLine Compared(string? against, string branch = "main", string? head = "here") =>
+        new(null, branch, 0, @"C:\app", IsRepository: true, GitHub: OnGitHub, Head: head, BehindAgainst: against);
+
+    [Fact]
+    public void A_line_compared_with_an_older_commit_than_GitHub_has_now_is_out_of_date()
+    {
+        // A git round can show the new read of GitHub beside an answer worked out against the old one (review of #426).
+        Compared("old").BehindIsOutOfDate.ShouldBeTrue();
+        Compared(null).BehindIsOutOfDate.ShouldBeTrue("never compared, though it can be");
+        Compared("new").BehindIsOutOfDate.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void A_line_that_is_not_compared_is_not_out_of_date()
+    {
+        Compared(null, branch: "feature/x").BehindIsOutOfDate.ShouldBeFalse("only the default branch is compared");
+        Compared(null, head: null).BehindIsOutOfDate.ShouldBeFalse("git could not tell its commit");
+        (Compared(null) with { GitHub = null }).BehindIsOutOfDate.ShouldBeFalse();
+        Compared("old", branch: "feature/x").BehindIsOutOfDate.ShouldBeTrue("it left the default branch: the old answer must go");
     }
 
     [Theory]

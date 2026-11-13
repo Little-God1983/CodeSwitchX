@@ -223,6 +223,17 @@ public class GitInspectorTests : IDisposable
     }
 
     [Fact]
+    public void Git_never_goes_to_the_network_or_asks_for_a_password()
+    {
+        // In a partial clone "git cat-file -e" of a commit that is not here would fetch it from the remote (review of #426).
+        var environment = GitInspector.GitStartInfo(_root, "cat-file -e 7d6783b").Environment;
+
+        environment["GIT_NO_LAZY_FETCH"].ShouldBe("1");
+        environment["GIT_TERMINAL_PROMPT"].ShouldBe("0");
+        environment["GCM_INTERACTIVE"].ShouldBe("never");
+    }
+
+    [Fact]
     public void Branch_is_found_from_a_subfolder_of_the_repository()
     {
         Directory.CreateDirectory(Path.Combine(_root, ".git"));
