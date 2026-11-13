@@ -330,6 +330,7 @@ public partial class App : Application
         );
         services.AddHostedService(sp => sp.GetRequiredService<KeepWarm>());
         services.AddSingleton<IYardDialogs, YardDialogs>();
+        services.AddSingleton<IStableBuildLauncher, StableBuildLauncher>();
         services.AddSingleton<IChatRowMenu>(sp => new ChatRowMenu(() => sp.GetRequiredService<IYardDirectory>(), () => sp.GetRequiredService<IYardActions>(),
             sp.GetRequiredService<KeepWarm>(), sp.GetRequiredService<IYardDialogs>(), sp.GetRequiredService<ILogger<ChatRowMenu>>()));
         services.AddSingleton(sp => ActivatorUtilities.CreateInstance<YardViewModel>(sp,

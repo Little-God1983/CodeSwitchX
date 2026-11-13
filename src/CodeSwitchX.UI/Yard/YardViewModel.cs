@@ -146,6 +146,12 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// <summary>What a chat row's right-click does (#386); null where the rows have no menu.</summary>
     internal IChatRowMenu? RowMenu { get; }
 
+    /// <summary>What the tiles' Build new version / Run entries start (#423).</summary>
+    internal IStableBuildLauncher StableBuilds { get; }
+
+    /// <summary>The Yard's questions to the user, the build's "are you sure" among them (#423).</summary>
+    internal IYardDialogs Dialogs { get; }
+
     private void Rearrange()
     {
         var now = Now;
@@ -290,9 +296,11 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         Func<string, TabConversation?>? writtenInAt = null, Func<IReadOnlyDictionary<string, bool>>? runningTabs = null,
         Func<CancellationToken, Task<IReadOnlyDictionary<Guid, DateTimeOffset>>>? storedLastUse = null, GitHubActivity? gitHub = null,
         GitHubReader? gitHubReader = null, GitHubBrowsers? gitHubBrowsers = null, ITextClipboard? clipboard = null, IChatRowMenu? rowMenu = null,
-        GitPuller? puller = null, GitHubMerger? merger = null)
+        GitPuller? puller = null, GitHubMerger? merger = null, IStableBuildLauncher? stableBuilds = null, IYardDialogs? dialogs = null)
     {
         RowMenu = rowMenu;
+        StableBuilds = stableBuilds ?? new StableBuildLauncher();
+        Dialogs = dialogs ?? new YardDialogs();
         GitJobs = new YardGitJobs(puller ?? new GitPuller(), ui, time, logger, merger);
         GitJobs.Ended += OnGitJobEnded;
         _gitHub = gitHub;

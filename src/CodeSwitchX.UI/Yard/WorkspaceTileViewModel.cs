@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using CodeSwitchX.Core.Paths;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Hosting;
@@ -439,6 +440,16 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
 
     [RelayCommand]
     private void Open() => _owner.RequestOpen(Id);
+
+    /// <summary>
+    /// The Build new version / Run entries for the menu that opens now (#423): one per repository with the stable-build
+    /// scripts, in the order of the lines. Made afresh each time, so a shortcut the last build wrote counts at once.
+    /// </summary>
+    public IReadOnlyList<StableBuildEntry> StableBuildEntries()
+    {
+        var lines = GitLines.Where(l => l.StableBuild is not null).DistinctBy(l => PathNormalizer.Normalize(l.StableBuild!.RepoPath)).ToList();
+        return [.. lines.Select(l => new StableBuildEntry(l.StableBuild!, l, named: lines.Count > 1, _owner.StableBuilds, _owner.Dialogs))];
+    }
 
     [RelayCommand]
     private void RevealInExplorer() => TryStart("explorer.exe", $"\"{RootPath}\"");
