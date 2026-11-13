@@ -1,5 +1,4 @@
 using System.Windows;
-using CodeSwitchX.UI.Infrastructure;
 
 namespace CodeSwitchX.UI.Shell;
 
@@ -18,24 +17,23 @@ public partial class ExitWindow : Window
 
     /// <summary>
     /// Shows the question over <paramref name="owner"/> until it is answered. The tray's Exit can come while the owner is
-    /// minimized, and a minimized owner hides the windows it owns: it comes up first, and goes back down when the answer is
-    /// Cancel.
+    /// minimized, which would hide a window it owns; restoring it would bring the Cab's VS Code up too, over the question.
+    /// So then the question stands on its own, centred and in the taskbar, and the shell stays as it was.
     /// </summary>
     public static ExitChoice Ask(Window owner, string question, string detail)
     {
-        var wasMinimized = owner.WindowState == WindowState.Minimized;
-        if (wasMinimized || !owner.IsVisible)
+        var dialog = new ExitWindow(question, detail);
+        if (owner.WindowState != WindowState.Minimized && owner.IsVisible)
         {
-            WindowActivation.BringUp(owner);
+            dialog.Owner = owner;
+        }
+        else
+        {
+            dialog.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+            dialog.ShowInTaskbar = true;
         }
 
-        var dialog = new ExitWindow(question, detail) { Owner = owner };
         dialog.ShowDialog();
-        if (dialog.Choice == ExitChoice.Cancel && wasMinimized)
-        {
-            owner.WindowState = WindowState.Minimized;
-        }
-
         return dialog.Choice;
     }
 

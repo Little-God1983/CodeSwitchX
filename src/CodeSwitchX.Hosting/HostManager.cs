@@ -618,16 +618,21 @@ public sealed class HostManager : IDisposable
     {
         lock (_gate)
         {
-            _released = true;
-            foreach (var hosted in OpenLocked())
-            {
-                _docker.Uncloak(hosted.Hwnd);
-                hosted.Visible = true;
-                hosted.TargetRect = null;
-            }
-
-            PublishShownLocked();
+            ReleaseLocked(OpenLocked());
         }
+    }
+
+    private void ReleaseLocked(List<HostedWorkspace> open)
+    {
+        _released = true;
+        foreach (var hosted in open)
+        {
+            _docker.Uncloak(hosted.Hwnd);
+            hosted.Visible = true;
+            hosted.TargetRect = null;
+        }
+
+        PublishShownLocked();
     }
 
     /// <summary>
@@ -638,8 +643,9 @@ public sealed class HostManager : IDisposable
     {
         lock (_gate)
         {
+            // One list for both: a window that dies between two checks would be released by one and closed by the other.
             var open = OpenLocked();
-            ReleaseAll();
+            ReleaseLocked(open);
             foreach (var hosted in open)
             {
                 _docker.Close(hosted.Hwnd);
