@@ -88,13 +88,42 @@ public class StableBuildTests : IDisposable
         // wt takes a bare ; as the start of its next command.
         var arguments = StableBuildLauncher.TerminalArguments(new StableBuildRepo(@"E:\Repos\a;b", "X.lnk"), "pwsh.exe");
 
-        arguments.ShouldBe(@"-d ""E:\Repos\a\;b"" pwsh.exe -NoProfile -ExecutionPolicy Bypass -NoExit -File ""E:\Repos\a\;b\scripts\build.ps1""");
+        arguments.ShouldBe(@"-w new -d ""E:\Repos\a\;b"" pwsh.exe -NoProfile -ExecutionPolicy Bypass -NoExit -File ""E:\Repos\a\;b\scripts\build.ps1""");
     }
 
     [Fact]
     public void A_drive_root_goes_to_windows_terminal_without_a_separator_before_the_quote()
     {
-        StableBuildLauncher.TerminalArguments(new StableBuildRepo(@"E:\", "X.lnk"), "pwsh.exe").ShouldStartWith(@"-d ""E:\."" pwsh.exe");
+        StableBuildLauncher.TerminalArguments(new StableBuildRepo(@"E:\", "X.lnk"), "pwsh.exe").ShouldContain(@"-d ""E:\."" pwsh.exe");
+    }
+
+    [Fact]
+    public void The_build_always_gets_a_terminal_window_of_its_own()
+    {
+        // Not a tab in the window the user types in, whatever Windows Terminal is set to do with new tabs.
+        StableBuildLauncher.TerminalArguments(new StableBuildRepo(@"E:\Repos\App", "X.lnk"), "pwsh.exe").ShouldStartWith("-w new ");
+    }
+
+    [Fact]
+    public void Find_takes_a_doubled_quote_inside_single_quotes()
+    {
+        var repo = Repo(("build.ps1", "# build"), ("_common.ps1", "$script:ShortcutName = 'Bob''s App.lnk'\n"));
+
+        StableBuildRepo.Find(repo).ShouldNotBeNull().ShortcutName.ShouldBe("Bob's App.lnk");
+    }
+
+    [Fact]
+    public void Find_takes_the_last_assignment_as_powershell_does()
+    {
+        var repo = Repo(("build.ps1", "# build"), ("_common.ps1", "$script:ShortcutName = 'Old.lnk'\n$script:ShortcutName = 'New.lnk'\n"));
+
+        StableBuildRepo.Find(repo).ShouldNotBeNull().ShortcutName.ShouldBe("New.lnk");
+    }
+
+    [Fact]
+    public void The_release_branch_is_matched_in_any_case_as_the_script_does()
+    {
+        StableBuildCheck.BuildBlock(Line("main", 0, "Main")).ShouldBeNull("the script compares with -ne, which ignores case");
     }
 
     [Fact]

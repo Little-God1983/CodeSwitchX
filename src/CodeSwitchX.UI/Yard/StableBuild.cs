@@ -77,14 +77,15 @@ public sealed partial record StableBuildRepo(string RepoPath, string ShortcutNam
     /// </summary>
     private static string? Setting(string text, string name)
     {
-        if (SettingLine().Matches(text).FirstOrDefault(m => string.Equals(m.Groups["name"].Value, name, StringComparison.OrdinalIgnoreCase)) is not { } match)
+        // The last assignment, as it is the one the script ends up with.
+        if (SettingLine().Matches(text).LastOrDefault(m => string.Equals(m.Groups["name"].Value, name, StringComparison.OrdinalIgnoreCase)) is not { } match)
         {
             return null;
         }
 
         if (match.Groups["single"].Success)
         {
-            return match.Groups["single"].Value is { Length: > 0 } single ? single : null;
+            return match.Groups["single"].Value.Replace("''", "'") is { Length: > 0 } single ? single : null;
         }
 
         var value = match.Groups["double"].Value;
@@ -92,7 +93,7 @@ public sealed partial record StableBuildRepo(string RepoPath, string ShortcutNam
     }
 
     /// <summary><c>$script:Name = 'value'</c> or <c>"value"</c> at a line's start; PowerShell takes the scope in any casing.</summary>
-    [GeneratedRegex("""^\s*\$script:(?<name>\w+)\s*=\s*(?:'(?<single>[^']*)'|"(?<double>[^"]*)")""", RegexOptions.Multiline | RegexOptions.IgnoreCase)]
+    [GeneratedRegex("""^\s*\$script:(?<name>\w+)\s*=\s*(?:'(?<single>(?:[^']|'')*)'|"(?<double>[^"]*)")""", RegexOptions.Multiline | RegexOptions.IgnoreCase)]
     private static partial Regex SettingLine();
 }
 
@@ -110,7 +111,7 @@ public static class StableBuildCheck
         // The branch the script names is the one it builds from; a file that names none falls back to the user's main or develop.
         if (line.StableBuild?.ReleaseBranch is { } release)
         {
-            if (line.Branch != release)
+            if (!string.Equals(line.Branch, release, StringComparison.OrdinalIgnoreCase)) // as the script's -ne compares
             {
                 return $"On {line.Branch} - this repository's stable build runs from {release}";
             }
@@ -168,7 +169,8 @@ public sealed class StableBuildLauncher : IStableBuildLauncher
         // A bare ; starts wt's next command, so it goes as \; in both paths.
         var folder = Path.TrimEndingDirectorySeparator(repo.RepoPath);
         var quoted = Path.EndsInDirectorySeparator(folder) ? folder + "." : folder;
-        return $"-d \"{quoted.Replace(";", "\\;")}\" {shell} {ShellArguments(repo.BuildScript.Replace(";", "\\;"))}";
+        // -w new: a window of its own, not a tab in one the user types in, whatever Windows Terminal is set to do.
+        return $"-w new -d \"{quoted.Replace(";", "\\;")}\" {shell} {ShellArguments(repo.BuildScript.Replace(";", "\\;"))}";
     }
 
     private static string ShellArguments(string script) => $"-NoProfile -ExecutionPolicy Bypass -NoExit -File \"{script}\"";
@@ -197,7 +199,8 @@ public sealed partial class StableBuildEntry
         _launcher = launcher;
         _dialogs = dialogs;
         var folder = Path.TrimEndingDirectorySeparator(repo.RepoPath);
-        Name = Path.GetFileName(folder) is { Length: > 0 } name ? name : folder; // a drive root has no folder name: "E:\"
+        // The name the tile's line shows (a workspace file's label), else the folder's; a drive root has no folder name: "E:\".
+        Name = line.Folder ?? (Path.GetFileName(folder) is { Length: > 0 } name ? name : folder);
         BuildHeader = named ? $"Build {Name}" : "Build new version";
         RunHeader = named ? $"Run {Name}" : "Run";
         BuildBlock = StableBuildCheck.BuildBlock(line);
@@ -215,23 +218,29 @@ public sealed partial class StableBuildEntry
     public bool CanRun => RunBlock is null;
 
     [RelayCommand(CanExecute = nameof(CanBuild))]
-    private void Build()
+    private Task BuildAsync()
     {
         if (!_dialogs.Confirm($"Build a new version of {Name}?\n\nThe build script bumps the version, commits and pushes it, and may close the running {Name} and start the new one. Its window shows every step."))
         {
-            return;
+            return Task.CompletedTask;
         }
 
-        if (!_launcher.StartBuild(_repo))
+        return StartAsync();
+
+        // Off the UI thread: the launcher looks along PATH, and a folder there on an offline share blocks for about 20 s.
+        async Task StartAsync()
         {
-            _dialogs.Tell($"Could not start the build of {Name}.");
+            if (!await Task.Run(() => _launcher.StartBuild(_repo)).ConfigureAwait(true))
+            {
+                _dialogs.Tell($"Could not start the build of {Name}.");
+            }
         }
     }
 
     [RelayCommand(CanExecute = nameof(CanRun))]
-    private void Run()
+    private async Task RunAsync()
     {
-        if (!_launcher.Run(_shortcutPath))
+        if (!await Task.Run(() => _launcher.Run(_shortcutPath)).ConfigureAwait(true))
         {
             _dialogs.Tell($"Could not start {Name}.");
         }

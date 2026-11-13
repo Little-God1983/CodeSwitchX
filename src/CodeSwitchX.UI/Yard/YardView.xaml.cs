@@ -54,9 +54,10 @@ public partial class YardView : UserControl
     private void OnTileMenuClosing(object sender, ContextMenuEventArgs e) => (DataContext as YardViewModel)?.MenuOpen(false);
 
     /// <summary>
-    /// A tile's menu is about to open (#423): its Build new version / Run entries go in above Unregister, made afresh, so a
-    /// branch switched or a shortcut written since the last opening counts. Before the menu shows, so it does not grow on
-    /// screen. In code, because the list changes beside fixed items. Not handled: the board holds the tiles' order on it too.
+    /// A tile's menu is about to open (#423): its Build new version / Run entries go in above Unregister, made afresh from the
+    /// tile's last git round (the state its lines show, up to one round old) and a shortcut written since counts at once.
+    /// Before the menu shows, so it does not grow on screen. In code, because the list changes beside fixed items. Not
+    /// handled: the board holds the tiles' order on it too.
     /// </summary>
     private void OnTileContextMenuOpening(object sender, ContextMenuEventArgs e)
     {

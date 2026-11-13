@@ -67,6 +67,30 @@ public class StableBuildEntryTests
     }
 
     [Fact]
+    public void Several_repositories_go_by_the_names_their_lines_show()
+    {
+        // Two checkouts in folders of one name tell apart by the labels the workspace file gives them.
+        _tile.ShowGit([Line(@"c:\one\app", folder: "Client"), Line(@"c:\two\app", folder: "Server")]);
+
+        _tile.StableBuildEntries().Select(e => e.BuildHeader).ShouldBe(["Build Client", "Build Server"]);
+    }
+
+    [Fact]
+    public async Task Build_starts_the_window_off_the_calling_thread()
+    {
+        // The launcher looks along PATH for pwsh, and a folder on an offline share there blocks for about 20 s: never on the UI thread.
+        _launcher.Gate = new ManualResetEventSlim();
+        _tile.ShowGit([Line(@"c:\repo\app")]);
+
+        var building = _tile.StableBuildEntries()[0].BuildCommand.ExecuteAsync(null);
+
+        building.IsCompleted.ShouldBeFalse("the window is started on another thread, so the click returns at once");
+        _launcher.Gate.Set();
+        await building;
+        _launcher.Built.ShouldBe([@"c:\repo\app"]);
+    }
+
+    [Fact]
     public void Two_lines_of_one_repository_give_one_entry()
     {
         _tile.ShowGit([Line(@"c:\repo\app", folder: "app"), Line(@"C:\Repo\App", folder: "again")]);
@@ -88,12 +112,12 @@ public class StableBuildEntryTests
     }
 
     [Fact]
-    public void A_repository_at_a_drive_root_is_named_after_the_drive()
+    public async Task A_repository_at_a_drive_root_is_named_after_the_drive()
     {
         _launcher.Shortcuts.Add(@"programs\Root.lnk");
         _tile.ShowGit([new GitLine(null, "main", 0, @"E:\", IsRepository: true, StableBuild: new StableBuildRepo(@"E:\", "Root.lnk"))]);
 
-        _tile.StableBuildEntries()[0].BuildCommand.Execute(null);
+        await _tile.StableBuildEntries()[0].BuildCommand.ExecuteAsync(null);
 
         _dialogs.Asked.ShouldHaveSingleItem().ShouldStartWith(@"Build a new version of E:\?");
     }
@@ -111,55 +135,55 @@ public class StableBuildEntryTests
     }
 
     [Fact]
-    public void Build_asks_first_and_starts_on_yes()
+    public async Task Build_asks_first_and_starts_on_yes()
     {
         _tile.ShowGit([Line(@"c:\repo\app")]);
 
-        _tile.StableBuildEntries()[0].BuildCommand.Execute(null);
+        await _tile.StableBuildEntries()[0].BuildCommand.ExecuteAsync(null);
 
         _dialogs.Asked.ShouldHaveSingleItem().ShouldStartWith("Build a new version of app?");
         _launcher.Built.ShouldBe([@"c:\repo\app"]);
     }
 
     [Fact]
-    public void Build_starts_nothing_on_no()
+    public async Task Build_starts_nothing_on_no()
     {
         _dialogs.Answer = false;
         _tile.ShowGit([Line(@"c:\repo\app")]);
 
-        _tile.StableBuildEntries()[0].BuildCommand.Execute(null);
+        await _tile.StableBuildEntries()[0].BuildCommand.ExecuteAsync(null);
 
         _launcher.Built.ShouldBeEmpty();
     }
 
     [Fact]
-    public void Build_tells_when_the_window_cannot_be_started()
+    public async Task Build_tells_when_the_window_cannot_be_started()
     {
         _launcher.Starts = false;
         _tile.ShowGit([Line(@"c:\repo\app")]);
 
-        _tile.StableBuildEntries()[0].BuildCommand.Execute(null);
+        await _tile.StableBuildEntries()[0].BuildCommand.ExecuteAsync(null);
 
         _dialogs.Told.ShouldBe(["Could not start the build of app."]);
     }
 
     [Fact]
-    public void Run_opens_the_repositorys_shortcut()
+    public async Task Run_opens_the_repositorys_shortcut()
     {
         _tile.ShowGit([Line(@"c:\repo\app")]);
 
-        _tile.StableBuildEntries()[0].RunCommand.Execute(null);
+        await _tile.StableBuildEntries()[0].RunCommand.ExecuteAsync(null);
 
         _launcher.Ran.ShouldBe([@"programs\app.lnk"]);
     }
 
     [Fact]
-    public void Run_tells_when_the_shortcut_cannot_be_opened()
+    public async Task Run_tells_when_the_shortcut_cannot_be_opened()
     {
         _launcher.Starts = false;
         _tile.ShowGit([Line(@"c:\repo\app")]);
 
-        _tile.StableBuildEntries()[0].RunCommand.Execute(null);
+        await _tile.StableBuildEntries()[0].RunCommand.ExecuteAsync(null);
 
         _dialogs.Told.ShouldBe(["Could not start app."]);
     }
@@ -175,8 +199,12 @@ public class StableBuildEntryTests
 
         public bool ShortcutExists(string shortcutPath) => Shortcuts.Contains(shortcutPath);
 
+        /// <summary>When set, a build waits for it (at most 2 s): a build started on the caller's thread would hold the caller that long.</summary>
+        public ManualResetEventSlim? Gate { get; set; }
+
         public bool StartBuild(StableBuildRepo repo)
         {
+            Gate?.Wait(TimeSpan.FromSeconds(2));
             Built.Add(repo.RepoPath);
             return Starts;
         }
