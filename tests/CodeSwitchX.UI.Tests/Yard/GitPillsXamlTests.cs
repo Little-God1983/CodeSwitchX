@@ -5,6 +5,7 @@ using System.Windows.Markup;
 using System.Windows.Media;
 using System.Xml.Linq;
 using CodeSwitchX.Core.GitHub;
+using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.UI.Tests.Infrastructure;
 using CodeSwitchX.UI.Yard;
 using Shouldly;
@@ -78,6 +79,56 @@ public sealed class GitPillsXamlTests
     [Fact]
     public Task A_line_without_pills_shows_none_even_on_a_tile() => StaThread.RunAsync(() =>
         PillButtons(Render(new GitLine(null, "main", 0), tile: true)).ShouldAllBe(b => !IsShown(b)));
+
+    /// <summary>The texts of the state and behind pills that show, left to right. Not IsVisible: the presenter hangs in no window.</summary>
+    private static List<string> ShownPillTexts(DependencyObject root) =>
+        Descendants<Border>(root).Where(b => b.Child is TextBlock && NothingCollapsed(b)).Select(b => ((TextBlock)b.Child).Text).ToList();
+
+    private static bool NothingCollapsed(DependencyObject element)
+    {
+        for (var node = element; node is not null; node = VisualTreeHelper.GetParent(node))
+        {
+            if (node is UIElement { Visibility: not Visibility.Visible })
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    [Fact]
+    public Task A_line_behind_GitHub_shows_behind_in_place_of_clean() => StaThread.RunAsync(() =>
+    {
+        var presenter = Render(new GitLine(null, "main", 0, Behind: new GitBehind(12)), tile: true);
+
+        ShownPillTexts(presenter).ShouldBe(["12 behind"]);
+        Descendants<Border>(presenter).Single(b => b.Child is TextBlock { Text: "12 behind" }).ToolTip
+            .ShouldBe("GitHub's main has 12 commits this checkout lacks. In the Yard, click the line and press Pull main.");
+    });
+
+    [Fact]
+    public Task A_line_with_changes_that_is_behind_shows_both_pills() => StaThread.RunAsync(() =>
+        ShownPillTexts(Render(new GitLine(null, "main", 3, Behind: new GitBehind(12)), tile: true)).ShouldBe(["3 changed", "12 behind"]));
+
+    [Fact]
+    public Task A_line_that_is_not_behind_shows_its_state_pill_alone() => StaThread.RunAsync(() =>
+    {
+        ShownPillTexts(Render(new GitLine(null, "main", 0), tile: true)).ShouldBe(["clean"]);
+        ShownPillTexts(Render(new GitLine(null, "main", 3), tile: false)).ShouldBe(["3 changed"]);
+    });
+
+    [Fact]
+    public Task A_narrow_line_keeps_the_behind_pill_whole() => StaThread.RunAsync(() =>
+    {
+        var line = new GitLine("AVeryLongFolderNameForARepository", "feature/a-very-long-branch-name", 3,
+            Issues: Pill(GitHubItemKind.Issue), PullRequests: Pill(GitHubItemKind.PullRequest), Behind: new GitBehind(120));
+        var presenter = Render(line, tile: true, width: 300);
+
+        var behind = Descendants<TextBlock>(presenter).Single(t => t.Text == "120 behind");
+        behind.TranslatePoint(new Point(behind.ActualWidth, 0), presenter).X.ShouldBeLessThanOrEqualTo(presenter.ActualWidth + 0.5);
+        behind.TranslatePoint(new Point(0, 0), presenter).X.ShouldBeGreaterThan(0);
+    });
 
     [Fact]
     public Task A_line_with_one_kind_shows_that_pill_only() => StaThread.RunAsync(() =>

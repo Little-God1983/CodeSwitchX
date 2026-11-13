@@ -156,6 +156,86 @@ public partial class GitHubListViewModelTests
     }
 
     [Fact]
+    public async Task On_the_branch_it_merges_into_the_strip_offers_merge_and_pull_too()
+    {
+        var model = await OpenForMerge("main");
+
+        model.OpenMergeCommand.Execute(Row(model));
+
+        model.MergeStrip.ShouldBe(new MergeStrip(Row(model), "Merge #9 into main?", "This workspace is on main. Merge and pull brings it up to date.", true, "Merge only", "main"));
+    }
+
+    [Fact]
+    public async Task A_fork_merging_into_the_workspaces_branch_offers_merge_and_pull_too()
+    {
+        var model = await OpenForMerge("main", fromFork: true);
+
+        model.OpenMergeCommand.Execute(Row(model));
+
+        var strip = model.MergeStrip.ShouldNotBeNull();
+        strip.OffersPull.ShouldBeTrue("the merge lands on the branch the workspace is on, wherever it comes from");
+        strip.CheckoutLine.ShouldBe("This workspace is on main. Merge and pull brings it up to date.");
+    }
+
+    [Fact]
+    public async Task On_a_base_that_is_not_the_default_branch_the_strip_offers_merge_alone()
+    {
+        var model = await OpenForMerge("develop", into: "develop");
+
+        model.OpenMergeCommand.Execute(Row(model));
+
+        var strip = model.MergeStrip.ShouldNotBeNull();
+        strip.OffersPull.ShouldBeFalse("the Yard pulls the default branch only");
+        strip.MergeText.ShouldBe("Merge");
+        strip.CheckoutLine.ShouldBe("This workspace stays on develop.");
+    }
+
+    [Fact]
+    public async Task A_working_chat_on_the_branch_it_merges_into_leaves_the_pull_out()
+    {
+        var model = await OpenForMerge("main", working: () => true);
+
+        model.OpenMergeCommand.Execute(Row(model));
+
+        var strip = model.MergeStrip.ShouldNotBeNull();
+        strip.OffersPull.ShouldBeFalse();
+        strip.MergeText.ShouldBe("Merge only");
+        strip.CheckoutLine.ShouldBe("A chat is working here, so the pull is left out.");
+    }
+
+    [Fact]
+    public async Task Merge_and_pull_on_the_branch_it_merges_into_pulls_without_a_switch()
+    {
+        _git.Current = "main";
+        var model = await OpenForMerge("main");
+        model.OpenMergeCommand.Execute(Row(model));
+
+        model.MergeAndPullCommand.Execute(null);
+
+        await Eventually(() => !model.IsBusy && model.ActionMessage is not null);
+        model.ActionMessage.ShouldBe("Merged #9. app is on main, 3 new commits.");
+        model.IsActionFailed.ShouldBeFalse();
+        _git.Ran.ShouldContain("merge --ff-only --quiet refs/remotes/origin/main");
+        _git.Ran.ShouldNotContain(r => r.StartsWith("switch", StringComparison.Ordinal));
+        model.PullText.ShouldBe("Pull main");
+    }
+
+    [Fact]
+    public async Task A_merge_whose_pull_is_refused_on_the_branch_it_merges_into_says_it_did_not_pull()
+    {
+        _git.Current = "main";
+        _git.Status = " M a.txt\n";
+        var model = await OpenForMerge("main");
+        model.OpenMergeCommand.Execute(Row(model));
+
+        model.MergeAndPullCommand.Execute(null);
+
+        await Eventually(() => !model.IsBusy && model.ActionMessage is not null);
+        model.ActionMessage.ShouldBe("Merged #9, but didn't pull: 1 file has uncommitted changes.");
+        model.IsActionFailed.ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task One_merged_already_leaves_the_list_and_the_pull_follows()
     {
         _merge.Answer = new GhAnswer(null, ErrorOutput: "X Pull request acme/app#9 was already merged\n");

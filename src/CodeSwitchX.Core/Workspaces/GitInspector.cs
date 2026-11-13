@@ -1,11 +1,32 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using CodeSwitchX.Core.Paths;
 
 namespace CodeSwitchX.Core.Workspaces;
 
 /// <param name="DirtyCount">Changed and untracked files; null when git could not report them (not a repository, git missing, refused or timed out).</param>
 /// <param name="GitDir">The repository's git directory, full path; two folders with the same one are in the same checkout.</param>
-public sealed record GitInfo(bool IsRepository, string? Branch, int? DirtyCount, string? GitDir = null);
+/// <param name="Head">The commit the checkout is at, the full hash (#426); null when git could not tell, or there is no commit yet.</param>
+public sealed record GitInfo(bool IsRepository, string? Branch, int? DirtyCount, string? GitDir = null, string? Head = null);
+
+/// <summary>A checkout's branch lacks commits its branch on GitHub has (#426).</summary>
+/// <param name="Commits">How many; null when only "behind" can be told (a shallow clone, commits of its own, no count from GitHub).</param>
+public sealed record GitBehind(int? Commits);
+
+/// <summary>What <see cref="GitInspector.BehindAsync"/> found (#426).</summary>
+/// <param name="Known">Git answered. Without an answer nothing is known: neither "behind" nor "not behind" may be made of it.</param>
+/// <param name="Behind">How far behind; null when it is not, and when nothing is known.</param>
+public readonly record struct BehindAnswer(bool Known, GitBehind? Behind)
+{
+    /// <summary>Git did not answer (it ran out of time, it is not there), or a commit was not given in full.</summary>
+    public static readonly BehindAnswer Unknown = new(false, null);
+
+    /// <summary>The checkout is at GitHub's commit or holds it already.</summary>
+    public static readonly BehindAnswer NotBehind = new(true, null);
+
+    public static BehindAnswer Of(GitBehind behind) => new(true, behind);
+}
 
 /// <param name="Output">Stdout when the process exited with code 0; otherwise null.</param>
 /// <param name="TimedOut">The process was killed because it outlived the timeout.</param>
@@ -20,10 +41,16 @@ public sealed record ProcessRunResult(string? Output, bool TimedOut, int? Pid, i
     public bool DidNotStart => Pid is null && ExitCode is null && !TimedOut;
 }
 
-/// <summary>Cheap git facts for tiles: branch from HEAD (no process), dirty count from <c>git status --porcelain</c>.</summary>
+/// <summary>
+/// Cheap git facts for tiles: branch from HEAD (no process), dirty count and commit from one <c>git status --porcelain=v2</c>, and how
+/// far the checkout is behind a commit GitHub named (#426), without a fetch.
+/// </summary>
 public sealed class GitInspector
 {
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(5);
+
+    /// <summary>The status line that carries the commit; "(initial)" stands there before the first one.</summary>
+    private const string HeadLinePrefix = "# branch.oid ";
 
     /// <summary>Repositories using the reftable ref storage keep this placeholder in HEAD; only git can read the real ref.</summary>
     private const string ReftablePlaceholderBranch = ".invalid";
@@ -92,12 +119,84 @@ public sealed class GitInspector
             branch = await ReadBranchFromGitAsync(root, ct).ConfigureAwait(false);
         }
 
-        var status = await _runGit(root, "status --porcelain --untracked-files=normal", ct).ConfigureAwait(false);
-        int? dirty = status is null
-            ? null
-            : status.Split('\n', StringSplitOptions.RemoveEmptyEntries).Count(l => l.Trim('\r').Length > 0);
-        return new GitInfo(true, branch, dirty, Path.GetFullPath(gitDir));
+        // Format 2 with the branch header: the commit comes with the files, at no process of its own (#426). Its "# ..." lines are no
+        // files. Without the count against the upstream, which costs a walk nobody reads.
+        var status = await _runGit(root, "status --porcelain=v2 --branch --no-ahead-behind --untracked-files=normal", ct).ConfigureAwait(false);
+        var lines = status?.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.Trim('\r')).Where(l => l.Length > 0).ToList();
+        int? dirty = lines?.Count(l => !l.StartsWith('#'));
+        var head = lines?.FirstOrDefault(l => l.StartsWith(HeadLinePrefix, StringComparison.Ordinal))?[HeadLinePrefix.Length..].Trim();
+        return new GitInfo(true, branch, dirty, Path.GetFullPath(gitDir), IsFullHash(head) ? head : null);
     }
+
+    /// <summary>
+    /// How far the checkout at <paramref name="head"/> is behind <paramref name="onGitHub"/>, the commit GitHub has for its branch (#426).
+    /// Not behind: it is at that commit, or holds it already (ahead, or GitHub was read before a pull). Nothing is fetched. A commit that
+    /// is here is counted by git. One that is not is the usual case right after a merge on GitHub: then the branch is behind, and by the
+    /// difference of the two totals when it has nothing of its own (its upstream, as last fetched, holds it whole) and the clone is not
+    /// shallow. A git that gives no answer (out of time under load) is <see cref="BehindAnswer.Unknown"/>, never "not behind" and never
+    /// "the commit is not here": either would be made up (review of #426).
+    /// </summary>
+    /// <param name="head">The checkout's commit, as <see cref="GitInfo.Head"/> has it.</param>
+    /// <param name="commitsOnGitHub">How many commits GitHub's branch holds in all; null when it did not say.</param>
+    public async Task<BehindAnswer> BehindAsync(string root, string? head, string onGitHub, int? commitsOnGitHub, CancellationToken ct)
+    {
+        // What GitHub sent goes on git's command line only as a full hash.
+        if (!IsFullHash(head) || !IsFullHash(onGitHub))
+        {
+            return BehindAnswer.Unknown;
+        }
+
+        if (string.Equals(head, onGitHub, StringComparison.OrdinalIgnoreCase))
+        {
+            return BehindAnswer.NotBehind;
+        }
+
+        // Answers either way: the hash back for a commit that is here, nothing for one that is not. "cat-file -e" fails for a missing
+        // commit as it does when it runs out of time, and the two must not be mixed up.
+        var here = (await _runGit(root, $"rev-list --no-walk --ignore-missing {onGitHub}", ct).ConfigureAwait(false))?.Trim();
+        if (here is null)
+        {
+            return BehindAnswer.Unknown;
+        }
+
+        if (here.Length > 0)
+        {
+            switch (Count(await _runGit(root, $"rev-list --count HEAD..{onGitHub}", ct).ConfigureAwait(false)))
+            {
+                case null:
+                    return BehindAnswer.Unknown;
+                case 0:
+                    return BehindAnswer.NotBehind;
+                case var missing:
+                    // A shallow clone's history is cut off, and git counts only up to the cut: behind, by a count nobody knows.
+                    return BehindAnswer.Of(new GitBehind(await IsCompleteAsync(root, ct).ConfigureAwait(false) ? missing : null));
+            }
+        }
+
+        // GitHub has a commit this checkout lacks: behind. The count is an extra, and whatever fails from here on only costs the count.
+        if (!await IsCompleteAsync(root, ct).ConfigureAwait(false)
+            || commitsOnGitHub is not { } total
+            || Count(await _runGit(root, "rev-list --count @{upstream}..HEAD", ct).ConfigureAwait(false)) != 0
+            || Count(await _runGit(root, "rev-list --count HEAD", ct).ConfigureAwait(false)) is not { } local
+            || total <= local)
+        {
+            return BehindAnswer.Of(new GitBehind(null));
+        }
+
+        return BehindAnswer.Of(new GitBehind(total - local));
+    }
+
+    /// <summary>Git says the clone holds its whole history: not a shallow one. No answer is not a yes.</summary>
+    private async Task<bool> IsCompleteAsync(string root, CancellationToken ct) =>
+        (await _runGit(root, "rev-parse --is-shallow-repository", ct).ConfigureAwait(false))?.Trim() == "false";
+
+    /// <summary>What <c>git rev-list --count</c> printed, as a number; null when it printed none.</summary>
+    internal static int? Count(string? output) =>
+        int.TryParse(output?.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var count) ? count : null;
+
+    /// <summary>A commit's full hash: 40 hex digits, or 64 in a SHA-256 repository.</summary>
+    private static bool IsFullHash([NotNullWhen(true)] string? text) =>
+        text is { Length: 40 or 64 } && text.All(char.IsAsciiHexDigit);
 
     /// <summary>
     /// The git directory of the repository <paramref name="folder"/> is in, full path as <see cref="GitInfo.GitDir"/> has
@@ -145,13 +244,28 @@ public sealed class GitInspector
 
     /// <summary>
     /// Git without optional locks: a plain <c>git status</c> refreshes the index under <c>.git/index.lock</c>, which collides
-    /// with the user's own git commands and is left behind when the timeout kills the process.
+    /// with the user's own git commands and is left behind when the timeout kills the process. And without the network.
     /// </summary>
     internal static ProcessStartInfo GitStartInfo(string workingDirectory, string arguments)
     {
         var info = new ProcessStartInfo("git", arguments) { WorkingDirectory = workingDirectory };
-        info.Environment["GIT_OPTIONAL_LOCKS"] = "0";
+        Unattended(info);
+        // These are reads of what is on the disk. In a partial clone git would fetch an object it lacks from the remote, the commit
+        // BehindAsync asks about for one (#426): never from here.
+        info.Environment["GIT_NO_LAZY_FETCH"] = "1";
         return info;
+    }
+
+    /// <summary>
+    /// What every git the app starts by itself runs with, the reads here and <see cref="GitPuller"/>'s: no optional locks (a plain
+    /// <c>git status</c> refreshes the index under <c>.git/index.lock</c>, which collides with the user's own git), and no prompt for a
+    /// password or a host key, which nobody could answer: git fails at once instead of waiting for the timeout.
+    /// </summary>
+    internal static void Unattended(ProcessStartInfo info)
+    {
+        info.Environment["GIT_OPTIONAL_LOCKS"] = "0";
+        info.Environment["GIT_TERMINAL_PROMPT"] = "0";
+        info.Environment["GCM_INTERACTIVE"] = "never";
     }
 
     /// <summary>

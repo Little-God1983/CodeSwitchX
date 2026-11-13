@@ -26,7 +26,7 @@ public sealed record YardFolder(string Name, string Path);
 
 /// <param name="Folder">The folder's name on a tile with several repositories; null on a tile with one.</param>
 /// <param name="Branch">Null when the folder is no repository, or before the first git check.</param>
-/// <param name="Changes">"clean" or "3 changed"; null when git could not tell.</param>
+/// <param name="Changes">"clean", "3 changed", "12 behind" (GitHub has commits the checkout lacks, #426) or "3 changed, 12 behind"; null when git could not tell.</param>
 public sealed record YardGitLine(string? Folder, string? Branch, string? Changes);
 
 /// <param name="Workspace">The name of the workspace whose tile shows the chat.</param>

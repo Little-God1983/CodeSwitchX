@@ -133,8 +133,9 @@ public sealed class YardGitJobs
     /// </summary>
     /// <param name="baseBranch">What the pull request merges into, for the conflict's reason.</param>
     /// <param name="pullBranch">The default branch for Merge and pull; null for Merge only.</param>
+    /// <param name="onPullBranch">The checkout was on <paramref name="pullBranch"/> when the merge was asked for (#426): a pull that stops there did not pull, there was no switch to make.</param>
     public Task MergeAsync(string checkout, string name, GitHubRepo repo, string account, int number, string baseBranch, string? pullBranch, Func<bool> chatIsWorking,
-        string? key = null, string? tree = null, string? headSha = null)
+        string? key = null, string? tree = null, string? headSha = null, bool onPullBranch = false)
     {
         if (_merger is null)
         {
@@ -165,7 +166,7 @@ public sealed class YardGitJobs
                 .ConfigureAwait(false);
             return pull.Succeeded
                 ? new GitJobOutcome(checkout, name, true, $"{merged}. {pull.Text}", number, Pulled: true, ChangedGitHub: true)
-                : new GitJobOutcome(checkout, name, false, $"{merged}, but didn't switch: {pull.Text}", number, ChangedGitHub: true);
+                : new GitJobOutcome(checkout, name, false, $"{merged}, but didn't {(onPullBranch ? "pull" : "switch")}: {pull.Text}", number, ChangedGitHub: true);
         }, $"#{number} may or may not be merged: something went wrong. See the log and GitHub.", fromMerge: true);
     }
 

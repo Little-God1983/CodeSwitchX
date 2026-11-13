@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Globalization;
 
 namespace CodeSwitchX.Core.Workspaces;
 
@@ -249,8 +248,7 @@ public sealed class GitPuller
     private static List<string> Lines(string text) =>
         text.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).ToList();
 
-    private static int? Count(string? output) =>
-        int.TryParse(output?.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var count) ? count : null;
+    private static int? Count(string? output) => GitInspector.Count(output);
 
     private static Task<ProcessRunResult> RunGitAsync(string folder, IReadOnlyList<string> arguments, TimeSpan timeout, CancellationToken ct)
     {
@@ -260,11 +258,7 @@ public sealed class GitPuller
             info.ArgumentList.Add(argument);
         }
 
-        // As GitInspector's: a plain git status refreshes the index under .git/index.lock, which collides with the user's own git.
-        info.Environment["GIT_OPTIONAL_LOCKS"] = "0";
-        // Nobody can answer a prompt for a password or a host key: git fails at once instead of waiting for the timeout.
-        info.Environment["GIT_TERMINAL_PROMPT"] = "0";
-        info.Environment["GCM_INTERACTIVE"] = "never";
+        GitInspector.Unattended(info);
         return GitInspector.RunProcessAsync(info, timeout, ct);
     }
 }

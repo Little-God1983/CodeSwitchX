@@ -19,7 +19,7 @@ public sealed record RepoRead(RepoActivity? Activity, bool NobodySeesIt = false)
 public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null)
 {
     private const string QueryTemplate = """
-        query($owner:String!,$name:String!){repository(owner:$owner,name:$name){viewerPermission defaultBranchRef{name}
+        query($owner:String!,$name:String!){repository(owner:$owner,name:$name){viewerPermission defaultBranchRef{name target{oid ... on Commit{history{totalCount}}}}
          issues(states:OPEN,first:PREVIEW,orderBy:{field:CREATED_AT,direction:DESC}){totalCount nodes{number title url updatedAt labels(first:10){nodes{name color}}}}
          pullRequests(states:OPEN,first:PREVIEW,orderBy:{field:CREATED_AT,direction:DESC}){totalCount nodes{number title url updatedAt headRefName headRefOid baseRefName isCrossRepository author{login} labels(first:10){nodes{name color}}}}}}
         """;
@@ -154,7 +154,8 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
             // An empty repository has no default branch; then nothing is pulled (#407).
             var defaultBranch = node.TryGetProperty("defaultBranchRef", out var d) && d.ValueKind == JsonValueKind.Object
                 && d.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString() : null;
-            var activity = new RepoActivity(repo, account, issueCount, pullRequestCount, newestIssues, newestPullRequests, defaultBranch);
+            var activity = new RepoActivity(repo, account, issueCount, pullRequestCount, newestIssues, newestPullRequests, defaultBranch,
+                defaultBranch is null ? null : HeadOf(d));
             var permission = node.TryGetProperty("viewerPermission", out var p) ? p.GetString() : null;
             return new AccountRead(activity, Array.IndexOf(PermissionOrder, permission));
         }
@@ -162,6 +163,23 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
         {
             return new AccountRead();
         }
+    }
+
+    /// <summary>
+    /// Where the default branch stands (#426): its newest commit and how many it holds. Read leniently, as the name is: an answer without
+    /// them is still a read of the counts, and the tiles then say nothing about being behind.
+    /// </summary>
+    private static GitHubHead? HeadOf(JsonElement defaultBranchRef)
+    {
+        if (!defaultBranchRef.TryGetProperty("target", out var target) || target.ValueKind != JsonValueKind.Object
+            || !target.TryGetProperty("oid", out var oid) || oid.ValueKind != JsonValueKind.String || oid.GetString() is not { Length: > 0 } sha)
+        {
+            return null;
+        }
+
+        var commits = target.TryGetProperty("history", out var history) && history.ValueKind == JsonValueKind.Object
+            && history.TryGetProperty("totalCount", out var total) && total.ValueKind == JsonValueKind.Number && total.TryGetInt32(out var count) ? count : (int?)null;
+        return new GitHubHead(sha, commits);
     }
 
     /// <summary>The items of a preview, odd ones left out; null when the read failed (see <see cref="Split"/>).</summary>

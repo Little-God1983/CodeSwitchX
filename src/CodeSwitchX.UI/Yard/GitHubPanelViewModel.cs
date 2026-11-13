@@ -215,9 +215,9 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     public bool CanMerge => _checkout is not null && _checkout.Jobs.CanMerge;
 
     /// <summary>
-    /// A row's Merge button (#408): opens the strip under the row, and does nothing else. Merge and pull is offered when the workspace is on
-    /// the pull request's branch (not a fork's), it merges into the default branch, and no chat is working here. A press while a job of the
-    /// checkout runs does nothing, as Pull does.
+    /// A row's Merge button (#408): opens the strip under the row, and does nothing else. Merge and pull is offered when it merges into the
+    /// default branch, the workspace is on the pull request's branch (not a fork's) or on the default branch itself (#426), and no chat is
+    /// working here. A press while a job of the checkout runs does nothing, as Pull does.
     /// </summary>
     [RelayCommand]
     private void OpenMerge(GitHubRow row)
@@ -238,10 +238,14 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
         var main = _repo.DefaultBranch;
         var into = item.BaseBranch ?? main ?? "its base branch";
         var onBranch = !item.IsCrossRepository && item.Branch is not null && item.Branch == Branch;
-        var pullable = onBranch && main is not null && into == main;
+        // The workspace is on the default branch and the merge lands there (#426): the merge alone would leave it behind GitHub, with
+        // nothing on the tile to say so. Wherever the pull request comes from, a fork too.
+        var onBase = main is not null && into == main && Branch == main;
+        var pullable = onBase || (onBranch && main is not null && into == main);
         var busy = pullable && _checkout.ChatIsWorking();
         var stays = Branch is { } branch ? $"This workspace stays on {branch}." : "This workspace stays as it is.";
-        var line = !onBranch ? (item.IsCrossRepository ? $"It comes from a fork. {stays}" : stays)
+        var line = onBase ? (busy ? "A chat is working here, so the pull is left out." : $"This workspace is on {main}. Merge and pull brings it up to date.")
+            : !onBranch ? (item.IsCrossRepository ? $"It comes from a fork. {stays}" : stays)
             : busy ? "A chat is working here, so the switch is left out."
             : pullable ? $"This workspace is on its branch. Merge and pull switches it to {main} and pulls."
             : $"It merges into {into}, not {main ?? "the default branch"}. {stays}";
@@ -283,7 +287,8 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
 
         ActionMessage = null;
         _ = _checkout.Jobs.MergeAsync(_checkout.Path, _repo.Repo.Name, _repo.Repo, _repo.Account, strip.Row.Item.Number, strip.BaseBranch,
-            pull && strip.OffersPull ? _repo.DefaultBranch : null, _checkout.ChatIsWorking, _checkout.Key, _checkout.Tree, opened);
+            pull && strip.OffersPull ? _repo.DefaultBranch : null, _checkout.ChatIsWorking, _checkout.Key, _checkout.Tree, opened,
+            onPullBranch: Branch == _repo.DefaultBranch);
     }
 
     private void OnJobChanged(string key)

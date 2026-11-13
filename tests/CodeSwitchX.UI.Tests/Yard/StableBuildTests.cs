@@ -1,3 +1,4 @@
+using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.UI.Yard;
 
 namespace CodeSwitchX.UI.Tests.Yard;
@@ -210,6 +211,21 @@ public class StableBuildTests : IDisposable
     public void Uncommitted_changes_block_the_build(int dirty, string block)
     {
         StableBuildCheck.BuildBlock(Line("main", dirty, "main")).ShouldBe(block);
+    }
+
+    [Theory]
+    [InlineData(1, "1 commit behind GitHub - pull first")]
+    [InlineData(12, "12 commits behind GitHub - pull first")]
+    [InlineData(null, "Behind GitHub - pull first")]
+    public void A_release_branch_behind_GitHub_blocks_the_build_as_the_script_would(int? commits, string block)
+    {
+        StableBuildCheck.BuildBlock(Line("main", 0, "main") with { Behind = new GitBehind(commits) }).ShouldBe(block);
+    }
+
+    [Fact]
+    public void Uncommitted_changes_are_named_before_being_behind()
+    {
+        StableBuildCheck.BuildBlock(Line("main", 2, "main") with { Behind = new GitBehind(12) }).ShouldBe("2 uncommitted changes - commit or stash first");
     }
 
     [Fact]

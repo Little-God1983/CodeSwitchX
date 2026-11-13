@@ -123,7 +123,13 @@ public static class StableBuildCheck
 
         return line.DirtyCount switch
         {
-            0 => null,
+            // The script fetches and refuses a branch that is behind (#426): said here, before a console opens to say it.
+            0 => line.Behind switch
+            {
+                null => null,
+                { Commits: null } => "Behind GitHub - pull first",
+                { Commits: var commits } => $"{GitLine.CommitsText(commits)} behind GitHub - pull first",
+            },
             1 => "1 uncommitted change - commit or stash first",
             var n => $"{n} uncommitted changes - commit or stash first",
         };

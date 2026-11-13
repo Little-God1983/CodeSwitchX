@@ -52,11 +52,153 @@ public class GitInspectorTests : IDisposable
     {
         Directory.CreateDirectory(Path.Combine(_root, ".git"));
         File.WriteAllText(Path.Combine(_root, ".git", "HEAD"), "ref: refs/heads/main\n");
-        var inspector = new GitInspector((_, args, _) => Task.FromResult<string?>(args.Contains("status") ? " M a.cs\n?? b.cs\n" : null));
+        var asked = new List<string>();
+        var inspector = new GitInspector((_, args, _) =>
+        {
+            asked.Add(args);
+            return Task.FromResult<string?>(args.Contains("status")
+                ? $"# branch.oid {Here}\n# branch.head main\n1 .M N... 100644 100644 100644 92cd 92cd a.cs\n? b.cs\n"
+                : null);
+        });
 
         var info = await inspector.InspectAsync(_root, CancellationToken.None);
 
-        info.ShouldBe(new GitInfo(true, "main", 2, Path.Combine(_root, ".git")), "the git directory tells folders of one checkout apart from another repository");
+        info.ShouldBe(new GitInfo(true, "main", 2, Path.Combine(_root, ".git"), Here), "the git directory tells folders of one checkout apart from another repository");
+        asked.ShouldBe(["status --porcelain=v2 --branch --no-ahead-behind --untracked-files=normal"], "the commit comes with the status, at no process of its own");
+    }
+
+    [Theory]
+    [InlineData("# branch.oid (initial)\n# branch.head main\n? a.cs\n", 1)]
+    [InlineData(" M a.cs\n", 1)]
+    [InlineData("", 0)]
+    public async Task A_status_without_a_commit_still_counts_the_files(string status, int dirty)
+    {
+        Directory.CreateDirectory(Path.Combine(_root, ".git"));
+        File.WriteAllText(Path.Combine(_root, ".git", "HEAD"), "ref: refs/heads/main\n");
+        var inspector = new GitInspector((_, _, _) => Task.FromResult<string?>(status));
+
+        var info = await inspector.InspectAsync(_root, CancellationToken.None);
+
+        info.DirtyCount.ShouldBe(dirty);
+        info.Head.ShouldBeNull();
+    }
+
+    private const string Here = "defa35d0aa11defa35d0aa11defa35d0aa11defa";
+
+    private const string OnGitHub = "7d6783b6e4ca65062d1ab6cdfe82e5b5f29e0728";
+
+    /// <summary>The question that tells a commit that is here from one that is not; git answers it either way.</summary>
+    private const string Probe = "rev-list --no-walk --ignore-missing";
+
+    /// <summary>Git scripted by the start of its arguments; anything else fails, as a missing object or a git that does not answer does.</summary>
+    private static GitInspector Scripted(List<string> ran, params (string Start, string? Output)[] answers) =>
+        new((_, args, _) =>
+        {
+            ran.Add(args);
+            return Task.FromResult(answers.FirstOrDefault(a => args.StartsWith(a.Start, StringComparison.Ordinal)).Output);
+        });
+
+    [Fact]
+    public async Task A_checkout_at_GitHubs_commit_is_not_behind_and_asks_git_nothing()
+    {
+        var ran = new List<string>();
+
+        (await Scripted(ran).BehindAsync(_root, OnGitHub, OnGitHub.ToUpperInvariant(), 1155, CancellationToken.None)).ShouldBe(BehindAnswer.NotBehind);
+
+        ran.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task With_GitHubs_commit_fetched_git_counts_how_far_behind()
+    {
+        var ran = new List<string>();
+        var git = Scripted(ran, (Probe, OnGitHub + "\n"), ("rev-list --count", "12\n"), ("rev-parse --is-shallow-repository", "false\n"));
+
+        (await git.BehindAsync(_root, Here, OnGitHub, 1155, CancellationToken.None)).ShouldBe(BehindAnswer.Of(new GitBehind(12)));
+
+        ran.ShouldBe([$"{Probe} {OnGitHub}", $"rev-list --count HEAD..{OnGitHub}", "rev-parse --is-shallow-repository"]);
+    }
+
+    [Theory]
+    [InlineData("true\n")]
+    [InlineData(null)]
+    public async Task In_a_shallow_clone_a_fetched_commit_says_behind_without_a_number(string? shallow)
+    {
+        // Fetched with --depth 1, GitHub's commit has no parents here: git would count 1 where GitHub is 12 ahead (review of #426).
+        var git = Scripted([], (Probe, OnGitHub + "\n"), ("rev-list --count", "1\n"), ("rev-parse --is-shallow-repository", shallow));
+
+        (await git.BehindAsync(_root, Here, OnGitHub, 1155, CancellationToken.None)).ShouldBe(BehindAnswer.Of(new GitBehind(null)));
+    }
+
+    [Fact]
+    public async Task A_checkout_that_holds_GitHubs_commit_already_is_not_behind()
+    {
+        // Ahead of GitHub, or GitHub was read before the pull: its commit is part of this branch.
+        var git = Scripted([], (Probe, OnGitHub + "\n"), ("rev-list --count", "0\n"));
+
+        (await git.BehindAsync(_root, Here, OnGitHub, 1155, CancellationToken.None)).ShouldBe(BehindAnswer.NotBehind);
+    }
+
+    [Fact]
+    public async Task Without_GitHubs_commit_the_count_is_the_difference_of_the_two_totals()
+    {
+        // The usual case right after a merge on GitHub: nothing fetched it. The branch has nothing of its own, so GitHub's holds it whole.
+        var ran = new List<string>();
+        var git = Scripted(ran, (Probe, "\n"), ("rev-parse --is-shallow-repository", "false\n"), ("rev-list --count @{upstream}..HEAD", "0\n"), ("rev-list --count HEAD", "1143\n"));
+
+        (await git.BehindAsync(_root, Here, OnGitHub, 1155, CancellationToken.None)).ShouldBe(BehindAnswer.Of(new GitBehind(12)));
+
+        ran.ShouldBe([$"{Probe} {OnGitHub}", "rev-parse --is-shallow-repository", "rev-list --count @{upstream}..HEAD", "rev-list --count HEAD"]);
+    }
+
+    [Theory]
+    [InlineData("true\n", "0\n", "1143\n", 1155, "a shallow clone holds fewer commits than its branch has")]
+    [InlineData(null, "0\n", "1143\n", 1155, "git did not say whether the clone is shallow")]
+    [InlineData("false\n", "2\n", "1143\n", 1155, "commits of its own are not in GitHub's total")]
+    [InlineData("false\n", null, "1143\n", 1155, "no upstream to say the branch has nothing of its own")]
+    [InlineData("false\n", "0\n", null, 1155, "git did not count")]
+    [InlineData("false\n", "0\n", "1143\n", null, "GitHub did not count")]
+    [InlineData("false\n", "0\n", "1155\n", 1155, "the totals say level, the commits differ: the history was rewritten")]
+    [InlineData("false\n", "0\n", "1160\n", 1155, "more commits than GitHub has")]
+    public async Task Where_the_count_cannot_be_told_it_is_behind_without_a_number(string? shallow, string? own, string? total, int? onGitHub, string why)
+    {
+        var git = Scripted([], (Probe, string.Empty), ("rev-parse --is-shallow-repository", shallow), ("rev-list --count @{upstream}..HEAD", own), ("rev-list --count HEAD", total));
+
+        (await git.BehindAsync(_root, Here, OnGitHub, onGitHub, CancellationToken.None)).ShouldBe(BehindAnswer.Of(new GitBehind(null)), why);
+    }
+
+    [Fact]
+    public async Task A_git_that_does_not_answer_says_nothing_about_being_behind()
+    {
+        // Every command fails, as when git runs out of time: neither "the commit is not here" nor "not behind" may be made of that.
+        var ran = new List<string>();
+        var git = Scripted(ran);
+
+        (await git.BehindAsync(_root, Here, OnGitHub, 1155, CancellationToken.None)).ShouldBe(BehindAnswer.Unknown);
+
+        ran.ShouldBe([$"{Probe} {OnGitHub}"], "nothing more is asked of a git that does not answer");
+    }
+
+    [Fact]
+    public async Task A_count_git_could_not_make_says_nothing_about_being_behind()
+    {
+        var git = Scripted([], (Probe, OnGitHub + "\n"));
+
+        (await git.BehindAsync(_root, Here, OnGitHub, 1155, CancellationToken.None)).ShouldBe(BehindAnswer.Unknown, "a count that ran out of time is not \"not behind\"");
+    }
+
+    [Theory]
+    [InlineData(null, OnGitHub)]
+    [InlineData(Here, "7d6783b")]
+    [InlineData(Here, "7d6783b6e4ca65062d1ab6cdfe82e5b5f29e0728 --output=x")]
+    [InlineData(Here, "")]
+    public async Task Without_both_commits_in_full_nothing_is_asked(string? head, string onGitHub)
+    {
+        var ran = new List<string>();
+
+        (await Scripted(ran).BehindAsync(_root, head, onGitHub, 1155, CancellationToken.None)).ShouldBe(BehindAnswer.Unknown);
+
+        ran.ShouldBeEmpty("what GitHub sent goes on git's command line only as a full hash");
     }
 
     [Fact]
@@ -97,6 +239,17 @@ public class GitInspectorTests : IDisposable
     public void Git_runs_without_optional_locks_so_a_killed_status_never_leaves_index_lock_behind()
     {
         GitInspector.GitStartInfo(_root, "status").Environment["GIT_OPTIONAL_LOCKS"].ShouldBe("0");
+    }
+
+    [Fact]
+    public void Git_never_goes_to_the_network_or_asks_for_a_password()
+    {
+        // In a partial clone a question about a commit that is not here would fetch it from the remote (review of #426).
+        var environment = GitInspector.GitStartInfo(_root, "rev-list --no-walk --ignore-missing 7d6783b").Environment;
+
+        environment["GIT_NO_LAZY_FETCH"].ShouldBe("1");
+        environment["GIT_TERMINAL_PROMPT"].ShouldBe("0");
+        environment["GCM_INTERACTIVE"].ShouldBe("never");
     }
 
     [Fact]
