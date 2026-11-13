@@ -691,6 +691,23 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// </summary>
     public Task RefreshGitAsync(CancellationToken ct) => RequestGitRefresh(ct, again: true);
 
+    /// <summary>The tile whose git the next round reads before the others' (#425); taken by that round. Under <see cref="_gitGate"/>.</summary>
+    private WorkspaceTileViewModel? _gitFirst;
+
+    /// <summary>
+    /// A tile's menu opens with Build new version on it (#425): its git is read again now, ahead of the other tiles, so the precheck is
+    /// not up to a round old (a branch switched a moment ago). The menu takes the new entries when the round shows the lines.
+    /// </summary>
+    public void RefreshGitOf(WorkspaceTileViewModel tile)
+    {
+        lock (_gitGate)
+        {
+            _gitFirst = tile;
+        }
+
+        _ = RequestGitRefresh(CancellationToken.None, again: true);
+    }
+
     /// <summary>Whether a round runs and whether another was asked for are decided under one lock, so a request never falls between a round's last look and its end.</summary>
     private Task RequestGitRefresh(CancellationToken ct, bool again)
     {
@@ -716,6 +733,16 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             do
             {
                 var tiles = await TilesOnUiThreadAsync().ConfigureAwait(false);
+                lock (_gitGate)
+                {
+                    if (_gitFirst is { } first && tiles.Remove(first))
+                    {
+                        tiles.Insert(0, first);
+                    }
+
+                    _gitFirst = null;
+                }
+
                 var pathsOf = new Dictionary<WorkspaceTileViewModel, List<string>>();
                 var shownBefore = tiles.ToDictionary(t => t, t => ShownFolders([t]));
                 foreach (var tile in tiles)
@@ -1002,7 +1029,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     {
         // The stable-build scripts (#423) are read where a line is made afresh: a line carried over keeps what it had, as its
         // folder could not be checked (an offline share blocks every look for about 20 s). The root just answered git.
-        var rootStableBuild = root.IsRepository ? StableBuildRepo.Find(tile.RootPath) : null;
+        var rootStableBuild = StableBuildOf(root, previous);
         var folders = tile.Workspace.WorkspaceFile is { } file ? WorkspaceProbe.FoldersOf(file) : [];
         if (folders is null)
         {
@@ -1098,7 +1125,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             {
                 var info = await _git.InspectAsync(folder.Path, ct).ConfigureAwait(false);
                 return new GitLine(folder.Label, info.Branch, info.DirtyCount, folder.Path, IsRepository: info.IsRepository, GitDir: info.GitDir,
-                    StableBuild: info.IsRepository ? StableBuildRepo.Find(folder.Path) : null, Head: info.Head);
+                    StableBuild: StableBuildOf(info, previous), Head: info.Head);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -1106,6 +1133,21 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
                 return PreviousLine(folder.Path);
             }
         }
+    }
+
+    /// <summary>
+    /// The stable-build scripts at the top of the checkout git just looked at (#423), where git found it (#425): one walk up, the one that
+    /// knows worktree pointers and stops short of the user profile. The tile's lines as last shown hold what the last round found there.
+    /// </summary>
+    private static StableBuildRepo? StableBuildOf(GitInfo info, IReadOnlyList<GitLine> previous)
+    {
+        if (!info.IsRepository || info.Top is not { } top)
+        {
+            return null;
+        }
+
+        var key = PathNormalizer.Normalize(top);
+        return StableBuildRepo.Find(top, previous.Select(l => l.StableBuild).FirstOrDefault(s => s is not null && PathNormalizer.Normalize(s.RepoPath) == key));
     }
 
     private async Task<(string? GitDir, bool Failed)> GitDirOfAsync(WorkspaceFolder folder, CancellationToken ct)

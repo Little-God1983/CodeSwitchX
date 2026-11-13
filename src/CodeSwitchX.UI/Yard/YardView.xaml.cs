@@ -12,6 +12,9 @@ public partial class YardView : UserControl
     /// <summary>Marks the items <see cref="OnTileContextMenuOpening"/> put in, so the next opening takes them out first.</summary>
     private static readonly object StableBuildItem = new();
 
+    /// <summary>The open tile menu with Build / Run entries and its tile (#425): the entries follow the tile's git rounds until it closes.</summary>
+    private (ContextMenu Menu, WorkspaceTileViewModel Tile)? _buildMenu;
+
     private IDataObject? _dragData;
     private string? _dragPath;
 
@@ -55,9 +58,10 @@ public partial class YardView : UserControl
 
     /// <summary>
     /// A tile's menu is about to open (#423): its Build new version / Run entries go in above Unregister, made afresh from the
-    /// tile's last git round (the state its lines show, up to one round old) and a shortcut written since counts at once.
-    /// Before the menu shows, so it does not grow on screen. In code, because the list changes beside fixed items. Not
-    /// handled: the board holds the tiles' order on it too.
+    /// tile's last git round, and a shortcut written since counts at once. Before the menu shows, so it does not grow on screen.
+    /// That round can be up to 30 s old (a branch switched a moment ago): the tile's git is read again now, and the entries follow
+    /// what it finds while the menu is open (#425). In code, because the list changes beside fixed items. Not handled: the board
+    /// holds the tiles' order on it too.
     /// </summary>
     private void OnTileContextMenuOpening(object sender, ContextMenuEventArgs e)
     {
@@ -66,14 +70,64 @@ public partial class YardView : UserControl
             return;
         }
 
+        StopFollowingBuildMenu();
+        if (PutStableBuildItems(menu, tile.StableBuildEntries()) && DataContext is YardViewModel yard)
+        {
+            _buildMenu = (menu, tile);
+            tile.PropertyChanged += OnBuildMenuTileChanged;
+            menu.Closed += OnBuildMenuClosed;
+            yard.RefreshGitOf(tile);
+        }
+    }
+
+    /// <summary>The tile of the open menu shows a new git round: its entries are made again, if they say anything new.</summary>
+    private void OnBuildMenuTileChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(WorkspaceTileViewModel.GitLines) && _buildMenu is var (menu, tile) && menu.IsOpen)
+        {
+            var entries = tile.StableBuildEntries();
+            if (!entries.SelectMany(Look).SequenceEqual(menu.Items.OfType<MenuItem>().Where(i => i.Tag == StableBuildItem).Select(i => (i.Header, (object?)i.ToolTip, i.Command.CanExecute(null)))))
+            {
+                PutStableBuildItems(menu, entries);
+            }
+        }
+
+        static IEnumerable<(object Header, object? ToolTip, bool Enabled)> Look(StableBuildEntry entry)
+        {
+            yield return (Header(entry.BuildHeader), entry.BuildBlock, entry.CanBuild);
+            if (entry.RunHeader is { } run)
+            {
+                yield return (Header(run), entry.RunBlock, entry.CanRun);
+            }
+        }
+    }
+
+    private void OnBuildMenuClosed(object sender, RoutedEventArgs e) => StopFollowingBuildMenu();
+
+    private void StopFollowingBuildMenu()
+    {
+        if (_buildMenu is var (menu, tile))
+        {
+            tile.PropertyChanged -= OnBuildMenuTileChanged;
+            menu.Closed -= OnBuildMenuClosed;
+            _buildMenu = null;
+        }
+    }
+
+    /// <summary>"__" shows a folder's underscore, which a header would otherwise take for an access key.</summary>
+    private static string Header(string text) => text.Replace("_", "__");
+
+    /// <summary>The Build / Run items of <paramref name="entries"/> in place of the ones the menu has; false when there are none.</summary>
+    private static bool PutStableBuildItems(ContextMenu menu, IReadOnlyList<StableBuildEntry> entries)
+    {
         foreach (var old in menu.Items.OfType<Control>().Where(i => i.Tag == StableBuildItem).ToList())
         {
             menu.Items.Remove(old);
         }
 
-        if (tile.StableBuildEntries() is not { Count: > 0 } entries)
+        if (entries.Count == 0)
         {
-            return;
+            return false;
         }
 
         // Above the separator that sets Unregister apart; at the end should the menu ever have none.
@@ -82,14 +136,18 @@ public partial class YardView : UserControl
         foreach (var entry in entries)
         {
             menu.Items.Insert(at++, Item(entry.BuildHeader, entry.BuildCommand, entry.BuildBlock));
-            menu.Items.Insert(at++, Item(entry.RunHeader, entry.RunCommand, entry.RunBlock));
+            if (entry.RunHeader is { } run)
+            {
+                menu.Items.Insert(at++, Item(run, entry.RunCommand, entry.RunBlock));
+            }
         }
 
-        // Enabled or not by the command's CanExecute; the tooltip says why on a greyed one. "__" shows a folder's underscore,
-        // which a header would otherwise take for an access key.
+        return true;
+
+        // Enabled or not by the command's CanExecute; the tooltip says why on a greyed one.
         static MenuItem Item(string header, System.Windows.Input.ICommand command, string? block)
         {
-            var item = new MenuItem { Header = header.Replace("_", "__"), Command = command, ToolTip = block, Tag = StableBuildItem };
+            var item = new MenuItem { Header = Header(header), Command = command, ToolTip = block, Tag = StableBuildItem };
             ToolTipService.SetShowOnDisabled(item, true);
             return item;
         }

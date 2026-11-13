@@ -99,6 +99,28 @@ public class StableBuildEntryTests
     }
 
     [Fact]
+    public void A_checkout_and_a_worktree_of_one_app_get_one_run()
+    {
+        // Both build apart, but the Start Menu holds the one shortcut the last build wrote (#425).
+        _tile.ShowGit([Line(@"c:\repo\app", folder: "app"), Line(@"c:\repo\app-wt", folder: "app-wt") with { StableBuild = new StableBuildRepo(@"c:\repo\app-wt", "app.lnk") }]);
+
+        var entries = _tile.StableBuildEntries();
+
+        entries.Select(e => e.BuildHeader).ShouldBe(["Build app", "Build app-wt"]);
+        entries.Select(e => e.RunHeader).ShouldBe(["Run", null], "one shortcut, so one Run, and nothing to tell apart");
+        entries[1].CanRun.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Runs_of_several_shortcuts_stay_named_when_one_is_shared()
+    {
+        _tile.ShowGit([Line(@"c:\repo\Alpha", folder: "Alpha"), Line(@"c:\repo\Alpha-wt", folder: "Alpha-wt") with { StableBuild = new StableBuildRepo(@"c:\repo\Alpha-wt", "ALPHA.lnk") },
+            Line(@"c:\repo\Beta", folder: "Beta")]);
+
+        _tile.StableBuildEntries().Select(e => e.RunHeader).ShouldBe(["Run Alpha", null, "Run Beta"], "shortcut names compare as Windows compares file names");
+    }
+
+    [Fact]
     public void A_feature_branch_greys_out_build_and_says_why()
     {
         _tile.ShowGit([Line(@"c:\repo\app", branch: "feature/x")]);

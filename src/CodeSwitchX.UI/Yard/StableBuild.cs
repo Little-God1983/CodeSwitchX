@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using System.Text.RegularExpressions;
+using CodeSwitchX.Core.Paths;
 using CodeSwitchX.UI.Infrastructure;
 using CommunityToolkit.Mvvm.Input;
 using Path = System.IO.Path;
@@ -18,15 +19,21 @@ public sealed partial record StableBuildRepo(string RepoPath, string ShortcutNam
 {
     public string BuildScript => Path.Combine(RepoPath, "scripts", "build.ps1");
 
+    /// <summary>When <c>_common.ps1</c> was last written as of the read this was made from (#425): the same time again needs no new read.</summary>
+    public DateTime CommonWrittenAt { get; init; }
+
     /// <summary>
-    /// The scripts of the repository <paramref name="folder"/> is in, looked for at its top; null when it has none, or they
-    /// cannot be read. A lookup that goes wrong in any way only means no entries: it must not cost the tile its git round.
+    /// The scripts of the repository whose top is <paramref name="top"/> (git found it, <see cref="Core.Workspaces.GitInfo.Top"/>); null
+    /// when it has none. A lookup that goes wrong in any way must not cost the tile its git round: it gives what the last round found,
+    /// <paramref name="before"/>, as a read that fails for a moment (an editor or a scanner holds the file) says nothing new (#425).
     /// </summary>
-    public static StableBuildRepo? Find(string folder)
+    /// <param name="before">The scripts the folder's line had after the last round; read again only when <c>_common.ps1</c> was written since.</param>
+    public static StableBuildRepo? Find(string top, StableBuildRepo? before = null)
     {
+        // What another repository had says nothing about this one.
+        var last = before is not null && PathNormalizer.Normalize(before.RepoPath) == PathNormalizer.Normalize(top) ? before : null;
         try
         {
-            var top = TopOf(folder);
             var scripts = Path.Combine(top, "scripts");
             var common = Path.Combine(scripts, "_common.ps1");
             if (!File.Exists(Path.Combine(scripts, "build.ps1")) || !File.Exists(common))
@@ -34,7 +41,13 @@ public sealed partial record StableBuildRepo(string RepoPath, string ShortcutNam
                 return null;
             }
 
-            var text = File.ReadAllText(common);
+            var written = File.GetLastWriteTimeUtc(common);
+            if (last is not null && last.CommonWrittenAt == written)
+            {
+                return last;
+            }
+
+            var text = BlockComment().Replace(File.ReadAllText(common), string.Empty);
             if (Setting(text, "ShortcutName") is not { } shortcut
                 || shortcut != Path.GetFileName(shortcut) || !shortcut.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase))
             {
@@ -42,33 +55,12 @@ public sealed partial record StableBuildRepo(string RepoPath, string ShortcutNam
                 return null;
             }
 
-            return new StableBuildRepo(top, shortcut, Setting(text, "ReleaseBranch"));
+            return new StableBuildRepo(top, shortcut, Setting(text, "ReleaseBranch")) { CommonWrittenAt = written };
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return null;
+            return last;
         }
-    }
-
-    /// <summary>The folder itself or the nearest one above it with a .git (a folder, or a file in a worktree): the repository's top.</summary>
-    private static string TopOf(string folder)
-    {
-        if (HasGit(folder))
-        {
-            return folder;
-        }
-
-        for (var dir = new DirectoryInfo(folder).Parent; dir is not null; dir = dir.Parent)
-        {
-            if (HasGit(dir.FullName))
-            {
-                return dir.FullName;
-            }
-        }
-
-        return folder;
-
-        static bool HasGit(string dir) => Directory.Exists(Path.Combine(dir, ".git")) || File.Exists(Path.Combine(dir, ".git"));
     }
 
     /// <summary>
@@ -91,6 +83,10 @@ public sealed partial record StableBuildRepo(string RepoPath, string ShortcutNam
         var value = match.Groups["double"].Value;
         return value.Length > 0 && value.IndexOfAny(['$', '`']) < 0 ? value : null;
     }
+
+    /// <summary>A <c>&lt;# … #&gt;</c> block comment (#425): an assignment inside one is no setting. They do not nest.</summary>
+    [GeneratedRegex("<#.*?#>", RegexOptions.Singleline)]
+    private static partial Regex BlockComment();
 
     /// <summary><c>$script:Name = 'value'</c> or <c>"value"</c> at a line's start; PowerShell takes the scope in any casing.</summary>
     [GeneratedRegex("""^\s*\$script:(?<name>\w+)\s*=\s*(?:'(?<single>(?:[^']|'')*)'|"(?<double>[^"]*)")""", RegexOptions.Multiline | RegexOptions.IgnoreCase)]
@@ -188,7 +184,7 @@ public sealed class StableBuildLauncher : IStableBuildLauncher
             .Any(dir => File.Exists(Path.Combine(dir, exe)));
 }
 
-/// <summary>One repository's pair of entries on a tile's menu (#423), made when the menu opens.</summary>
+/// <summary>One repository's entries on a tile's menu (#423), made when the menu opens: Build, and Run unless another repository on the tile opens the same shortcut (#425).</summary>
 public sealed partial class StableBuildEntry
 {
     private readonly StableBuildRepo _repo;
@@ -197,8 +193,10 @@ public sealed partial class StableBuildEntry
     private readonly IYardDialogs _dialogs;
 
     /// <param name="line">A line with stable-build scripts; its git state is what the precheck reads.</param>
-    /// <param name="named">The tile has several such repositories: the entries say which.</param>
-    public StableBuildEntry(GitLine line, bool named, IStableBuildLauncher launcher, IYardDialogs dialogs)
+    /// <param name="named">The tile has several such repositories: Build says which.</param>
+    /// <param name="run">This entry has the Run of its shortcut: false when an entry before it opens the same one (#425).</param>
+    /// <param name="runNamed">The tile's Run entries open several shortcuts: Run says which.</param>
+    public StableBuildEntry(GitLine line, bool named, IStableBuildLauncher launcher, IYardDialogs dialogs, bool run = true, bool? runNamed = null)
     {
         var repo = line.StableBuild ?? throw new ArgumentException("The line has no stable-build scripts.", nameof(line));
         _repo = repo;
@@ -208,7 +206,7 @@ public sealed partial class StableBuildEntry
         // The name the tile's line shows (a workspace file's label), else the folder's; a drive root has no folder name: "E:\".
         Name = line.Folder ?? (Path.GetFileName(folder) is { Length: > 0 } name ? name : folder);
         BuildHeader = named ? $"Build {Name}" : "Build new version";
-        RunHeader = named ? $"Run {Name}" : "Run";
+        RunHeader = !run ? null : (runNamed ?? named) ? $"Run {Name}" : "Run";
         BuildBlock = StableBuildCheck.BuildBlock(line);
         _shortcutPath = launcher.ShortcutPath(repo.ShortcutName);
         RunBlock = launcher.ShortcutExists(_shortcutPath) ? null : "No stable build yet";
@@ -217,11 +215,13 @@ public sealed partial class StableBuildEntry
     /// <summary>The repository's folder name: what the dialog and the headers call the app.</summary>
     public string Name { get; }
     public string BuildHeader { get; }
-    public string RunHeader { get; }
+
+    /// <summary>Null when the entry has no Run: another one on the tile opens the same shortcut (#425).</summary>
+    public string? RunHeader { get; }
     public string? BuildBlock { get; }
     public string? RunBlock { get; }
     public bool CanBuild => BuildBlock is null;
-    public bool CanRun => RunBlock is null;
+    public bool CanRun => RunHeader is not null && RunBlock is null;
 
     [RelayCommand(CanExecute = nameof(CanBuild))]
     private Task BuildAsync()

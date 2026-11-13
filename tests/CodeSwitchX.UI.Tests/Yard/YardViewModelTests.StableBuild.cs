@@ -27,6 +27,66 @@ public partial class YardViewModelTests
     }
 
     [Fact]
+    public async Task A_workspace_on_a_subfolder_gets_the_scripts_at_the_top_git_found()
+    {
+        // One walk up finds the repository (#425): git's, at whose end the scripts are looked for.
+        var root = Repo("app");
+        Directory.CreateDirectory(Path.Combine(root, "scripts"));
+        File.WriteAllText(Path.Combine(root, "scripts", "build.ps1"), "# build");
+        File.WriteAllText(Path.Combine(root, "scripts", "_common.ps1"), "$script:ShortcutName = 'App.lnk'\n");
+        var src = Path.Combine(root, "src");
+        Directory.CreateDirectory(Path.Combine(src, "scripts"));
+        File.WriteAllText(Path.Combine(src, "scripts", "build.ps1"), "# not the stable build");
+        File.WriteAllText(Path.Combine(src, "scripts", "_common.ps1"), "$script:ShortcutName = 'Other.lnk'\n");
+        var app = new Workspace { Name = "App", RootPath = src, TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([app]));
+        var yard = Yard((_, _, _) => Task.FromResult<string?>(string.Empty));
+        await yard.InitializeAsync(CancellationToken.None);
+
+        await yard.RefreshGitAsync(CancellationToken.None);
+
+        var found = yard.FindTile(app.Id)!.GitLines.ShouldHaveSingleItem().StableBuild.ShouldNotBeNull();
+        found.RepoPath.ShouldBe(root);
+        found.ShortcutName.ShouldBe("App.lnk");
+    }
+
+    [Fact]
+    public async Task A_tile_whose_menu_opens_is_read_before_the_others()
+    {
+        // The precheck reads the tile's lines, which can be up to a round old: its git is read again at once, first (#425).
+        var first = new Workspace { Name = "First", RootPath = Repo("first"), TrackId = _general.Id };
+        var opened = new Workspace { Name = "Opened", RootPath = Repo("opened"), TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([first, opened]));
+        var read = new List<string>();
+        var yard = Yard((dir, args, _) =>
+        {
+            if (args.StartsWith("status", StringComparison.Ordinal))
+            {
+                lock (read)
+                {
+                    read.Add(Path.GetFileName(dir));
+                }
+            }
+
+            return Task.FromResult<string?>(string.Empty);
+        });
+        await yard.InitializeAsync(CancellationToken.None);
+        await yard.RefreshGitAsync(CancellationToken.None);
+        read.Clear();
+
+        yard.RefreshGitOf(yard.FindTile(opened.Id)!);
+        await yard.CurrentGitRefresh;
+
+        read.ShouldBe(["opened", "first"]);
+        read.Clear();
+
+        yard.RefreshGitOf(yard.FindTile(first.Id)!);
+        await yard.CurrentGitRefresh;
+
+        read.ShouldBe(["first", "opened"], "whichever tile the menu opened on goes first");
+    }
+
+    [Fact]
     public async Task A_line_the_round_carries_over_keeps_its_scripts_without_looking_again()
     {
         // A carried line is one whose folder could not be checked, an offline share say, where every look blocks for about 20 s.

@@ -444,12 +444,16 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
 
     /// <summary>
     /// The Build new version / Run entries for the menu that opens now (#423): one per repository with the stable-build
-    /// scripts, in the order of the lines. Made afresh each time, so a shortcut the last build wrote counts at once.
+    /// scripts, in the order of the lines. Made afresh each time, so a shortcut the last build wrote counts at once. One Run per
+    /// shortcut (#425): a checkout and a worktree of the same app build apart, but start the one app that is installed.
     /// </summary>
     public IReadOnlyList<StableBuildEntry> StableBuildEntries()
     {
         var lines = GitLines.Where(l => l.StableBuild is not null).DistinctBy(l => PathNormalizer.Normalize(l.StableBuild!.RepoPath)).ToList();
-        return [.. lines.Select(l => new StableBuildEntry(l, named: lines.Count > 1, _owner.StableBuilds, _owner.Dialogs))];
+        var shortcuts = new HashSet<string>(StringComparer.OrdinalIgnoreCase); // file names, as Windows compares them
+        var runNamed = lines.Select(l => l.StableBuild!.ShortcutName).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1;
+        return [.. lines.Select(l => new StableBuildEntry(l, named: lines.Count > 1, _owner.StableBuilds, _owner.Dialogs,
+            run: shortcuts.Add(l.StableBuild!.ShortcutName), runNamed: runNamed))];
     }
 
     [RelayCommand]

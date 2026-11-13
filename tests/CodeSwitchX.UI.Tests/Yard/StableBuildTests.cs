@@ -128,18 +128,52 @@ public class StableBuildTests : IDisposable
     }
 
     [Fact]
-    public void Find_looks_at_the_top_of_the_repository_for_a_folder_inside_it()
+    public void An_assignment_in_a_block_comment_is_no_setting()
+    {
+        var repo = Repo(("build.ps1", "# build"), ("_common.ps1", "$script:ShortcutName = 'Real.lnk'\n<#\n$script:ShortcutName = 'Old.lnk'\n$script:ReleaseBranch = 'develop'\n#>\n"));
+
+        var found = StableBuildRepo.Find(repo).ShouldNotBeNull();
+
+        found.ShortcutName.ShouldBe("Real.lnk", "the last assignment counts, and the one in the comment is none (#425)");
+        found.ReleaseBranch.ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_common_file_that_cannot_be_read_for_a_moment_keeps_what_was_found_before()
     {
         var repo = Repo(("build.ps1", "# build"), ("_common.ps1", Common));
-        var src = Path.Combine(repo, "src");
-        Directory.CreateDirectory(Path.Combine(src, "scripts"));
-        File.WriteAllText(Path.Combine(src, "scripts", "build.ps1"), "# not the stable build");
-        File.WriteAllText(Path.Combine(src, "scripts", "_common.ps1"), "$script:ShortcutName = 'Other.lnk'\n");
+        var common = Path.Combine(repo, "scripts", "_common.ps1");
+        var before = StableBuildRepo.Find(repo).ShouldNotBeNull();
+        File.SetLastWriteTimeUtc(common, File.GetLastWriteTimeUtc(common).AddSeconds(5));
 
-        var found = StableBuildRepo.Find(src).ShouldNotBeNull();
+        using (new FileStream(common, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            StableBuildRepo.Find(repo, before).ShouldBeSameAs(before, "an editor or a scanner holding the file is no reason to drop the entries (#425)");
+            StableBuildRepo.Find(repo).ShouldBeNull("with nothing found before, nothing is made up");
+        }
+    }
 
-        found.RepoPath.ShouldBe(repo);
-        found.ShortcutName.ShouldBe("Some App.lnk");
+    [Fact]
+    public void A_common_file_not_written_since_is_not_read_again()
+    {
+        var common = Path.Combine(Repo(("build.ps1", "# build"), ("_common.ps1", Common)), "scripts", "_common.ps1");
+        var before = StableBuildRepo.Find(_root).ShouldNotBeNull();
+        var written = File.GetLastWriteTimeUtc(common);
+        File.WriteAllText(common, "$script:ShortcutName = 'Other.lnk'\n");
+        File.SetLastWriteTimeUtc(common, written);
+
+        StableBuildRepo.Find(_root, before).ShouldBeSameAs(before, "the same write time says the same text (#425)");
+
+        File.SetLastWriteTimeUtc(common, written.AddSeconds(5));
+        StableBuildRepo.Find(_root, before).ShouldNotBeNull().ShortcutName.ShouldBe("Other.lnk", "a file written since is read again");
+    }
+
+    [Fact]
+    public void What_another_repository_had_is_not_taken()
+    {
+        var before = new StableBuildRepo(Path.Combine(_root, "elsewhere"), "Else.lnk");
+
+        StableBuildRepo.Find(_root, before).ShouldBeNull("this folder has no scripts, whatever another one had");
     }
 
     [Theory]
