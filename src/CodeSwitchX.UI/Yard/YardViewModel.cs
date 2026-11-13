@@ -817,7 +817,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// Each line with how far it is behind GitHub (#426): a line on its repository's default branch is compared with the commit GitHub was last
-    /// read to have there, by git and without a fetch. A line carried over from <paramref name="previous"/> is left as it is: its folder could
+    /// read to have there, by git and without a fetch, and only when one of the two commits changed since the folder's line in
+    /// <paramref name="previous"/> was compared. A line carried over from <paramref name="previous"/> is left as it is: its folder could
     /// not be looked at this round (an offline share blocks every look for about 20 s).
     /// </summary>
     private async Task<IReadOnlyList<GitLine>> WithBehindAsync(IReadOnlyList<GitLine> lines, IReadOnlyList<GitLine> previous, CancellationToken ct)
@@ -834,9 +835,19 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
                 return line;
             }
 
-            var onGitHub = line.Path is { } path ? GitLine.ComparedHead(line, _gitHub.ForFolder(path)) : null;
-            var behind = onGitHub is null ? null : await _git.BehindAsync(line.Path!, line.Head, onGitHub.Sha, onGitHub.Commits, ct).ConfigureAwait(false);
-            return behind == line.Behind && onGitHub?.Sha == line.BehindAgainst ? line : line with { Behind = behind, BehindAgainst = onGitHub?.Sha };
+            if (line.Path is not { } path || GitLine.ComparedHead(line, _gitHub.ForFolder(path)) is not { } onGitHub)
+            {
+                return line is { Behind: null, BehindAgainst: null } ? line : line with { Behind = null, BehindAgainst = null };
+            }
+
+            var key = YardGitJobs.Key(path);
+            var before = previous.FirstOrDefault(p => p.Path is { } shown && YardGitJobs.Key(shown) == key);
+            if (line.IsAnsweredBy(before, onGitHub.Sha))
+            {
+                return line with { Behind = before.Behind, BehindAgainst = onGitHub.Sha };
+            }
+
+            return line.WithBehind(await _git.BehindAsync(path, line.Head, onGitHub.Sha, onGitHub.Commits, ct).ConfigureAwait(false), before, onGitHub.Sha);
         })).ConfigureAwait(false);
     }
 

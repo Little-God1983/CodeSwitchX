@@ -87,6 +87,9 @@ public class GitInspectorTests : IDisposable
 
     private const string OnGitHub = "7d6783b6e4ca65062d1ab6cdfe82e5b5f29e0728";
 
+    /// <summary>The question that tells a commit that is here from one that is not; git answers it either way.</summary>
+    private const string Probe = "rev-list --no-walk --ignore-missing";
+
     /// <summary>Git scripted by the start of its arguments; anything else fails, as a missing object or a git that does not answer does.</summary>
     private static GitInspector Scripted(List<string> ran, params (string Start, string? Output)[] answers) =>
         new((_, args, _) =>
@@ -100,7 +103,7 @@ public class GitInspectorTests : IDisposable
     {
         var ran = new List<string>();
 
-        (await Scripted(ran).BehindAsync(_root, OnGitHub, OnGitHub.ToUpperInvariant(), 1155, CancellationToken.None)).ShouldBeNull();
+        (await Scripted(ran).BehindAsync(_root, OnGitHub, OnGitHub.ToUpperInvariant(), 1155, CancellationToken.None)).ShouldBe(BehindAnswer.NotBehind);
 
         ran.ShouldBeEmpty();
     }
@@ -109,20 +112,20 @@ public class GitInspectorTests : IDisposable
     public async Task With_GitHubs_commit_fetched_git_counts_how_far_behind()
     {
         var ran = new List<string>();
-        var git = Scripted(ran, ("cat-file", string.Empty), ("rev-list", "12\n"));
+        var git = Scripted(ran, (Probe, OnGitHub + "\n"), ("rev-list --count", "12\n"));
 
-        (await git.BehindAsync(_root, Here, OnGitHub, 1155, CancellationToken.None)).ShouldBe(new GitBehind(12));
+        (await git.BehindAsync(_root, Here, OnGitHub, 1155, CancellationToken.None)).ShouldBe(BehindAnswer.Of(new GitBehind(12)));
 
-        ran.ShouldBe([$"cat-file -e {OnGitHub}^{{commit}}", $"rev-list --count HEAD..{OnGitHub}"]);
+        ran.ShouldBe([$"{Probe} {OnGitHub}", $"rev-list --count HEAD..{OnGitHub}"]);
     }
 
     [Fact]
     public async Task A_checkout_that_holds_GitHubs_commit_already_is_not_behind()
     {
         // Ahead of GitHub, or GitHub was read before the pull: its commit is part of this branch.
-        var git = Scripted([], ("cat-file", string.Empty), ("rev-list", "0\n"));
+        var git = Scripted([], (Probe, OnGitHub + "\n"), ("rev-list --count", "0\n"));
 
-        (await git.BehindAsync(_root, Here, OnGitHub, 1155, CancellationToken.None)).ShouldBeNull();
+        (await git.BehindAsync(_root, Here, OnGitHub, 1155, CancellationToken.None)).ShouldBe(BehindAnswer.NotBehind);
     }
 
     [Fact]
@@ -130,42 +133,47 @@ public class GitInspectorTests : IDisposable
     {
         // The usual case right after a merge on GitHub: nothing fetched it. The branch has nothing of its own, so GitHub's holds it whole.
         var ran = new List<string>();
-        var git = Scripted(ran, ("rev-parse --is-shallow-repository", "false\n"), ("rev-list --count @{upstream}..HEAD", "0\n"), ("rev-list --count HEAD", "1143\n"));
+        var git = Scripted(ran, (Probe, "\n"), ("rev-parse --is-shallow-repository", "false\n"), ("rev-list --count @{upstream}..HEAD", "0\n"), ("rev-list --count HEAD", "1143\n"));
 
-        (await git.BehindAsync(_root, Here, OnGitHub, 1155, CancellationToken.None)).ShouldBe(new GitBehind(12));
+        (await git.BehindAsync(_root, Here, OnGitHub, 1155, CancellationToken.None)).ShouldBe(BehindAnswer.Of(new GitBehind(12)));
 
-        ran.ShouldBe([$"cat-file -e {OnGitHub}^{{commit}}", "rev-parse --is-shallow-repository", "rev-list --count @{upstream}..HEAD", "rev-list --count HEAD"]);
+        ran.ShouldBe([$"{Probe} {OnGitHub}", "rev-parse --is-shallow-repository", "rev-list --count @{upstream}..HEAD", "rev-list --count HEAD"]);
     }
 
     [Theory]
     [InlineData("true\n", "0\n", "1143\n", 1155, "a shallow clone holds fewer commits than its branch has")]
+    [InlineData(null, "0\n", "1143\n", 1155, "git did not say whether the clone is shallow")]
     [InlineData("false\n", "2\n", "1143\n", 1155, "commits of its own are not in GitHub's total")]
     [InlineData("false\n", null, "1143\n", 1155, "no upstream to say the branch has nothing of its own")]
     [InlineData("false\n", "0\n", null, 1155, "git did not count")]
     [InlineData("false\n", "0\n", "1143\n", null, "GitHub did not count")]
     [InlineData("false\n", "0\n", "1155\n", 1155, "the totals say level, the commits differ: the history was rewritten")]
     [InlineData("false\n", "0\n", "1160\n", 1155, "more commits than GitHub has")]
-    public async Task Where_the_count_cannot_be_told_it_is_behind_without_a_number(string shallow, string? own, string? total, int? onGitHub, string why)
+    public async Task Where_the_count_cannot_be_told_it_is_behind_without_a_number(string? shallow, string? own, string? total, int? onGitHub, string why)
     {
-        var git = Scripted([], ("rev-parse --is-shallow-repository", shallow), ("rev-list --count @{upstream}..HEAD", own), ("rev-list --count HEAD", total));
+        var git = Scripted([], (Probe, string.Empty), ("rev-parse --is-shallow-repository", shallow), ("rev-list --count @{upstream}..HEAD", own), ("rev-list --count HEAD", total));
 
-        (await git.BehindAsync(_root, Here, OnGitHub, onGitHub, CancellationToken.None)).ShouldBe(new GitBehind(null), why);
+        (await git.BehindAsync(_root, Here, OnGitHub, onGitHub, CancellationToken.None)).ShouldBe(BehindAnswer.Of(new GitBehind(null)), why);
     }
 
     [Fact]
     public async Task A_git_that_does_not_answer_says_nothing_about_being_behind()
     {
-        var git = Scripted([]);
+        // Every command fails, as when git runs out of time: neither "the commit is not here" nor "not behind" may be made of that.
+        var ran = new List<string>();
+        var git = Scripted(ran);
 
-        (await git.BehindAsync(_root, Here, OnGitHub, 1155, CancellationToken.None)).ShouldBeNull("a made-up \"behind\" would send the user pulling for nothing");
+        (await git.BehindAsync(_root, Here, OnGitHub, 1155, CancellationToken.None)).ShouldBe(BehindAnswer.Unknown);
+
+        ran.ShouldBe([$"{Probe} {OnGitHub}"], "nothing more is asked of a git that does not answer");
     }
 
     [Fact]
     public async Task A_count_git_could_not_make_says_nothing_about_being_behind()
     {
-        var git = Scripted([], ("cat-file", string.Empty));
+        var git = Scripted([], (Probe, OnGitHub + "\n"));
 
-        (await git.BehindAsync(_root, Here, OnGitHub, 1155, CancellationToken.None)).ShouldBeNull();
+        (await git.BehindAsync(_root, Here, OnGitHub, 1155, CancellationToken.None)).ShouldBe(BehindAnswer.Unknown, "a count that ran out of time is not \"not behind\"");
     }
 
     [Theory]
@@ -177,7 +185,7 @@ public class GitInspectorTests : IDisposable
     {
         var ran = new List<string>();
 
-        (await Scripted(ran).BehindAsync(_root, head, onGitHub, 1155, CancellationToken.None)).ShouldBeNull();
+        (await Scripted(ran).BehindAsync(_root, head, onGitHub, 1155, CancellationToken.None)).ShouldBe(BehindAnswer.Unknown);
 
         ran.ShouldBeEmpty("what GitHub sent goes on git's command line only as a full hash");
     }
@@ -225,8 +233,8 @@ public class GitInspectorTests : IDisposable
     [Fact]
     public void Git_never_goes_to_the_network_or_asks_for_a_password()
     {
-        // In a partial clone "git cat-file -e" of a commit that is not here would fetch it from the remote (review of #426).
-        var environment = GitInspector.GitStartInfo(_root, "cat-file -e 7d6783b").Environment;
+        // In a partial clone a question about a commit that is not here would fetch it from the remote (review of #426).
+        var environment = GitInspector.GitStartInfo(_root, "rev-list --no-walk --ignore-missing 7d6783b").Environment;
 
         environment["GIT_NO_LAZY_FETCH"].ShouldBe("1");
         environment["GIT_TERMINAL_PROMPT"].ShouldBe("0");

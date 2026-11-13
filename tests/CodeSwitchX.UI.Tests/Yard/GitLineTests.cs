@@ -84,6 +84,48 @@ public class GitLineTests
         Compared("old", branch: "feature/x").BehindIsOutOfDate.ShouldBeTrue("it left the default branch: the old answer must go");
     }
 
+    [Fact]
+    public void An_answer_git_did_not_give_keeps_what_was_known_of_the_same_two_commits()
+    {
+        // "12 behind" must not turn "clean" because git ran out of time once (review of #426).
+        var before = Compared("new") with { Behind = new GitBehind(12) };
+
+        var line = Compared(null).WithBehind(BehindAnswer.Unknown, before, "new");
+
+        line.Behind.ShouldBe(new GitBehind(12));
+        line.BehindAgainst.ShouldBe("new");
+    }
+
+    [Fact]
+    public void An_answer_git_did_not_give_for_other_commits_leaves_the_line_not_compared()
+    {
+        var before = Compared("old") with { Behind = new GitBehind(12) };
+
+        Compared(null).WithBehind(BehindAnswer.Unknown, before, "new").ShouldBe(Compared(null), "asked again next round");
+        Compared(null, head: "moved").WithBehind(BehindAnswer.Unknown, Compared("new") with { Behind = new GitBehind(12) }, "new").BehindAgainst.ShouldBeNull();
+        Compared(null).WithBehind(BehindAnswer.Unknown, null, "new").ShouldBe(Compared(null));
+    }
+
+    [Fact]
+    public void An_answer_git_gave_is_taken_whatever_was_known()
+    {
+        var before = Compared("new") with { Behind = new GitBehind(12) };
+
+        Compared(null).WithBehind(BehindAnswer.NotBehind, before, "new").ShouldBe(Compared("new"));
+        Compared(null).WithBehind(BehindAnswer.Of(new GitBehind(3)), before, "new").Behind.ShouldBe(new GitBehind(3));
+    }
+
+    [Fact]
+    public void The_same_two_commits_are_answered_by_the_line_before()
+    {
+        Compared(null).IsAnsweredBy(Compared("new") with { Behind = new GitBehind(12) }, "new").ShouldBeTrue();
+        Compared(null).IsAnsweredBy(Compared("new"), "new").ShouldBeTrue("not behind is an answer too");
+        Compared(null).IsAnsweredBy(Compared("old"), "new").ShouldBeFalse("GitHub's commit moved");
+        Compared(null, head: "moved").IsAnsweredBy(Compared("new"), "new").ShouldBeFalse("the checkout's commit moved");
+        Compared(null).IsAnsweredBy(Compared("new") with { Behind = new GitBehind(null) }, "new").ShouldBeFalse("the count may be there now");
+        Compared(null).IsAnsweredBy(null, "new").ShouldBeFalse();
+    }
+
     [Theory]
     [InlineData(1, "GitHub's main has 1 commit this checkout lacks. In the Yard, click the line and press Pull main.")]
     [InlineData(12, "GitHub's main has 12 commits this checkout lacks. In the Yard, click the line and press Pull main.")]

@@ -258,11 +258,7 @@ public sealed class GitPuller
             info.ArgumentList.Add(argument);
         }
 
-        // As GitInspector's: a plain git status refreshes the index under .git/index.lock, which collides with the user's own git.
-        info.Environment["GIT_OPTIONAL_LOCKS"] = "0";
-        // Nobody can answer a prompt for a password or a host key: git fails at once instead of waiting for the timeout.
-        info.Environment["GIT_TERMINAL_PROMPT"] = "0";
-        info.Environment["GCM_INTERACTIVE"] = "never";
+        GitInspector.Unattended(info);
         return GitInspector.RunProcessAsync(info, timeout, ct);
     }
 }

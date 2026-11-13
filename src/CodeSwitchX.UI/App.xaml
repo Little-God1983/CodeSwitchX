@@ -23,6 +23,10 @@
     <SolidColorBrush x:Key="IssuePillText" Color="#B9CDF0" />
     <SolidColorBrush x:Key="IssuePillBack" Color="#3A4250" />
     <SolidColorBrush x:Key="IssuePillBorder" Color="#566378" />
+    <!-- the amber of a line that needs something done: files changed, commits behind GitHub (#426) -->
+    <SolidColorBrush x:Key="AmberPillText" Color="#F59E0B" />
+    <SolidColorBrush x:Key="AmberPillBack" Color="#26F59E0B" />
+    <SolidColorBrush x:Key="AmberPillBorder" Color="#80F59E0B" />
     <SolidColorBrush x:Key="PullRequestPillText" Color="#A6E3E9" />
     <SolidColorBrush x:Key="PullRequestPillBack" Color="#2D464B" />
     <SolidColorBrush x:Key="PullRequestPillBorder" Color="#4B6F76" />
@@ -141,8 +145,8 @@
         <Border CornerRadius="8" Padding="7,0,7,1" Margin="8,0,0,0" VerticalAlignment="Center" BorderThickness="1" ToolTip="{Binding ToolTipText}">
           <Border.Style>
             <Style TargetType="Border">
-              <Setter Property="Background" Value="#26F59E0B" />
-              <Setter Property="BorderBrush" Value="#80F59E0B" />
+              <Setter Property="Background" Value="{StaticResource AmberPillBack}" />
+              <Setter Property="BorderBrush" Value="{StaticResource AmberPillBorder}" />
               <Style.Triggers>
                 <DataTrigger Binding="{Binding GitStateLabel}" Value="{x:Null}">
                   <Setter Property="Visibility" Value="Collapsed" />
@@ -157,7 +161,7 @@
           <TextBlock Text="{Binding GitStateLabel}" FontSize="11" FontWeight="SemiBold">
             <TextBlock.Style>
               <Style TargetType="TextBlock">
-                <Setter Property="Foreground" Value="#F59E0B" />
+                <Setter Property="Foreground" Value="{StaticResource AmberPillText}" />
                 <Style.Triggers>
                   <DataTrigger Binding="{Binding DirtyCount}" Value="0">
                     <Setter Property="Foreground" Value="#22C55E" />
@@ -168,9 +172,9 @@
           </TextBlock>
         </Border>
         <Border CornerRadius="8" Padding="7,0,7,1" Margin="8,0,0,0" VerticalAlignment="Center" BorderThickness="1"
-                Background="#26F59E0B" BorderBrush="#80F59E0B" ToolTip="{Binding BehindToolTip}"
+                Background="{StaticResource AmberPillBack}" BorderBrush="{StaticResource AmberPillBorder}" ToolTip="{Binding BehindToolTip}"
                 Visibility="{Binding BehindLabel, Converter={StaticResource NullToCollapsed}}">
-          <TextBlock Text="{Binding BehindLabel}" FontSize="11" FontWeight="SemiBold" Foreground="#F59E0B" />
+          <TextBlock Text="{Binding BehindLabel}" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource AmberPillText}" />
         </Border>
         </StackPanel>
       </Grid>

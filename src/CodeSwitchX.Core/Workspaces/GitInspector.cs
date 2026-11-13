@@ -14,6 +14,20 @@ public sealed record GitInfo(bool IsRepository, string? Branch, int? DirtyCount,
 /// <param name="Commits">How many; null when only "behind" can be told (a shallow clone, commits of its own, no count from GitHub).</param>
 public sealed record GitBehind(int? Commits);
 
+/// <summary>What <see cref="GitInspector.BehindAsync"/> found (#426).</summary>
+/// <param name="Known">Git answered. Without an answer nothing is known: neither "behind" nor "not behind" may be made of it.</param>
+/// <param name="Behind">How far behind; null when it is not, and when nothing is known.</param>
+public readonly record struct BehindAnswer(bool Known, GitBehind? Behind)
+{
+    /// <summary>Git did not answer (it ran out of time, it is not there), or a commit was not given in full.</summary>
+    public static readonly BehindAnswer Unknown = new(false, null);
+
+    /// <summary>The checkout is at GitHub's commit or holds it already.</summary>
+    public static readonly BehindAnswer NotBehind = new(true, null);
+
+    public static BehindAnswer Of(GitBehind behind) => new(true, behind);
+}
+
 /// <param name="Output">Stdout when the process exited with code 0; otherwise null.</param>
 /// <param name="TimedOut">The process was killed because it outlived the timeout.</param>
 /// <param name="Pid">The started process id, when it started.</param>
@@ -115,43 +129,57 @@ public sealed class GitInspector
     }
 
     /// <summary>
-    /// How far the checkout at <paramref name="head"/> is behind <paramref name="onGitHub"/>, the commit GitHub has for its branch (#426);
-    /// null when it is not behind (it is at that commit, or holds it already: ahead, or GitHub was read before a pull) and when git did
-    /// not answer: a made-up "behind" would send the user pulling for nothing. Nothing is fetched. A commit that is here is counted by
-    /// git. One that is not is the usual case right after a merge on GitHub: then the branch is behind, and by the difference of the
-    /// two totals when it has nothing of its own (its upstream, as last fetched, holds it whole) and the clone is not shallow.
+    /// How far the checkout at <paramref name="head"/> is behind <paramref name="onGitHub"/>, the commit GitHub has for its branch (#426).
+    /// Not behind: it is at that commit, or holds it already (ahead, or GitHub was read before a pull). Nothing is fetched. A commit that
+    /// is here is counted by git. One that is not is the usual case right after a merge on GitHub: then the branch is behind, and by the
+    /// difference of the two totals when it has nothing of its own (its upstream, as last fetched, holds it whole) and the clone is not
+    /// shallow. A git that gives no answer (out of time under load) is <see cref="BehindAnswer.Unknown"/>, never "not behind" and never
+    /// "the commit is not here": either would be made up (review of #426).
     /// </summary>
     /// <param name="head">The checkout's commit, as <see cref="GitInfo.Head"/> has it.</param>
     /// <param name="commitsOnGitHub">How many commits GitHub's branch holds in all; null when it did not say.</param>
-    public async Task<GitBehind?> BehindAsync(string root, string? head, string onGitHub, int? commitsOnGitHub, CancellationToken ct)
+    public async Task<BehindAnswer> BehindAsync(string root, string? head, string onGitHub, int? commitsOnGitHub, CancellationToken ct)
     {
         // What GitHub sent goes on git's command line only as a full hash.
-        if (!IsFullHash(head) || !IsFullHash(onGitHub) || string.Equals(head, onGitHub, StringComparison.OrdinalIgnoreCase))
+        if (!IsFullHash(head) || !IsFullHash(onGitHub))
         {
-            return null;
+            return BehindAnswer.Unknown;
         }
 
-        if (await _runGit(root, $"cat-file -e {onGitHub}^{{commit}}", ct).ConfigureAwait(false) is not null)
+        if (string.Equals(head, onGitHub, StringComparison.OrdinalIgnoreCase))
         {
-            return Count(await _runGit(root, $"rev-list --count HEAD..{onGitHub}", ct).ConfigureAwait(false)) is > 0 and var missing ? new GitBehind(missing) : null;
+            return BehindAnswer.NotBehind;
         }
 
-        // The commit is not here, or git does not answer at all: only a git that answers the next question says which.
-        var shallow = (await _runGit(root, "rev-parse --is-shallow-repository", ct).ConfigureAwait(false))?.Trim();
-        if (shallow is null)
+        // Answers either way: the hash back for a commit that is here, nothing for one that is not. "cat-file -e" fails for a missing
+        // commit as it does when it runs out of time, and the two must not be mixed up.
+        var here = (await _runGit(root, $"rev-list --no-walk --ignore-missing {onGitHub}", ct).ConfigureAwait(false))?.Trim();
+        if (here is null)
         {
-            return null;
+            return BehindAnswer.Unknown;
         }
 
-        if (shallow != "false" || commitsOnGitHub is not { } total
+        if (here.Length > 0)
+        {
+            return Count(await _runGit(root, $"rev-list --count HEAD..{onGitHub}", ct).ConfigureAwait(false)) switch
+            {
+                null => BehindAnswer.Unknown,
+                0 => BehindAnswer.NotBehind,
+                var missing => BehindAnswer.Of(new GitBehind(missing)),
+            };
+        }
+
+        // GitHub has a commit this checkout lacks: behind. The count is an extra, and whatever fails from here on only costs the count.
+        if ((await _runGit(root, "rev-parse --is-shallow-repository", ct).ConfigureAwait(false))?.Trim() != "false"
+            || commitsOnGitHub is not { } total
             || Count(await _runGit(root, "rev-list --count @{upstream}..HEAD", ct).ConfigureAwait(false)) != 0
-            || Count(await _runGit(root, "rev-list --count HEAD", ct).ConfigureAwait(false)) is not { } here
-            || total <= here)
+            || Count(await _runGit(root, "rev-list --count HEAD", ct).ConfigureAwait(false)) is not { } local
+            || total <= local)
         {
-            return new GitBehind(null);
+            return BehindAnswer.Of(new GitBehind(null));
         }
 
-        return new GitBehind(total - here);
+        return BehindAnswer.Of(new GitBehind(total - local));
     }
 
     /// <summary>What <c>git rev-list --count</c> printed, as a number; null when it printed none.</summary>
@@ -213,13 +241,23 @@ public sealed class GitInspector
     internal static ProcessStartInfo GitStartInfo(string workingDirectory, string arguments)
     {
         var info = new ProcessStartInfo("git", arguments) { WorkingDirectory = workingDirectory };
-        info.Environment["GIT_OPTIONAL_LOCKS"] = "0";
+        Unattended(info);
         // These are reads of what is on the disk. In a partial clone git would fetch an object it lacks from the remote, the commit
-        // BehindAsync asks about for one (#426): never from here, and nobody could answer a prompt for a password.
+        // BehindAsync asks about for one (#426): never from here.
         info.Environment["GIT_NO_LAZY_FETCH"] = "1";
+        return info;
+    }
+
+    /// <summary>
+    /// What every git the app starts by itself runs with, the reads here and <see cref="GitPuller"/>'s: no optional locks (a plain
+    /// <c>git status</c> refreshes the index under <c>.git/index.lock</c>, which collides with the user's own git), and no prompt for a
+    /// password or a host key, which nobody could answer: git fails at once instead of waiting for the timeout.
+    /// </summary>
+    internal static void Unattended(ProcessStartInfo info)
+    {
+        info.Environment["GIT_OPTIONAL_LOCKS"] = "0";
         info.Environment["GIT_TERMINAL_PROMPT"] = "0";
         info.Environment["GCM_INTERACTIVE"] = "never";
-        return info;
     }
 
     /// <summary>

@@ -20,6 +20,7 @@ public partial class YardGitHubTests
         }
 
         return args.StartsWith("status", StringComparison.Ordinal) ? $"# branch.oid {head}\n# branch.head main\n"
+            : args.StartsWith("rev-list --no-walk", StringComparison.Ordinal) ? args[(args.LastIndexOf(' ') + 1)..] + "\n"
             : args.StartsWith("rev-list --count HEAD..", StringComparison.Ordinal) ? $"{behind}\n"
             : string.Empty;
     };
@@ -64,7 +65,27 @@ public partial class YardGitHubTests
         line.Head.ShouldBe(OnGitHub);
         line.Behind.ShouldBeNull();
         line.GitStateLabel.ShouldBe("clean");
-        GitWasAsked("cat-file").ShouldBeFalse("the same commit needs no question");
+        GitWasAsked("rev-list").ShouldBeFalse("the same commit needs no question");
+    }
+
+    [Fact]
+    public async Task The_answer_for_the_same_two_commits_is_not_asked_again_every_round()
+    {
+        _gh.DefaultHead = OnGitHub;
+        GitIsAt(Here, behind: 12);
+        var (yard, app) = await SettledYard();
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Behind is not null);
+        await yard.CurrentGitRefresh;
+        lock (_gitRan)
+        {
+            _gitRan.Clear();
+        }
+
+        await yard.RefreshGitAsync(CancellationToken.None);
+
+        yard.FindTile(app.Id)!.GitLines[0].BehindLabel.ShouldBe("12 behind");
+        GitWasAsked("status").ShouldBeTrue();
+        GitWasAsked("rev-list").ShouldBeFalse("neither commit changed");
     }
 
     [Fact]
@@ -101,7 +122,7 @@ public partial class YardGitHubTests
         var line = yard.FindTile(app.Id)!.GitLines[0];
         line.Behind.ShouldBeNull();
         line.GitStateLabel.ShouldBe("clean");
-        GitWasAsked("cat-file").ShouldBeFalse();
+        GitWasAsked("rev-list").ShouldBeFalse();
     }
 
     [Fact]
@@ -114,7 +135,7 @@ public partial class YardGitHubTests
 
         yard.FindTile(app.Id)!.GitLines[0].Behind.ShouldBeNull();
         yard.FindTile(app.Id)!.GitLines[0].GitStateLabel.ShouldBe("clean");
-        GitWasAsked("cat-file").ShouldBeFalse();
+        GitWasAsked("rev-list").ShouldBeFalse();
     }
 
     [Fact]
