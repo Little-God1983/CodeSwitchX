@@ -142,7 +142,11 @@ public sealed class GitInspector
     /// </summary>
     /// <param name="head">The checkout's commit, as <see cref="GitInfo.Head"/> has it.</param>
     /// <param name="commitsOnGitHub">How many commits GitHub's branch holds in all; null when it did not say.</param>
-    public async Task<BehindAnswer> BehindAsync(string root, string? head, string onGitHub, int? commitsOnGitHub, CancellationToken ct)
+    /// <param name="fastForwardOnly">
+    /// Behind only where the checkout holds nothing GitHub's commit lacks (#428): on a branch other than the default one, a rebase or an amend
+    /// leaves GitHub's old commit here, and counting it would make up commits to pull that no pull brings.
+    /// </param>
+    public async Task<BehindAnswer> BehindAsync(string root, string? head, string onGitHub, int? commitsOnGitHub, CancellationToken ct, bool fastForwardOnly = false)
     {
         // What GitHub sent goes on git's command line only as a full hash.
         if (!IsFullHash(head) || !IsFullHash(onGitHub))
@@ -171,6 +175,17 @@ public sealed class GitInspector
                     return BehindAnswer.Unknown;
                 case 0:
                     return BehindAnswer.NotBehind;
+                case var missing when fastForwardOnly:
+                    switch (Count(await _runGit(root, $"rev-list --count {onGitHub}..HEAD", ct).ConfigureAwait(false)))
+                    {
+                        case null:
+                            return BehindAnswer.Unknown;
+                        case > 0:
+                            // The two went apart: rewritten here, or work of its own. Nothing a pull brings.
+                            return BehindAnswer.NotBehind;
+                    }
+
+                    return BehindAnswer.Of(new GitBehind(await IsCompleteAsync(root, ct).ConfigureAwait(false) ? missing : null));
                 case var missing:
                     // A shallow clone's history is cut off, and git counts only up to the cut: behind, by a count nobody knows.
                     return BehindAnswer.Of(new GitBehind(await IsCompleteAsync(root, ct).ConfigureAwait(false) ? missing : null));

@@ -49,6 +49,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private readonly ITextClipboard _clipboard;
     private readonly CancellationTokenSource _gitHubStop = new();
     private readonly Dictionary<string, object> _gitHubAsked = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The branch each folder was last read from GitHub for, outside the regular rounds (#428); under the lock of <see cref="_gitHubAsked"/>.</summary>
+    private readonly Dictionary<string, string> _branchAsked = new(StringComparer.OrdinalIgnoreCase);
     private ITimer? _tabsTimer;
 
     /// <summary>The looks a moment after a VS Code closed (<see cref="ClosedListWait"/>), one per close; UI thread.</summary>
@@ -751,8 +754,10 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
         try
         {
-            // A GitHub read that fails leaves what was last read, which the comparison then goes by, as the round does.
-            var gitHubRead = _gitHub is not null && line is { IsRepository: true, Path: { } path } ? RefreshGitHubAsync([path]) : Task.FromResult(default(GitHubRoundResult));
+            // Beside git, not after it: the branch from HEAD, which takes no process, is what GitHub is asked about (review of #428), so one
+            // switched to since the last pass is compared. A GitHub read that fails leaves what was last read, which the comparison then
+            // goes by, as the round does.
+            var gitHubRead = _gitHub is not null && line is { IsRepository: true, Path: { } path } ? ReadGitHubForBuildAsync(path, line) : Task.FromResult(default(GitHubRoundResult));
             var info = await _git.InspectAsync(scripts.RepoPath, _gitHubStop.Token).ConfigureAwait(false);
             var read = line with
             {
@@ -789,6 +794,23 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
     }
 
+    /// <summary>The Build press's read of GitHub (#429), for the branch <paramref name="path"/>'s HEAD names now (#428).</summary>
+    private Task<GitHubRoundResult> ReadGitHubForBuildAsync(string path, GitLine line) => Task.Run(() =>
+    {
+        string? branch;
+        try
+        {
+            branch = GitInspector.ReadBranch(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            branch = null;
+        }
+
+        _gitHub!.FollowBranches([(path, BranchOf(line with { Branch = branch }))]);
+        return RefreshGitHubAsync([path]);
+    });
+
     /// <summary>Whether a round runs and whether another was asked for are decided under one lock, so a request never falls between a round's last look and its end.</summary>
     private Task RequestGitRefresh(CancellationToken ct, bool again)
     {
@@ -816,13 +838,14 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
                 var tiles = await TilesOnUiThreadAsync().ConfigureAwait(false);
                 var pathsOf = new Dictionary<WorkspaceTileViewModel, List<string>>();
                 var shownBefore = tiles.ToDictionary(t => t, t => ShownFolders([t]));
+                var found = new List<GitLine>();
                 foreach (var tile in tiles)
                 {
                     // Filled as the lines are computed, so a pass that throws later still has them.
                     var paths = pathsOf[tile] = [];
                     try
                     {
-                        await RefreshGitAsync(tile, paths, ct).ConfigureAwait(false);
+                        found.AddRange(await RefreshGitAsync(tile, paths, ct).ConfigureAwait(false));
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
@@ -844,8 +867,22 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
                     // A folder no GitHub round has looked at yet gets its pills now, not at the next ten minutes. Not awaited: a slow gh must not hold up git.
                     // A folder already asked for waits for that round to end, so a slow one is not queued behind itself every 30 s.
+                    // So does a line on a branch the last read did not ask about where it stands (#428): a switch to develop, say. Once per folder
+                    // and branch, so a read that fails is not made again every 30 s; the regular rounds ask about it all the same.
+                    // Only the lines of the tiles still there, as for the folders above.
+                    var lines = found.Where(l => HasRepository(l) && l.Path is { } p && paths.Contains(p, StringComparer.OrdinalIgnoreCase)).ToList();
+                    _gitHub.FollowBranches(lines.Select(l => (l.Path!, BranchOf(l))));
+                    var unasked = BranchesToAsk(lines, paths);
                     var round = new object();
-                    var unknown = AskGitHubOf(paths.Where(p => !_gitHub.Knows(p)), round);
+                    var unknown = AskGitHubOf(paths.Where(p => !_gitHub.Knows(p)).Concat(unasked.Select(l => l.Path)).Distinct(StringComparer.OrdinalIgnoreCase), round);
+                    lock (_gitHubAsked)
+                    {
+                        foreach (var (path, branch) in unasked.Where(l => unknown.Contains(l.Path, StringComparer.OrdinalIgnoreCase)))
+                        {
+                            _branchAsked[path] = branch;
+                        }
+                    }
+
                     if (unknown.Count > 0)
                     {
                         _ = RefreshGitHubAsync(unknown, round);
@@ -956,7 +993,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
                 return line;
             }
 
-            if (line.Path is not { } path || GitLine.ComparedHead(line, _gitHub.ForFolder(path)) is not { } onGitHub)
+            var activity = line.Path is { } folder ? _gitHub.ForFolder(folder) : null;
+            if (line.Path is not { } path || GitLine.ComparedHead(line, activity) is not { } onGitHub)
             {
                 return line is { Behind: null, BehindAgainst: null } ? line : line with { Behind = null, BehindAgainst = null };
             }
@@ -968,7 +1006,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
                 return line with { Behind = before.Behind, BehindAgainst = onGitHub.Sha };
             }
 
-            return line.WithBehind(await _git.BehindAsync(path, line.Head, onGitHub.Sha, onGitHub.Commits, ct).ConfigureAwait(false), before, onGitHub.Sha);
+            // A branch other than the default one is rewritten as a matter of course (#428): only a fast-forward away is behind there.
+            var fastForwardOnly = line.Branch != activity?.DefaultBranch;
+            return line.WithBehind(await _git.BehindAsync(path, line.Head, onGitHub.Sha, onGitHub.Commits, ct, fastForwardOnly).ConfigureAwait(false), before, onGitHub.Sha);
         })).ConfigureAwait(false);
     }
 
@@ -1050,6 +1090,51 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             }
         }
     });
+
+    /// <summary>
+    /// The branch a line is on, for GitHub (#428); null for a detached HEAD, which the tile names by the start of its commit (7 characters
+    /// from HEAD, more from git in a reftable repository), and for the placeholder a reftable HEAD holds. A branch named like the start of
+    /// the very commit it is at is taken for a detached HEAD: it would hardly be found on GitHub anyway.
+    /// </summary>
+    private static string? BranchOf(GitLine line) =>
+        line.Branch is { Length: > 0 } branch && branch != ".invalid"
+        && !(branch.Length is >= 7 and <= 40 && branch.All(char.IsAsciiHexDigit) && (line.Head is null || line.Head.StartsWith(branch, StringComparison.OrdinalIgnoreCase)))
+            ? branch : null;
+
+    /// <summary>
+    /// The folders of <paramref name="lines"/> on a branch the last read of GitHub did not ask about where it stands (#428), each once for as
+    /// long as it stays on that branch: a read that fails, or a branch past the cut of a repository on many, is not asked about again every
+    /// pass (the regular rounds do). A folder that moves to another branch is let go of, so a switch back is asked about again; so is one
+    /// that left <paramref name="paths"/>.
+    /// </summary>
+    private List<(string Path, string Branch)> BranchesToAsk(IReadOnlyList<GitLine> lines, IReadOnlyCollection<string> paths)
+    {
+        var asks = new List<(string Path, string Branch)>();
+        lock (_gitHubAsked)
+        {
+            foreach (var gone in _branchAsked.Keys.Where(f => !paths.Contains(f, StringComparer.OrdinalIgnoreCase)).ToList())
+            {
+                _branchAsked.Remove(gone);
+            }
+
+            foreach (var line in lines)
+            {
+                var path = line.Path!;
+                var branch = BranchOf(line);
+                if (_branchAsked.TryGetValue(path, out var asked) && asked != branch)
+                {
+                    _branchAsked.Remove(path);
+                }
+
+                if (branch is not null && !_branchAsked.ContainsKey(path) && _gitHub?.ForFolder(path) is { } activity && !activity.Covers(branch))
+                {
+                    asks.Add((path, branch));
+                }
+            }
+        }
+
+        return asks;
+    }
 
     /// <summary>True the first time a folder is asked for; again only after the round that was asked to read it has ended, whatever it came to.</summary>
     private List<string> AskGitHubOf(IEnumerable<string> folders, object round)
@@ -1437,6 +1522,12 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         // after one gh ran out of time on, which may have gone through.
         if (outcome.ChangedGitHub && _gitHub is not null)
         {
+            // On the branch the pull left it on, which the git pass that tells it has not yet (#428).
+            if (outcome.PulledBranch is { } pulled)
+            {
+                _gitHub.FollowBranches([(outcome.Checkout, pulled)]);
+            }
+
             _ = RefreshGitHubAsync([outcome.Checkout]);
         }
     }

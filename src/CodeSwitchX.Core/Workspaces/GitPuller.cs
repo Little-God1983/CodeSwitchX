@@ -3,12 +3,13 @@ using System.Diagnostics;
 namespace CodeSwitchX.Core.Workspaces;
 
 /// <summary>What a pull came to.</summary>
-/// <param name="Succeeded">The checkout is on the default branch and up to date with GitHub.</param>
+/// <param name="Succeeded">The checkout is on the branch pulled and up to date with GitHub.</param>
 /// <param name="Text">On success the whole line ("CodeSwitchX is on main, 3 new commits."); otherwise only the reason, which the caller puts after its own words ("Pull stopped: ...").</param>
 public sealed record PullOutcome(bool Succeeded, string Text);
 
 /// <summary>
-/// Switches a checkout to its default branch and brings it up to date with GitHub, fast-forward only (#407). Anything else is refused
+/// Switches a checkout to a branch (its default one for Pull, the one a merge landed on for Merge and pull, #428) and brings it up to date
+/// with GitHub, fast-forward only (#407). Anything else is refused
 /// with the reason and leaves the checkout as it was (on its branch, its files untouched): uncommitted changes to tracked files, a local default branch with commits that are
 /// not on GitHub, and whatever git itself refuses (an untracked file the switch would overwrite). Never stashes, resets or merges.
 /// </summary>

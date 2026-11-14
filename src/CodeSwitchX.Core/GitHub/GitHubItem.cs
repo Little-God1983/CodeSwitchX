@@ -46,6 +46,10 @@ public sealed record GitHubHead(string Sha, int? Commits);
 /// <param name="OpenIssues">The total of open issues, not the number of rows in <paramref name="NewestIssues"/>.</param>
 /// <param name="DefaultBranch">The branch GitHub calls the default: where pull requests merge into, and what the Yard pulls (#407). Null when the repository has none (an empty one) or it was not read.</param>
 /// <param name="DefaultHead">Where <paramref name="DefaultBranch"/> stood when this was read (#426): a checkout on it that lacks this commit is behind. Null when it was not read.</param>
+/// <param name="BranchHeads">
+/// Where the branches the repository's folders were on stood when this was read (#428), by name, without a count of commits; null for a
+/// branch GitHub has not got. A branch not in it was not asked about, or its answer failed. Null when none was asked about.
+/// </param>
 public sealed record RepoActivity(
     GitHubRepo Repo,
     string Account,
@@ -54,7 +58,8 @@ public sealed record RepoActivity(
     IReadOnlyList<GitHubItem> NewestIssues,
     IReadOnlyList<GitHubItem> NewestPullRequests,
     string? DefaultBranch = null,
-    GitHubHead? DefaultHead = null)
+    GitHubHead? DefaultHead = null,
+    IReadOnlyDictionary<string, GitHubHead?>? BranchHeads = null)
 {
     /// <summary>How many of the newest items a result keeps for the preview; the GraphQL read asks for the same number.</summary>
     public const int PreviewCount = 5;
@@ -67,6 +72,7 @@ public sealed record RepoActivity(
         && OpenPullRequests == other.OpenPullRequests
         && DefaultBranch == other.DefaultBranch
         && DefaultHead == other.DefaultHead
+        && SameHeads(BranchHeads, other.BranchHeads)
         && SameItems(NewestIssues, other.NewestIssues)
         && SameItems(NewestPullRequests, other.NewestPullRequests);
 
@@ -77,6 +83,15 @@ public sealed record RepoActivity(
         && (kind == GitHubItemKind.Issue
             ? OpenIssues == other.OpenIssues && SameItems(NewestIssues, other.NewestIssues)
             : OpenPullRequests == other.OpenPullRequests && SameItems(NewestPullRequests, other.NewestPullRequests));
+
+    /// <summary>Where <paramref name="branch"/> stood when this was read (#426, #428): the default branch's head, or another branch's; null when it is not known.</summary>
+    public GitHubHead? HeadOf(string branch) => branch == DefaultBranch ? DefaultHead : BranchHeads?.GetValueOrDefault(branch);
+
+    /// <summary>Whether this read asked about <paramref name="branch"/> (#428), whatever GitHub answered: the default branch always.</summary>
+    public bool Covers(string branch) => branch == DefaultBranch || BranchHeads?.ContainsKey(branch) == true;
+
+    private static bool SameHeads(IReadOnlyDictionary<string, GitHubHead?>? a, IReadOnlyDictionary<string, GitHubHead?>? b) =>
+        (a?.Count ?? 0) == (b?.Count ?? 0) && (a is null || a.All(p => b!.TryGetValue(p.Key, out var head) && head == p.Value));
 
     private static bool SameItems(IReadOnlyList<GitHubItem> a, IReadOnlyList<GitHubItem> b) =>
         a.Count == b.Count && a.Zip(b).All(p => SameItem(p.First, p.Second));

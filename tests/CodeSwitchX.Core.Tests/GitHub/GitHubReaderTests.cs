@@ -69,6 +69,62 @@ public class GitHubReaderTests
 
     private static async Task<RepoActivity?> Read(FakeGh gh, GitHubRepo? repo = null) => (await Outcome(gh, repo)).Activity;
 
+    /// <summary>A read that asks where develop and gone stand (#428), GitHub answering with <paramref name="fields"/> beside the rest.</summary>
+    private static async Task<(RepoActivity? Activity, FakeGh Gh)> ReadBranches(string fields, string? printed = null)
+    {
+        var answer = Graphql("ADMIN").Replace("\"viewerPermission\"", "\"defaultBranchRef\":{\"name\":\"main\",\"target\":{\"oid\":\"m\"}}," + fields + "\"viewerPermission\"", StringComparison.Ordinal);
+        var gh = Fake(["acme"], new() { ["acme"] = printed is null ? answer : null });
+        if (printed is not null)
+        {
+            gh.Printed["acme"] = answer.Insert(answer.Length - 1, "," + printed);
+        }
+
+        var read = await new GitHubReader(gh).ReadAsync(Repo, gh.Accounts, CancellationToken.None, ["develop", "gone"]);
+        return (read.Activity, gh);
+    }
+
+    [Fact]
+    public async Task Where_the_branches_asked_for_stand_is_read_with_the_repository()
+    {
+        var (activity, gh) = await ReadBranches("""
+            "branch0":{"target":{"oid":"7d6783b6e4ca65062d1ab6cdfe82e5b5f29e0728"}},"branch1":null,
+            """);
+
+        var heads = activity.ShouldNotBeNull().BranchHeads.ShouldNotBeNull();
+        heads.Count.ShouldBe(2);
+        heads["develop"].ShouldBe(new GitHubHead("7d6783b6e4ca65062d1ab6cdfe82e5b5f29e0728", null));
+        heads["gone"].ShouldBeNull("GitHub has no such branch");
+        activity.HeadOf("develop").ShouldBe(heads["develop"]);
+        activity.Covers("gone").ShouldBeTrue();
+        activity.Covers("feature/x").ShouldBeFalse();
+        var command = gh.Commands.ShouldHaveSingleItem();
+        command.ShouldContain(a => a.Contains("query($owner:String!,$name:String!,$b0:String!,$b1:String!)", StringComparison.Ordinal)
+            && a.Contains("branch0:ref(qualifiedName:$b0){target{oid}}", StringComparison.Ordinal));
+        command.ShouldContain("b0=refs/heads/develop");
+        command.ShouldContain("b1=refs/heads/gone");
+    }
+
+    [Fact]
+    public async Task An_error_on_one_branch_leaves_that_branch_out_and_reads_the_rest()
+    {
+        var (activity, _) = await ReadBranches("""
+            "branch0":{"target":{"oid":"7d6783b6e4ca65062d1ab6cdfe82e5b5f29e0728"}},"branch1":null,
+            """, printed: """
+            "errors":[{"type":"SERVICE_UNAVAILABLE","path":["repository","branch1"],"message":"Timeout"}]
+            """.Trim());
+
+        var heads = activity.ShouldNotBeNull().BranchHeads.ShouldNotBeNull();
+        heads.Keys.ShouldBe(new[] { "develop" }, "a failed answer is not \"GitHub has no such branch\"");
+        activity.Covers("gone").ShouldBeFalse();
+    }
+
+    [Fact]
+    public void A_read_without_branches_asks_the_query_it_always_did()
+    {
+        GitHubReader.QueryFor(0).ShouldNotContain("branch0");
+        GitHubReader.QueryFor(2).ShouldContain("branch1:ref(qualifiedName:$b1)");
+    }
+
     [Fact]
     public async Task An_error_on_the_default_branchs_count_of_commits_still_reads_the_repository()
     {

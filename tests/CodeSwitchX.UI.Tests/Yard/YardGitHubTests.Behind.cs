@@ -12,8 +12,11 @@ public partial class YardGitHubTests
 
     private readonly List<string> _gitRan = [];
 
-    /// <summary>Git with the checkout at <paramref name="head"/>, a clean tree, GitHub's commit fetched and <paramref name="behind"/> commits short of it.</summary>
-    private void GitIsAt(string head, int behind = 0) => _gitRunner = args =>
+    /// <summary>
+    /// Git with the checkout at <paramref name="head"/>, a clean tree, GitHub's commit fetched and <paramref name="behind"/> commits short of it,
+    /// holding <paramref name="ahead"/> commits of its own that GitHub's lacks.
+    /// </summary>
+    private void GitIsAt(string head, int behind = 0, int ahead = 0) => _gitRunner = args =>
     {
         lock (_gitRan)
         {
@@ -23,6 +26,7 @@ public partial class YardGitHubTests
         return args.StartsWith("status", StringComparison.Ordinal) ? $"# branch.oid {head}\n# branch.head main\n"
             : args.StartsWith("rev-list --no-walk", StringComparison.Ordinal) ? args[(args.LastIndexOf(' ') + 1)..] + "\n"
             : args.StartsWith("rev-list --count HEAD..", StringComparison.Ordinal) ? $"{behind}\n"
+            : args.StartsWith("rev-list --count ", StringComparison.Ordinal) && args.EndsWith("..HEAD", StringComparison.Ordinal) ? $"{ahead}\n"
             : args.StartsWith("rev-parse --is-shallow-repository", StringComparison.Ordinal) ? "false\n"
             : string.Empty;
     };
@@ -125,6 +129,140 @@ public partial class YardGitHubTests
         line.Behind.ShouldBeNull();
         line.GitStateLabel.ShouldBe("clean");
         GitWasAsked("rev-list").ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_line_on_another_branch_that_lacks_commits_its_branch_has_on_GitHub_is_behind()
+    {
+        // A repository whose work merges into develop (#428): the line on develop is compared with GitHub's develop.
+        _gh.DefaultHead = new string('a', 40);
+        _gh.Branches["develop"] = OnGitHub;
+        GitIsAt(Here, behind: 4);
+        var app = Add("App", Repo("app"));
+        File.WriteAllText(Path.Combine(app.RootPath, ".git", "HEAD"), "ref: refs/heads/develop\n");
+        var yard = Yard(true, app);
+
+        await yard.InitializeAsync(CancellationToken.None);
+
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Behind is not null);
+        var line = yard.FindTile(app.Id)!.GitLines[0];
+        line.BehindLabel.ShouldBe("4 behind");
+        line.GitStateLabel.ShouldBeNull("a branch that is behind is not clean");
+        line.BehindAgainst.ShouldBe(OnGitHub);
+    }
+
+    [Fact]
+    public async Task A_switch_to_a_branch_the_last_read_did_not_ask_about_reads_GitHub_for_it_at_once()
+    {
+        // The read of GitHub asks about the branches the folders are on; after a switch, the next one is up to ten minutes away (#428).
+        _gh.DefaultHead = OnGitHub;
+        _gh.Branches["develop"] = OnGitHub;
+        GitIsAt(Here, behind: 4);
+        var (yard, app) = await SettledYard();
+        await yard.CurrentGitRefresh;
+        _gh.BranchesAsked.ShouldNotContain("develop");
+
+        File.WriteAllText(Path.Combine(yard.FindTile(app.Id)!.RootPath, ".git", "HEAD"), "ref: refs/heads/develop\n");
+        await yard.RefreshGitAsync(CancellationToken.None);
+
+        // No timer is advanced and Refresh is not pressed.
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Behind is not null);
+        yard.FindTile(app.Id)!.GitLines[0].BehindLabel.ShouldBe("4 behind");
+        lock (_gh.Names)
+        {
+            _gh.BranchesAsked.Count(b => b == "develop").ShouldBe(1);
+        }
+    }
+
+    [Fact]
+    public async Task A_switch_back_to_a_branch_a_later_read_let_go_of_asks_about_it_again()
+    {
+        _gh.DefaultHead = OnGitHub;
+        _gh.Branches["develop"] = OnGitHub;
+        GitIsAt(Here, behind: 4);
+        var (yard, app) = await SettledYard();
+        var head = Path.Combine(yard.FindTile(app.Id)!.RootPath, ".git", "HEAD");
+        File.WriteAllText(head, "ref: refs/heads/develop\n");
+        await yard.RefreshGitAsync(CancellationToken.None);
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0] is { Branch: "develop", Behind: not null });
+
+        // On main, a regular read asks about main alone and lets develop go.
+        File.WriteAllText(head, "ref: refs/heads/main\n");
+        await yard.RefreshGitAsync(CancellationToken.None);
+        await yard.RefreshCommand.ExecuteAsync(null);
+        await Quiet();
+        File.WriteAllText(head, "ref: refs/heads/develop\n");
+        await yard.RefreshGitAsync(CancellationToken.None);
+
+        await Eventually(() =>
+        {
+            lock (_gh.Names)
+            {
+                return _gh.BranchesAsked.Count(b => b == "develop") >= 2;
+            }
+        });
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0] is { Branch: "develop", Behind: not null });
+    }
+
+    [Fact]
+    public async Task A_branch_GitHub_has_not_got_is_asked_about_once_and_the_line_stays_clean()
+    {
+        GitIsAt(Here);
+        _gh.DefaultHead = OnGitHub;
+        var (yard, app) = await SettledYard();
+        File.WriteAllText(Path.Combine(yard.FindTile(app.Id)!.RootPath, ".git", "HEAD"), "ref: refs/heads/local-only\n");
+
+        await yard.RefreshGitAsync(CancellationToken.None);
+        await Eventually(() => _gh.BranchesAsked.Contains("local-only"));
+        await Quiet();
+        await yard.RefreshGitAsync(CancellationToken.None);
+        await yard.RefreshGitAsync(CancellationToken.None);
+        await Quiet();
+
+        lock (_gh.Names)
+        {
+            _gh.BranchesAsked.Count(b => b == "local-only").ShouldBe(1, "not every 30 s");
+        }
+
+        yard.FindTile(app.Id)!.GitLines[0].GitStateLabel.ShouldBe("clean", "nothing on GitHub to be behind");
+    }
+
+    [Fact]
+    public async Task A_branch_rewritten_here_is_not_behind_the_commit_GitHub_had_before()
+    {
+        // A rebase or an amend on develop leaves GitHub's old commit here (review of #428): no pull brings anything, so nothing is behind.
+        _gh.DefaultHead = new string('a', 40);
+        _gh.Branches["develop"] = OnGitHub;
+        GitIsAt(Here, behind: 4, ahead: 5);
+        var app = Add("App", Repo("app"));
+        File.WriteAllText(Path.Combine(app.RootPath, ".git", "HEAD"), "ref: refs/heads/develop\n");
+        var yard = Yard(true, app);
+
+        await yard.InitializeAsync(CancellationToken.None);
+
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].BehindAgainst == OnGitHub);
+        yard.FindTile(app.Id)!.GitLines[0].Behind.ShouldBeNull();
+        yard.FindTile(app.Id)!.GitLines[0].GitStateLabel.ShouldBe("clean");
+    }
+
+    [Fact]
+    public async Task A_detached_HEAD_is_not_taken_for_a_branch_on_GitHub()
+    {
+        // Git names a detached HEAD by the start of its commit, which moves at every step of a rebase (review of #428).
+        _gh.DefaultHead = OnGitHub;
+        GitIsAt(Here);
+        var (yard, app) = await SettledYard();
+        File.WriteAllText(Path.Combine(yard.FindTile(app.Id)!.RootPath, ".git", "HEAD"), Here + "\n");
+
+        await yard.RefreshGitAsync(CancellationToken.None);
+        await Quiet();
+        await yard.RefreshCommand.ExecuteAsync(null);
+        await Quiet();
+
+        lock (_gh.Names)
+        {
+            _gh.BranchesAsked.ShouldNotContain(Here[..7]);
+        }
     }
 
     [Fact]

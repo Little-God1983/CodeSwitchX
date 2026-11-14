@@ -228,9 +228,9 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     public bool CanMerge => _checkout is not null && _checkout.Jobs.CanMerge;
 
     /// <summary>
-    /// A row's Merge button (#408): opens the strip under the row, and does nothing else. Merge and pull is offered when it merges into the
-    /// default branch, the workspace is on the pull request's branch (not a fork's) or on the default branch itself (#426), and no chat is
-    /// working here. A press while a job of the checkout runs does nothing, as Pull does.
+    /// A row's Merge button (#408): opens the strip under the row, and does nothing else. Merge and pull is offered when the workspace is on
+    /// the pull request's branch (not a fork's) or on the branch it merges into (#426), the default one or another (#428), with no changed
+    /// files (#429), and no chat is working here. A press while a job of the checkout runs does nothing, as Pull does.
     /// </summary>
     [RelayCommand]
     private void OpenMerge(GitHubRow row)
@@ -260,27 +260,28 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
         var main = _repo.DefaultBranch;
         var into = item.BaseBranch ?? main ?? "its base branch";
         var onBranch = !item.IsCrossRepository && item.Branch is not null && item.Branch == Branch;
-        // The workspace is on the default branch and the merge lands there (#426): the merge alone would leave it behind GitHub, with
-        // nothing on the tile to say so. Wherever the pull request comes from, a fork too.
-        var onBase = main is not null && into == main && Branch == main;
-        var pullable = onBase || (onBranch && main is not null && into == main);
+        // The workspace is on the branch the merge lands on (#426), the default one or another (#428): the merge alone would leave it behind
+        // GitHub, with nothing on the tile to say so until the next read. Wherever the pull request comes from, a fork too.
+        var onBase = Branch is not null && Branch == (item.BaseBranch ?? main);
+        // From the pull request's own branch, the switch goes to the branch it merges into, the default one or another (#428).
+        var pullable = onBase || (onBranch && (item.BaseBranch ?? main) is not null);
         var busy = pullable && checkout.ChatIsWorking();
         // A pull stops at changes to tracked files, and would leave the branch behind after promising otherwise (#429): said here, before the
         // merge. Untracked files go along with the switch, as the pull lets them.
         var changed = pullable && !busy && _changedFiles is > 0 ? (_changedFiles == 1 ? "1 changed file" : $"{_changedFiles} changed files") : null;
         var stays = Branch is { } branch ? $"This workspace stays on {branch}." : "This workspace stays as it is.";
         var line = onBase ? (busy ? "A chat is working here, so the pull is left out."
-                : changed is not null ? $"This workspace is on {main} with {changed}, so the pull is left out."
-                : $"This workspace is on {main}. Merge and pull brings it up to date.")
+                : changed is not null ? $"This workspace is on {into} with {changed}, so the pull is left out."
+                : $"This workspace is on {into}. Merge and pull brings it up to date.")
             : !onBranch ? (item.IsCrossRepository ? $"It comes from a fork. {stays}" : stays)
             : busy ? "A chat is working here, so the switch is left out."
             : changed is not null ? $"This workspace is on its branch with {changed}, so the switch is left out."
-            : pullable ? $"This workspace is on its branch. Merge and pull switches it to {main} and pulls."
-            : $"It merges into {into}, not {main ?? "the default branch"}. {stays}";
+            : pullable ? $"This workspace is on its branch. Merge and pull switches it to {into} and pulls."
+            : stays;
         return new MergeStrip(row, $"Merge {row.NumberText} into {into}?", line, pullable && !busy && changed is null, pullable ? "Merge only" : "Merge", into);
     }
 
-    /// <summary>The merge, then the switch to the default branch and the pull (#408).</summary>
+    /// <summary>The merge, then the switch to the branch it landed on and the pull (#408, #428).</summary>
     [RelayCommand]
     private void MergeAndPull() => Merge(pull: true);
 
@@ -314,8 +315,9 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
 
         ActionMessage = null;
         _ = _checkout.Jobs.MergeAsync(_checkout.Path, _repo.Repo.Name, _repo.Repo, _repo.Account, strip.Row.Item.Number, strip.BaseBranch,
-            pull && strip.OffersPull ? _repo.DefaultBranch : null, _checkout.ChatIsWorking, _checkout.Key, _checkout.Tree, opened,
-            onPullBranch: Branch == _repo.DefaultBranch);
+            // The branch the merge lands on: the one the workspace is on (#428), or the default one it switches to from the pull request's own.
+            pull && strip.OffersPull ? strip.BaseBranch : null, _checkout.ChatIsWorking, _checkout.Key, _checkout.Tree, opened,
+            onPullBranch: Branch == strip.BaseBranch);
     }
 
     private void OnJobChanged(string key)
@@ -341,9 +343,10 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
         if (!busy && jobs.TakeOutcome(_checkout.Key, _checkout.Tree) is { } outcome)
         {
             ShowAction(outcome.Message, failed: !outcome.Succeeded);
-            if (outcome.Pulled && !opening)
+            if (outcome.PulledBranch is { } pulled && !opening)
             {
-                Branch = _repo.DefaultBranch;
+                // Where the pull left it: develop after a Merge and pull into develop (#428).
+                Branch = pulled;
             }
 
             // A pull request that moved since it was read: the list is read again, so the next Merge goes for its new head (#414).

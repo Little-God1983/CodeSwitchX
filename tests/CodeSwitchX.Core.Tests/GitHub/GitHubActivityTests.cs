@@ -39,6 +39,12 @@ public class GitHubActivityTests
         /// <summary>What an account's read comes to, instead of the usual answer; null gives the usual one.</summary>
         public Func<string, GhAnswer?>? AnswerOf { get; set; }
 
+        /// <summary>Where branches stand on GitHub (#428); a branch not in it is one GitHub has not got.</summary>
+        public Dictionary<string, string> BranchHeads { get; } = [];
+
+        /// <summary>The branches each read asked about.</summary>
+        public List<IReadOnlyList<string>> BranchesAsked { get; } = [];
+
         public Task<GhAccounts> AccountsAsync(CancellationToken ct)
         {
             lock (Slugs)
@@ -76,7 +82,15 @@ public class GitHubActivityTests
                 }
 
                 var fails = Fail || (FailOn is not null && slug.EndsWith("name=" + FailOn, StringComparison.Ordinal));
-                return AnswerOf?.Invoke(login) ?? new GhAnswer(fails ? null : Graphql(Issues));
+                var branches = arguments.Where(a => a.StartsWith('b') && a.Contains("=refs/heads/", StringComparison.Ordinal))
+                    .Select(a => a[(a.IndexOf("=refs/heads/", StringComparison.Ordinal) + "=refs/heads/".Length)..]).ToList();
+                lock (Slugs)
+                {
+                    BranchesAsked.Add(branches);
+                }
+
+                var fields = string.Concat(branches.Select((b, i) => "\"branch" + i + "\":" + (BranchHeads.TryGetValue(b, out var sha) ? "{\"target\":{\"oid\":\"" + sha + "\"}}" : "null") + ","));
+                return AnswerOf?.Invoke(login) ?? new GhAnswer(fails ? null : Graphql(Issues).Replace("{\"viewerPermission\"", "{" + fields + "\"viewerPermission\"", StringComparison.Ordinal));
             }
             finally
             {
@@ -184,6 +198,42 @@ public class GitHubActivityTests
         gh.Slugs.Count.ShouldBe(1);
         activity.ForFolder(@"c:\r\a").ShouldBeSameAs(activity.ForFolder(@"c:\r\b"));
         activity.ForFolder(@"c:\r\a")!.OpenIssues.ShouldBe(3);
+    }
+
+    [Fact]
+    public async Task A_read_of_one_folder_asks_where_every_folders_branch_stands()
+    {
+        // A read after a merge, or for a Build press, goes for one folder (#428): the repository's other folders must not lose their branch.
+        var gh = new FakeGh();
+        gh.BranchHeads["develop"] = new string('d', 40);
+        gh.BranchHeads["feature/y"] = new string('f', 40);
+        var activity = Activity(gh, _ => "https://github.com/acme/tool.git");
+        activity.FollowBranches([(@"c:\r\a", "develop"), (@"c:\r\b", "feature/y"), (@"c:\r\c", null)]);
+        await activity.RefreshAsync([@"c:\r\a", @"c:\r\b", @"c:\r\c"], CancellationToken.None);
+
+        await activity.RefreshAsync([@"c:\r\b"], CancellationToken.None);
+
+        gh.BranchesAsked[^1].ShouldBe(["feature/y", "develop"], "the folder read first, then the others; none for a detached HEAD");
+        var read = activity.ForFolder(@"c:\r\a").ShouldNotBeNull();
+        read.HeadOf("develop").ShouldBe(new GitHubHead(new string('d', 40), null));
+        read.HeadOf("feature/y").ShouldBe(new GitHubHead(new string('f', 40), null));
+    }
+
+    [Fact]
+    public async Task Where_a_branch_stood_is_kept_while_a_folder_is_on_it_and_a_read_did_not_answer_for_it()
+    {
+        var gh = new FakeGh();
+        gh.BranchHeads["develop"] = new string('d', 40);
+        var activity = Activity(gh, _ => "https://github.com/acme/tool.git");
+        activity.FollowBranches([(@"c:\r\a", "develop")]);
+        await activity.RefreshAsync([@"c:\r\a"], CancellationToken.None);
+        gh.AnswerOf = _ => new GhAnswer(null, Graphql(3).Insert(Graphql(3).Length - 1,
+            ",\"errors\":[{\"type\":\"SERVICE_UNAVAILABLE\",\"path\":[\"repository\",\"branch0\"],\"message\":\"Timeout\"}]")
+            .Replace("{\"viewerPermission\"", "{\"defaultBranchRef\":{\"name\":\"main\",\"target\":{\"oid\":\"m\"}},\"branch0\":null,\"viewerPermission\"", StringComparison.Ordinal));
+
+        await activity.RefreshAsync([@"c:\r\a"], CancellationToken.None);
+
+        activity.ForFolder(@"c:\r\a").ShouldNotBeNull().HeadOf("develop").ShouldBe(new GitHubHead(new string('d', 40), null), "an error is not \"GitHub has not got it\"");
     }
 
     [Fact]

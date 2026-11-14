@@ -40,6 +40,12 @@ public partial class YardGitHubTests : IDisposable
         /// <summary>How many commits the default branch holds on GitHub.</summary>
         public int Commits { get; set; } = 1155;
 
+        /// <summary>Where other branches stand on GitHub (#428), by name; a branch not in it is one GitHub has not got.</summary>
+        public Dictionary<string, string> Branches { get; } = [];
+
+        /// <summary>The branches each read asked about, in order.</summary>
+        public List<string> BranchesAsked { get; } = [];
+
         public bool Hang { get; set; }
 
         /// <summary>Every read comes back with no answer, as when gh is logged out or offline.</summary>
@@ -94,8 +100,20 @@ public partial class YardGitHubTests : IDisposable
                 return null;
             }
 
-            var head = DefaultHead is null ? string.Empty : ",\"target\":{\"oid\":\"" + DefaultHead + "\",\"history\":{\"totalCount\":" + Commits + "}}";
-            return "{\"data\":{\"repository\":{\"viewerPermission\":\"ADMIN\",\"defaultBranchRef\":{\"name\":\"main\"" + head + "},"
+            var head = DefaultHead is null ? string.Empty : ",\"target\":{\"oid\":\"" + DefaultHead + "\"},\"commits\":{\"history\":{\"totalCount\":" + Commits + "}}";
+            var branches = new System.Text.StringBuilder();
+            foreach (var (argument, i) in arguments.Where(a => a.StartsWith('b') && a.Contains("=refs/heads/", StringComparison.Ordinal)).Select((a, i) => (a, i)))
+            {
+                var name = argument[(argument.IndexOf("=refs/heads/", StringComparison.Ordinal) + "=refs/heads/".Length)..];
+                lock (Names)
+                {
+                    BranchesAsked.Add(name);
+                }
+
+                branches.Append("\"branch" + i + "\":" + (Branches.TryGetValue(name, out var sha) ? "{\"target\":{\"oid\":\"" + sha + "\"}}" : "null") + ",");
+            }
+
+            return "{\"data\":{\"repository\":{" + branches + "\"viewerPermission\":\"ADMIN\",\"defaultBranchRef\":{\"name\":\"main\"" + head + "},"
                 + "\"issues\":{\"totalCount\":" + Issues + ",\"nodes\":[]},"
                 + "\"pullRequests\":{\"totalCount\":" + PullRequests + ",\"nodes\":[]}}}}";
         }

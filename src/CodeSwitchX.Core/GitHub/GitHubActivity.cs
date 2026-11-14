@@ -28,6 +28,9 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
     private readonly Dictionary<string, GitHubRepo?> _repoOfFolder = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<GitHubRepo, RepoActivity> _results = [];
 
+    /// <summary>The branch each folder is on, as the caller last saw it (#428): where those branches stand is read with the repository.</summary>
+    private readonly Dictionary<string, string> _branchOfFolder = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>A round changed at least one result or moved a folder to another repository (its first included), or <see cref="Replace"/> changed a result; raised on whichever thread did it.</summary>
     public event EventHandler? Changed;
 
@@ -72,10 +75,37 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
                 _repoOfFolder.Remove(folder);
             }
 
+            foreach (var folder in _branchOfFolder.Keys.Where(f => !keep.Contains(f)).ToList())
+            {
+                _branchOfFolder.Remove(folder);
+            }
+
             var referred = _repoOfFolder.Values.OfType<GitHubRepo>().ToHashSet();
             foreach (var repo in _results.Keys.Where(r => !referred.Contains(r)).ToList())
             {
                 _results.Remove(repo);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The branch each folder is on now, as git told the caller (#428); null for one on no branch (a detached HEAD) or that git could not
+    /// tell. Every later read of a folder's repository asks where the branches of all its folders stand, not only of the folders it reads.
+    /// </summary>
+    public void FollowBranches(IEnumerable<(string Folder, string? Branch)> folders)
+    {
+        lock (_gate)
+        {
+            foreach (var (folder, branch) in folders)
+            {
+                if (branch is { Length: > 0 })
+                {
+                    _branchOfFolder[Key(folder)] = branch;
+                }
+                else
+                {
+                    _branchOfFolder.Remove(Key(folder));
+                }
             }
         }
     }
@@ -97,7 +127,7 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
             var accounts = repos.Count == 0 ? [] : await AccountsAsync(ct).ConfigureAwait(false);
             // Each result is stored as it arrives, so a slow repository does not hold back the others; the event waits for the round.
             // No answer from gh (null) makes no reads, so the last results stay; no logins at all (empty) is read as it is.
-            var reads = accounts is null ? [] : await Task.WhenAll(repos.Select(g => ReadAsync(g.Key, accounts, g.First().Folder, ct))).ConfigureAwait(false);
+            var reads = accounts is null ? [] : await Task.WhenAll(repos.Select(g => ReadAsync(g.Key, accounts, g.First().Folder, BranchesOf(g.Key, g.Select(p => p.Folder)), ct))).ConfigureAwait(false);
             foreach (var failure in reads.Select(r => r.Failure).OfType<Fail>().GroupBy(f => f.Kind))
             {
                 logger.LogWarning("GitHub round: {Failed} of {Total} repositories could not be read: {Failure}", failure.Count(), reads.Length, failure.First().Detail);
@@ -265,13 +295,58 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
         }
     }
 
+    /// <summary>
+    /// The branches to read where they stand on GitHub with <paramref name="repo"/> (#428), so a line on a branch other than the default one
+    /// is compared with it: those of <paramref name="read"/> first, then those of its other folders, as <see cref="FollowBranches"/> has them.
+    /// The default branch, once known, is read anyway.
+    /// </summary>
+    private List<string> BranchesOf(GitHubRepo repo, IEnumerable<string> read)
+    {
+        lock (_gate)
+        {
+            var main = _results.GetValueOrDefault(repo)?.DefaultBranch;
+            return read.Select(Key).Concat(FoldersOf(repo)).Select(f => _branchOfFolder.GetValueOrDefault(f)).OfType<string>()
+                .Where(b => b != main).Distinct(StringComparer.Ordinal).Take(GitHubReader.MostBranches).ToList();
+        }
+    }
+
+    /// <summary>The folders known to be in <paramref name="repo"/>; under <see cref="_gate"/>.</summary>
+    private IEnumerable<string> FoldersOf(GitHubRepo repo) => _repoOfFolder.Where(p => p.Value == repo).Select(p => p.Key);
+
+    /// <summary>
+    /// <paramref name="activity"/> with where the branches it asked about and got no answer for (an error on that one field) stood in
+    /// <paramref name="last"/> (#428): an error is not "GitHub has not got it", and must not turn a line that is behind "clean". A branch not
+    /// asked about is not carried: its commit would be kept round after round as if it were read.
+    /// </summary>
+    private static RepoActivity WithBranchesKept(RepoActivity activity, RepoActivity? last, IReadOnlyList<string> asked)
+    {
+        if (last?.BranchHeads is not { Count: > 0 } kept)
+        {
+            return activity;
+        }
+
+        var carried = kept.Where(p => asked.Contains(p.Key) && p.Key != activity.DefaultBranch && activity.BranchHeads?.ContainsKey(p.Key) != true).ToList();
+        if (carried.Count == 0)
+        {
+            return activity;
+        }
+
+        var heads = new Dictionary<string, GitHubHead?>(activity.BranchHeads ?? new Dictionary<string, GitHubHead?>(), StringComparer.Ordinal);
+        foreach (var (branch, head) in carried)
+        {
+            heads[branch] = head;
+        }
+
+        return activity with { BranchHeads = heads };
+    }
+
     /// <summary>Reads the repository and stores what came. <c>Changed</c> is true when that differs from the last result; <c>Failure</c> names the kind of failure when nothing was read (the last result stays), for the round to count.</summary>
-    private async Task<(bool Changed, Fail? Failure)> ReadAsync(GitHubRepo repo, IReadOnlyList<string> accounts, string folder, CancellationToken ct)
+    private async Task<(bool Changed, Fail? Failure)> ReadAsync(GitHubRepo repo, IReadOnlyList<string> accounts, string folder, IReadOnlyList<string> branches, CancellationToken ct)
     {
         await _reads.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var read = await reader.ReadAsync(repo, accounts, ct).ConfigureAwait(false);
+            var read = await reader.ReadAsync(repo, accounts, ct, branches).ConfigureAwait(false);
             if (read.NobodySeesIt)
             {
                 lock (_gate)
@@ -296,6 +371,7 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
 
             lock (_gate)
             {
+                activity = WithBranchesKept(activity, _results.GetValueOrDefault(repo), branches);
                 if (_results.TryGetValue(repo, out var last) && last.SameAs(activity))
                 {
                     return (false, null);
