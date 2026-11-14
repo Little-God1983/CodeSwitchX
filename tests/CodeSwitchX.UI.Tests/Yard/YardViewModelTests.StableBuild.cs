@@ -81,6 +81,103 @@ public partial class YardViewModelTests
     }
 
     [Fact]
+    public async Task A_menu_opened_on_a_repository_without_build_entries_reads_its_git_too()
+    {
+        // Scripts added a moment ago, or a tile registered seconds ago, have no entries until git is read (#431).
+        var app = new Workspace { Name = "App", RootPath = Repo("app"), TrackId = _general.Id };
+        var plain = new Workspace { Name = "Plain", RootPath = Path.Combine(_tempRoot, "plain"), TrackId = _general.Id };
+        Directory.CreateDirectory(plain.RootPath);
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([app, plain]));
+        var yard = Yard((_, _, _) => Task.FromResult<string?>(string.Empty));
+        await yard.InitializeAsync(CancellationToken.None);
+        await yard.RefreshGitAsync(CancellationToken.None);
+        var tile = yard.FindTile(app.Id)!;
+        var (entries, reads) = tile.OpenBuildMenu();
+        entries.ShouldBeEmpty();
+        reads.ShouldBeTrue("the menu is followed: the look for scripts may find some");
+        await tile.ScriptLook.ShouldNotBeNull();
+        tile.MenuGitRead.ShouldBeNull("no scripts there: no git for every right-click");
+        Directory.CreateDirectory(Path.Combine(app.RootPath, "scripts"));
+        File.WriteAllText(Path.Combine(app.RootPath, "scripts", "build.ps1"), "# build");
+        File.WriteAllText(Path.Combine(app.RootPath, "scripts", "_common.ps1"), "$script:ShortcutName = 'App.lnk'\n");
+
+        tile.OpenBuildMenu().ShouldSatisfyAllConditions(m => m.Entries.ShouldBeEmpty("as of the last read"), m => m.Reads.ShouldBeTrue());
+        await tile.ScriptLook.ShouldNotBeNull();
+        await tile.MenuGitRead.ShouldNotBeNull("the scripts are there now");
+
+        tile.StableBuildEntries().ShouldHaveSingleItem();
+        yard.FindTile(plain.Id)!.OpenBuildMenu().Reads.ShouldBeFalse();
+        yard.FindTile(plain.Id)!.MenuGitRead.ShouldBeNull("a tile with no repository has nothing to read");
+    }
+
+    [Fact]
+    public async Task An_earlier_reads_look_at_a_folder_beats_a_later_read_that_carried_its_line_over()
+    {
+        // A later read whose folder check failed carries the shown line over; the earlier read that did look must not be dropped (#431).
+        var app = new Workspace { Name = "App", RootPath = Repo("app"), TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([app]));
+        var yard = Yard((_, _, _) => Task.FromResult<string?>(string.Empty));
+        await yard.InitializeAsync(CancellationToken.None);
+        await yard.RefreshGitAsync(CancellationToken.None);
+        var tile = yard.FindTile(app.Id)!;
+        var shown = tile.GitLines[0];
+        var earlier = tile.StartGitRead();
+        var later = tile.StartGitRead();
+
+        tile.ShowGit([shown], later, [false]).ShouldBeNull("it only carried the line over");
+        tile.ShowGit([shown with { DirtyCount = 3 }], earlier, [true]).ShouldBe([true]);
+        tile.GitLines[0].DirtyCount.ShouldBe(3);
+
+        var newest = tile.StartGitRead();
+        tile.ShowGit([shown with { DirtyCount = 1 }], newest, [true]).ShouldBe([true]);
+        tile.ShowGit([shown with { DirtyCount = 5 }], earlier, [true]).ShouldBeNull("a later read looked at the folder");
+        tile.GitLines[0].DirtyCount.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_later_read_that_carried_a_line_over_does_not_put_it_back_over_an_earlier_reads_look()
+    {
+        // The other order (review of #431): the earlier read is shown first, then the later one, which could not look at the folder.
+        var app = new Workspace { Name = "App", RootPath = Repo("app"), TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([app]));
+        var yard = Yard((_, _, _) => Task.FromResult<string?>(string.Empty));
+        await yard.InitializeAsync(CancellationToken.None);
+        await yard.RefreshGitAsync(CancellationToken.None);
+        var tile = yard.FindTile(app.Id)!;
+        var stale = tile.GitLines[0];
+        var earlier = tile.StartGitRead();
+        var later = tile.StartGitRead();
+
+        tile.ShowGit([stale with { DirtyCount = 3 }], earlier, [true]).ShouldBe([true]);
+        tile.ShowGit([stale], later, [false]).ShouldBeNull("nothing of it is shown");
+
+        tile.GitLines[0].DirtyCount.ShouldBe(3, "the carried line is older than the earlier read's look");
+    }
+
+    [Fact]
+    public async Task A_newer_read_with_a_folder_list_from_before_the_one_shown_does_not_bring_a_removed_folder_back()
+    {
+        // An earlier read found B gone from the workspace file and C added; a later one, unable to read the file, carried B over (review of #431).
+        var app = new Workspace { Name = "App", RootPath = Repo("app"), TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([app]));
+        var yard = Yard((_, _, _) => Task.FromResult<string?>(string.Empty));
+        await yard.InitializeAsync(CancellationToken.None);
+        await yard.RefreshGitAsync(CancellationToken.None);
+        var tile = yard.FindTile(app.Id)!;
+        var a = tile.GitLines[0];
+        var b = a with { Path = Path.Combine(_tempRoot, "b") };
+        var c = a with { Path = Path.Combine(_tempRoot, "c") };
+        var earlier = tile.StartGitRead();
+        var later = tile.StartGitRead();
+        tile.ShowGit([a, c], earlier, [true, true]);
+
+        tile.ShowGit([a with { DirtyCount = 4 }, b], later, [true, false]).ShouldBe([true, false]);
+
+        tile.GitLines.Select(l => l.Path).ShouldBe([a.Path, c.Path]);
+        tile.GitLines[0].DirtyCount.ShouldBe(4, "its own look at A counts");
+    }
+
+    [Fact]
     public async Task A_menu_opened_again_while_its_read_runs_starts_no_second_one()
     {
         var app = new Workspace { Name = "App", RootPath = Repo("app"), TrackId = _general.Id };

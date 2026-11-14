@@ -694,6 +694,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// </summary>
     public Task RefreshGitAsync(CancellationToken ct) => RequestGitRefresh(ct, again: true);
 
+    /// <summary>Runs <paramref name="action"/> on the UI thread, which owns the tiles (#431).</summary>
+    internal void Post(Action action) => _ui.Post(action);
+
     /// <summary>
     /// <see cref="ReadGitOfAsync"/>, not waited for: a tile's menu opens with Build new version on it (#425), the merge strip opens (#429),
     /// a round's line found out of date (#429).
@@ -975,7 +978,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         _ui.Post(() =>
         {
             var shown = lines.Select(WithGitHub).ToList();
-            if (tile.ShowGit(shown, read))
+            if (tile.ShowGit(shown, read, compared) is { } applied)
             {
                 FollowPanelBranch();
 
@@ -983,7 +986,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
                 // saw no line to ask about, as the line was not on the branch yet. This tile is read again now, not at the next round, up to 30 s on.
                 // Only for a line git compared this round, and against another commit than GitHub has now: a line git gave no answer for
                 // was given the commit it has now, so this never asks round after round.
-                if (shown.Select((l, i) => compared[i] && GitLine.ComparedHead(l, l.GitHub)?.Sha != given[i]).Any(again => again) && !_disposed)
+                // Only for a line shown from this read.
+                if (shown.Select((l, i) => applied[i] && compared[i] && GitLine.ComparedHead(l, l.GitHub)?.Sha != given[i]).Any(again => again) && !_disposed)
                 {
                     // After a read of the tile under way, which may be the very one that found the line out of date (#433).
                     RefreshGitOf(tile, after: true);

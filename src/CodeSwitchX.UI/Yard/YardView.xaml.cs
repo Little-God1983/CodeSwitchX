@@ -71,11 +71,22 @@ public partial class YardView : UserControl
         }
 
         StopFollowingBuildMenu();
-        if (PutStableBuildItems(menu, tile.OpenBuildMenu()))
+        var (entries, reads) = tile.OpenBuildMenu();
+        PutStableBuildItems(menu, entries);
+        // Followed also with no entries yet: the read the menu starts may find scripts added a moment ago (#431).
+        if (reads)
         {
             _buildMenu = (menu, tile);
             tile.PropertyChanged += OnBuildMenuTileChanged;
             menu.Closed += OnBuildMenuClosed;
+            // A menu that did not open after all (another handler took the right-click) never closes: it is let go of here (#431).
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (_buildMenu is var (followed, _) && ReferenceEquals(followed, menu) && !menu.IsOpen)
+                {
+                    StopFollowingBuildMenu();
+                }
+            }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
         }
     }
 
@@ -90,6 +101,8 @@ public partial class YardView : UserControl
             return;
         }
 
+        // Made again on every change of the lines, new pills too (#431): a shortcut written meanwhile, by this tile's build or another's,
+        // counts at once, and each entry holds the line as shown. It costs a look for each shortcut in the local Start Menu.
         var wanted = Items(tile.StableBuildEntries()).ToList();
         var shown = menu.Items.OfType<MenuItem>().Where(i => i.Tag == StableBuildItem).ToList();
         if (!wanted.Select(w => Header(w.Header)).SequenceEqual(shown.Select(i => i.Header as string)))
@@ -133,10 +146,10 @@ public partial class YardView : UserControl
         }
     }
 
-    private static bool PutStableBuildItems(ContextMenu menu, IReadOnlyList<StableBuildEntry> entries) => PutStableBuildItems(menu, Items(entries).ToList());
+    private static void PutStableBuildItems(ContextMenu menu, IReadOnlyList<StableBuildEntry> entries) => PutStableBuildItems(menu, Items(entries).ToList());
 
-    /// <summary>The Build / Run items in place of the ones the menu has; false when there are none.</summary>
-    private static bool PutStableBuildItems(ContextMenu menu, IReadOnlyList<(string Header, System.Windows.Input.ICommand Command, string? Block)> items)
+    /// <summary>The Build / Run items in place of the ones the menu has, none where there are none.</summary>
+    private static void PutStableBuildItems(ContextMenu menu, IReadOnlyList<(string Header, System.Windows.Input.ICommand Command, string? Block)> items)
     {
         foreach (var old in menu.Items.OfType<Control>().Where(i => i.Tag == StableBuildItem).ToList())
         {
@@ -145,7 +158,7 @@ public partial class YardView : UserControl
 
         if (items.Count == 0)
         {
-            return false;
+            return;
         }
 
         // Above the separator that sets Unregister apart; at the end should the menu ever have none.
@@ -155,8 +168,6 @@ public partial class YardView : UserControl
         {
             menu.Items.Insert(at++, Item(header, command, block));
         }
-
-        return true;
 
         // Enabled or not by the command's CanExecute; the tooltip says why on a greyed one.
         static MenuItem Item(string header, System.Windows.Input.ICommand command, string? block)
