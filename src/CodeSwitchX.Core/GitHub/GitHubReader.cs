@@ -28,7 +28,7 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
 
     /// <summary>
     /// The most branches the one request asks where they stand (#435): far more than a repository's folders are on, and a bound on the
-    /// request's size and command line, so the read of the pills never fails for it.
+    /// request's size; GitHubActivity also keeps the names within the command line.
     /// </summary>
     internal const int MostBranches = 100;
 

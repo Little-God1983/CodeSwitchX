@@ -30,10 +30,8 @@ public partial class YardGitHubTests
             : args.StartsWith("rev-list --count ", StringComparison.Ordinal) && args.EndsWith("..HEAD", StringComparison.Ordinal) ? $"{ahead}\n"
             : args.StartsWith("rev-list --left-right --count HEAD...", StringComparison.Ordinal) ? $"{ahead}\t{behind}\n"
             : args.StartsWith("rev-list --count ", StringComparison.Ordinal) && args.Contains(" --not HEAD ", StringComparison.Ordinal)
-                ? (reflog.Contains(args.Split(' ')[2], StringComparison.Ordinal) ? "0\n" : $"{behind}\n")
+                ? (reflog.Contains(args.Split(' ')[3], StringComparison.Ordinal) ? "0\n" : $"{behind}\n")
             : args.StartsWith("log -g ", StringComparison.Ordinal) ? reflog
-            // GitHub's commit first, then the ones under it.
-            : args.StartsWith("rev-list HEAD..", StringComparison.Ordinal) ? string.Concat(Enumerable.Range(0, behind).Select(i => (i == 0 ? args[(args.IndexOf("..", StringComparison.Ordinal) + 2)..] : $"{i:x40}") + "\n"))
             : args.StartsWith("rev-parse --is-shallow-repository", StringComparison.Ordinal) ? "false\n"
             : string.Empty;
     };
@@ -266,7 +264,9 @@ public partial class YardGitHubTests
         await yard.InitializeAsync(CancellationToken.None);
 
         await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Behind is not null);
-        yard.FindTile(app.Id)!.GitLines[0].BehindLabel.ShouldBe("3 behind");
+        var line = yard.FindTile(app.Id)!.GitLines[0];
+        line.BehindLabel.ShouldBe("3 behind");
+        line.BehindToolTip.ShouldBe("GitHub's develop has 3 commits this checkout lacks. It has commits of its own too: pull develop with a merge or a rebase.");
     }
 
     [Fact]

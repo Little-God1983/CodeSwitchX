@@ -298,7 +298,7 @@ public class GitInspectorTests : IDisposable
         return Task.FromResult<string?>(args.StartsWith("rev-list --no-walk", StringComparison.Ordinal) ? OnGitHub + "\n"
             : args == $"rev-list --left-right --count HEAD...{OnGitHub}" ? "1\t2\n"
             : args.StartsWith("log -g ", StringComparison.Ordinal) ? reflog
-            : args.StartsWith($"rev-list --count {OnGitHub} --not HEAD ", StringComparison.Ordinal) ? $"{news}\n"
+            : args.StartsWith($"rev-list --count --ignore-missing {OnGitHub} --not HEAD ", StringComparison.Ordinal) ? $"{news}\n"
             : args.StartsWith("rev-parse --is-shallow-repository", StringComparison.Ordinal) ? "false\n"
             : null);
     });
@@ -307,11 +307,23 @@ public class GitInspectorTests : IDisposable
     public async Task On_another_branch_commits_never_its_own_are_behind_by_the_branchs_own_reflog()
     {
         var asked = new List<string>();
-        var answer = await WentApart($"{Here}\r\n{Own}\n", 1, asked).BehindAsync(_root, Here, OnGitHub, null, "fix/#12-größe", CancellationToken.None);
+        var answer = await WentApart($"{Here}\tcommit: mine\r\n{Own}\tcommit (amend): mine\n", 1, asked).BehindAsync(_root, Here, OnGitHub, null, "fix/#12-größe", CancellationToken.None);
 
-        answer.ShouldBe(BehindAnswer.Of(new GitBehind(1)));
-        asked.ShouldContain("log -g --format=%H \"refs/heads/fix/#12-größe\"", "the branch's own reflog, quoted, not HEAD's");
-        asked.ShouldContain($"rev-list --count {OnGitHub} --not HEAD {Here} {Own}", "under its former tips is the branch's own too");
+        answer.ShouldBe(BehindAnswer.Of(new GitBehind(1, WentApart: true)));
+        asked.ShouldContain("log -g --format=%H%x09%gs -n 1000 \"refs/heads/fix/#12-größe\" --", "the branch's own reflog, quoted, not HEAD's");
+        asked.ShouldContain($"rev-list --count --ignore-missing {OnGitHub} --not HEAD {Here} {Own}", "under its former tips is the branch's own too");
+    }
+
+    [Fact]
+    public async Task A_forward_move_a_pull_took_back_is_no_commit_the_branch_held()
+    {
+        // GitPuller moves the branch to GitHub's commit and back when git refuses the switch (review of #435).
+        var asked = new List<string>();
+        var reflog = $"{Here}\tcommit: mine\n{Own}\t{GitPuller.TakenBackMessage}\n{OnGitHub}\t{GitPuller.ForwardMessage}\n{Own}\tbranch: Created from main\n";
+
+        await WentApart(reflog, 3, asked).BehindAsync(_root, Here, OnGitHub, null, "develop", CancellationToken.None);
+
+        asked.ShouldContain($"rev-list --count --ignore-missing {OnGitHub} --not HEAD {Here} {Own}");
     }
 
     [Theory]
@@ -333,7 +345,7 @@ public class GitInspectorTests : IDisposable
             : args.StartsWith("rev-parse --is-shallow-repository", StringComparison.Ordinal) ? "false\n"
             : null));
 
-        (await inspector.BehindAsync(_root, Here, OnGitHub, null, "develop", CancellationToken.None)).ShouldBe(BehindAnswer.Of(new GitBehind(3)));
+        (await inspector.BehindAsync(_root, Here, OnGitHub, null, "develop", CancellationToken.None)).ShouldBe(BehindAnswer.Of(new GitBehind(3)), "nothing of its own: a pull brings it");
     }
 
     [Fact]

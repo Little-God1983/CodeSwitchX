@@ -97,7 +97,10 @@ public sealed record GitLine(string? Folder, string? Branch, int? DirtyCount, st
     public string? BehindToolTip => Behind is null ? null
         : $"GitHub's {BranchText} has {CommitsText(Behind.Commits)} this checkout lacks. "
             // The panel's Pull goes to the default branch (#407); another one is pulled where it is checked out (#428).
-            + (GitHub is { DefaultBranch: { } main } && Branch != main ? $"Pull {BranchText} to bring it up to date." : $"In the Yard, click the line and press Pull {BranchText}.");
+            + (GitHub is { DefaultBranch: { } main } && Branch != main
+                // Beside commits of its own (#435): a fast-forward cannot bring them, a merge or a rebase does.
+                ? (Behind.WentApart ? $"It has commits of its own too: pull {BranchText} with a merge or a rebase." : $"Pull {BranchText} to bring it up to date.")
+                : $"In the Yard, click the line and press Pull {BranchText}.");
 
     /// <summary>Both pills in words, for Raven: "clean", "3 changed", "12 behind", "3 changed, 12 behind"; null when neither says anything.</summary>
     public string? GitStateText => (GitStateLabel, BehindLabel) switch

@@ -4,87 +4,9 @@ using CodeSwitchX.Core.Workspaces;
 namespace CodeSwitchX.Core.Tests.Workspaces;
 
 /// <summary>The pull of #407 against real git: an origin (bare), the user's checkout, and a second clone that pushes to the origin.</summary>
-public class GitPullerTests : IDisposable
+public class GitPullerTests : RealGitRepos
 {
-    private readonly string _root = Path.Combine(Path.GetTempPath(), "csx-pull-" + Guid.NewGuid().ToString("N"));
     private readonly GitPuller _puller = new();
-
-    private string Origin => Path.Combine(_root, "origin.git");
-
-    private string Work => Path.Combine(_root, "work");
-
-    private string Other => Path.Combine(_root, "other");
-
-    public void Dispose()
-    {
-        // git marks its object files read-only.
-        if (Directory.Exists(_root))
-        {
-            foreach (var file in Directory.EnumerateFiles(_root, "*", SearchOption.AllDirectories))
-            {
-                File.SetAttributes(file, FileAttributes.Normal);
-            }
-
-            Directory.Delete(_root, recursive: true);
-        }
-    }
-
-    private static async Task<string> Git(string folder, params string[] arguments)
-    {
-        var info = new ProcessStartInfo("git") { WorkingDirectory = folder, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
-        foreach (var argument in (string[])["-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", .. arguments])
-        {
-            info.ArgumentList.Add(argument);
-        }
-
-        Process? process;
-        try
-        {
-            process = Process.Start(info);
-        }
-        catch (System.ComponentModel.Win32Exception)
-        {
-            Assert.Skip("git is not installed");
-            throw;
-        }
-
-        using var running = process ?? throw new InvalidOperationException("git did not start");
-        var output = running.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
-        var error = running.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
-        await running.WaitForExitAsync(TestContext.Current.CancellationToken);
-        running.ExitCode.ShouldBe(0, $"git {string.Join(' ', arguments)}: {await error}");
-        return (await output).Trim();
-    }
-
-    private static async Task Commit(string folder, string file, string text)
-    {
-        await File.WriteAllTextAsync(Path.Combine(folder, file), text, TestContext.Current.CancellationToken);
-        await Git(folder, "add", file);
-        await Git(folder, "commit", "-q", "-m", $"{file}: {text}");
-    }
-
-    /// <summary>An origin with one commit on main, the checkout on a feature branch with a commit of its own, and the other clone.</summary>
-    private async Task Arrange()
-    {
-        Directory.CreateDirectory(_root);
-        await Git(_root, "init", "-q", "--bare", "-b", "main", Origin);
-        await Git(_root, "clone", "-q", Origin, Work);
-        await Commit(Work, "a.txt", "one");
-        await Git(Work, "push", "-q", "origin", "main");
-        await Git(Work, "switch", "-q", "-c", "feature/x");
-        await Commit(Work, "f.txt", "feature");
-        await Git(_root, "clone", "-q", Origin, Other);
-    }
-
-    private async Task PushToMain(int commits)
-    {
-        for (var i = 0; i < commits; i++)
-        {
-            await Commit(Other, "b.txt", $"change {i}");
-        }
-
-        await Git(Other, "push", "-q", "origin", "main");
-    }
 
     private Task<PullOutcome> Pull() => _puller.PullAsync(Work, "main", "work", TestContext.Current.CancellationToken);
 
@@ -265,36 +187,6 @@ public class GitPullerTests : IDisposable
         info.DirtyCount.ShouldBe(1, "the tile still shows it as changed");
         info.TrackedChanges.ShouldBe(0);
         (await Pull()).Succeeded.ShouldBeTrue();
-    }
-
-    [Fact]
-    public async Task A_branch_rewritten_here_is_not_behind_and_a_commit_pushed_from_elsewhere_is()
-    {
-        // GitInspector on a real checkout (#435): a branch created from GitHub's three commits, squashed here, holds those three as its
-        // own, though only the newest was ever its tip. A commit pushed on top from the other clone is behind, and it alone.
-        await Arrange();
-        await Git(Other, "switch", "-q", "-c", "feature/y");
-        await Commit(Other, "y.txt", "1");
-        await Commit(Other, "y.txt", "2");
-        await Commit(Other, "y.txt", "3");
-        await Git(Other, "push", "-q", "origin", "feature/y");
-        await Git(Work, "fetch", "-q", "origin");
-        await Git(Work, "switch", "-q", "feature/y");
-        await Git(Work, "reset", "-q", "--soft", "HEAD~3");
-        await Git(Work, "commit", "-q", "-m", "squashed");
-        var inspector = new GitInspector();
-        var onGitHub = await Git(Work, "rev-parse", "origin/feature/y");
-
-        (await inspector.BehindAsync(Work, await Git(Work, "rev-parse", "HEAD"), onGitHub, null, "feature/y", TestContext.Current.CancellationToken))
-            .ShouldBe(BehindAnswer.NotBehind);
-
-        await Commit(Other, "y.txt", "4");
-        await Git(Other, "push", "-q", "origin", "feature/y");
-        await Git(Work, "fetch", "-q", "origin");
-        onGitHub = await Git(Work, "rev-parse", "origin/feature/y");
-
-        (await inspector.BehindAsync(Work, await Git(Work, "rev-parse", "HEAD"), onGitHub, null, "feature/y", TestContext.Current.CancellationToken))
-            .ShouldBe(BehindAnswer.Of(new GitBehind(1)));
     }
 
     [Fact]
