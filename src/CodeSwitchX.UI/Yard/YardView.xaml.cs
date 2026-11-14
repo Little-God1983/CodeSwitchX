@@ -71,13 +71,19 @@ public partial class YardView : UserControl
         }
 
         StopFollowingBuildMenu();
-        if (PutStableBuildItems(menu, tile.OpenBuildMenu()))
+        PutStableBuildItems(menu, tile.OpenBuildMenu());
+        // Followed also with no entries yet: the read the menu starts may find scripts added a moment ago (#431).
+        if (tile.GitLines.Any(l => l.IsRepository))
         {
             _buildMenu = (menu, tile);
+            _buildMenuInputs = tile.StableBuildInputs();
             tile.PropertyChanged += OnBuildMenuTileChanged;
             menu.Closed += OnBuildMenuClosed;
         }
     }
+
+    /// <summary>What the open menu's entries were made from (#431).</summary>
+    private IReadOnlyList<(StableBuildRepo Scripts, string? Branch, int? DirtyCount, CodeSwitchX.Core.Workspaces.GitBehind? Behind)>? _buildMenuInputs;
 
     /// <summary>
     /// The tile of the open menu shows new git lines (#425): its entries are made again. The same headers keep their items, which only
@@ -90,6 +96,14 @@ public partial class YardView : UserControl
             return;
         }
 
+        // New GitHub pills and the like: the entries would come out the same, and making them looks for the shortcuts on disk (#431).
+        var inputs = tile.StableBuildInputs();
+        if (_buildMenuInputs is { } before && before.SequenceEqual(inputs))
+        {
+            return;
+        }
+
+        _buildMenuInputs = inputs;
         var wanted = Items(tile.StableBuildEntries()).ToList();
         var shown = menu.Items.OfType<MenuItem>().Where(i => i.Tag == StableBuildItem).ToList();
         if (!wanted.Select(w => Header(w.Header)).SequenceEqual(shown.Select(i => i.Header as string)))
@@ -114,6 +128,7 @@ public partial class YardView : UserControl
             tile.PropertyChanged -= OnBuildMenuTileChanged;
             menu.Closed -= OnBuildMenuClosed;
             _buildMenu = null;
+            _buildMenuInputs = null;
         }
     }
 

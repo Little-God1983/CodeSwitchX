@@ -975,7 +975,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         _ui.Post(() =>
         {
             var shown = lines.Select(WithGitHub).ToList();
-            if (tile.ShowGit(shown, read))
+            if (tile.ShowGit(shown, read, compared))
             {
                 FollowPanelBranch();
 

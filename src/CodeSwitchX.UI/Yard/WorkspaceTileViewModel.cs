@@ -121,24 +121,55 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     private long _gitReadsStarted;
     private long _gitReadShown;
 
+    /// <summary>For each folder shown, the read whose look at it the line is from (#431); a line carried over keeps the number of the look it came from. UI thread.</summary>
+    private readonly Dictionary<string, long> _gitReadOfFolder = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>A read of this tile's git starts (#425): its number, for <see cref="ShowGit(IReadOnlyList{GitLine}, long)"/>. Any thread.</summary>
     internal long StartGitRead() => Interlocked.Increment(ref _gitReadsStarted);
 
     /// <summary>
     /// Shows the lines of the read <paramref name="read"/>, unless one that started later is shown already (#425): a menu's read of one
-    /// tile runs beside the 30 s round, and the round's older lines must not put back what the menu's read found. UI thread.
+    /// tile runs beside the 30 s round, and the round's older lines must not put back what the menu's read found. A line the later read
+    /// only carried over (its folder could not be looked at) is no newer than the earlier read's look, which then takes its place (#431).
+    /// UI thread.
     /// </summary>
-    /// <returns>False when the lines were older than the ones shown, and left out.</returns>
-    internal bool ShowGit(IReadOnlyList<GitLine> lines, long read)
+    /// <param name="looked">For each line, whether this read looked at its folder; false for a line carried over. Null: all of them.</param>
+    /// <returns>False when nothing of the lines was newer than what is shown, and they were left out.</returns>
+    internal bool ShowGit(IReadOnlyList<GitLine> lines, long read, IReadOnlyList<bool>? looked = null)
     {
-        if (read < _gitReadShown)
+        var fresh = lines.Select((l, i) => (Line: l, Looked: looked is null || looked[i])).Where(p => p.Looked && p.Line.Path is not null).Select(p => p.Line).ToList();
+        if (read >= _gitReadShown)
         {
-            return false;
+            _gitReadShown = read;
+            foreach (var line in fresh)
+            {
+                _gitReadOfFolder[YardGitJobs.Key(line.Path!)] = read;
+            }
+
+            ShowGit(lines);
+            return true;
         }
 
-        _gitReadShown = read;
-        ShowGit(lines);
-        return true;
+        var shown = GitLines.ToList();
+        var changed = false;
+        foreach (var line in fresh)
+        {
+            var key = YardGitJobs.Key(line.Path!);
+            var at = shown.FindIndex(l => l.Path is { } p && YardGitJobs.Key(p) == key);
+            if (at >= 0 && _gitReadOfFolder.GetValueOrDefault(key) < read)
+            {
+                shown[at] = line;
+                _gitReadOfFolder[key] = read;
+                changed = true;
+            }
+        }
+
+        if (changed)
+        {
+            ShowGit(shown);
+        }
+
+        return changed;
     }
 
     /// <summary>Where a chat is in its turn (#287); a chat with neither has no turn running and none unseen.</summary>
@@ -466,19 +497,28 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     private void Open() => _owner.RequestOpen(Id);
 
     /// <summary>
-    /// The tile's menu opens (#425): its Build / Run entries as of now, and, where there are any, its git is read again at once, since
-    /// the lines the precheck reads can be a round old. The menu follows <see cref="GitLines"/> while it is open.
+    /// The tile's menu opens (#425): its Build / Run entries as of now, and its git is read again at once where it has a repository, since
+    /// the lines the precheck reads can be a round old, and scripts added since, or a tile registered a moment ago, have no entries yet
+    /// (#431). One git status of this tile, off the UI thread, joined by a read under way. The menu follows <see cref="GitLines"/> while it
+    /// is open.
     /// </summary>
     public IReadOnlyList<StableBuildEntry> OpenBuildMenu()
     {
         var entries = StableBuildEntries();
-        if (entries.Count > 0)
+        if (GitLines.Any(l => l.IsRepository))
         {
             _owner.RefreshGitOf(this);
         }
 
         return entries;
     }
+
+    /// <summary>
+    /// What the Build / Run entries are made from (#431): per repository with the scripts, the scripts and what the precheck reads. New GitHub
+    /// pills and the like leave it as it is, and an open menu is then not made again.
+    /// </summary>
+    internal IReadOnlyList<(StableBuildRepo Scripts, string? Branch, int? DirtyCount, GitBehind? Behind)> StableBuildInputs() =>
+        [.. GitLines.Where(l => l.StableBuild is not null).Select(l => (l.StableBuild!, l.Branch, l.DirtyCount, l.Behind))];
 
     /// <summary>The read of this tile's git a menu started, while it runs: a menu opened again, or Build pressed, waits for it (#425). UI thread.</summary>
     internal Task<IReadOnlyList<GitLine>?>? MenuGitRead { get; set; }
