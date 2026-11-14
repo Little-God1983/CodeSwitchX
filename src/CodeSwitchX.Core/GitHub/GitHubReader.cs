@@ -19,7 +19,7 @@ public sealed record RepoRead(RepoActivity? Activity, bool NobodySeesIt = false)
 public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null)
 {
     private const string QueryTemplate = """
-        query($owner:String!,$name:String!){repository(owner:$owner,name:$name){viewerPermission defaultBranchRef{name target{oid ... on Commit{history{totalCount}}}}
+        query($owner:String!,$name:String!){repository(owner:$owner,name:$name){viewerPermission defaultBranchRef{name target{oid} commits:target{... on Commit{history{totalCount}}}}
          issues(states:OPEN,first:PREVIEW,orderBy:{field:CREATED_AT,direction:DESC}){totalCount nodes{number title url updatedAt labels(first:10){nodes{name color}}}}
          pullRequests(states:OPEN,first:PREVIEW,orderBy:{field:CREATED_AT,direction:DESC}){totalCount nodes{number title url updatedAt headRefName headRefOid baseRefName isCrossRepository author{login} labels(first:10){nodes{name color}}}}}}
         """;
@@ -127,7 +127,7 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
 
         // A cancelled run gives nothing, which is neither "cannot see it" nor a reason to start the other accounts.
         ct.ThrowIfCancellationRequested();
-        if (answer.Output is not { } output)
+        if ((answer.Output ?? OnlyTheCountFailed(answer.FailureOutput)) is not { } output)
         {
             return new AccountRead(NotFound: IsNotFound(answer.FailureOutput));
         }
@@ -177,7 +177,10 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
             return null;
         }
 
-        var commits = target.TryGetProperty("history", out var history) && history.ValueKind == JsonValueKind.Object
+        // Asked for under a name of its own (#429): GitHub's history and its count may not be null, so an error there nulls everything up
+        // to the nearest field that may, which is this one and not the commit.
+        var commits = defaultBranchRef.TryGetProperty("commits", out var counted) && counted.ValueKind == JsonValueKind.Object
+            && counted.TryGetProperty("history", out var history) && history.ValueKind == JsonValueKind.Object
             && history.TryGetProperty("totalCount", out var total) && total.ValueKind == JsonValueKind.Number && total.TryGetInt32(out var count) ? count : (int?)null;
         return new GitHubHead(sha, commits);
     }
@@ -195,6 +198,45 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
         var rows = parsed.ToList();
         var list = new GitHubList(rows.OfType<GitHubItem>().ToList(), rows.Count(item => item is null));
         return list.Items.Count == 0 && list.Skipped > 1 ? null : list;
+    }
+
+    /// <summary>
+    /// What <c>gh api graphql</c> printed before exiting with an error, when every error is about the default branch's count of commits
+    /// (#429), which rides in the one request for the pills under a name of its own, so its commit comes all the same. The counts and the
+    /// lists are read, and the line's "behind" goes without a count. An answer without the commit is no read: it would wipe a "behind"
+    /// known from the last one.
+    /// Null for any other answer.
+    /// </summary>
+    internal static string? OnlyTheCountFailed(string? printed)
+    {
+        if (printed is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(printed);
+            var root = doc.RootElement;
+            return root.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Object
+                && data.TryGetProperty("repository", out var repository) && repository.ValueKind == JsonValueKind.Object
+                && repository.TryGetProperty("defaultBranchRef", out var branch) && branch.ValueKind == JsonValueKind.Object
+                && branch.TryGetProperty("target", out var target) && target.ValueKind == JsonValueKind.Object
+                && target.TryGetProperty("oid", out var oid) && oid.ValueKind == JsonValueKind.String
+                && root.TryGetProperty("errors", out var errors) && errors.ValueKind == JsonValueKind.Array && errors.GetArrayLength() > 0
+                && errors.EnumerateArray().All(OnTheCount)
+                ? printed
+                : null;
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+        {
+            return null;
+        }
+
+        static bool OnTheCount(JsonElement error) =>
+            error.ValueKind == JsonValueKind.Object && error.TryGetProperty("path", out var path) && path.ValueKind == JsonValueKind.Array
+            && path.GetArrayLength() > 2
+            && path[0].ValueEquals("repository") && path[1].ValueEquals("defaultBranchRef") && path[2].ValueEquals("commits");
     }
 
     /// <summary>

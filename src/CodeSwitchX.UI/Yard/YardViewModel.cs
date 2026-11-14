@@ -733,10 +733,14 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         return read;
     }
 
+    /// <summary>How long a Build press waits for its read of GitHub (#429) before it goes by the last one.</summary>
+    internal static readonly TimeSpan BuildGitHubWait = TimeSpan.FromSeconds(5);
+
     /// <summary>
     /// <paramref name="line"/>'s repository as it is now, for a Build pressed (#425): its git, its scripts and how far it is behind, read
-    /// for that one repository and nothing else on the tile, so the answer comes quickly and from after the press. Null when it could not
-    /// be read, or the Yard closed.
+    /// for that one repository and nothing else on the tile, so the answer comes quickly and from after the press. Where it stands on
+    /// GitHub is read too, beside git (#429): a merge made outside the Yard (on github.com, by a chat) would otherwise be up to ten minutes
+    /// away, and the build start only for its script to refuse. Null when git could not be read, or the Yard closed.
     /// </summary>
     internal async Task<GitLine?> FreshLineAsync(GitLine line)
     {
@@ -747,12 +751,31 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
         try
         {
+            // A GitHub read that fails leaves what was last read, which the comparison then goes by, as the round does.
+            var gitHubRead = _gitHub is not null && line is { IsRepository: true, Path: { } path } ? RefreshGitHubAsync([path]) : Task.FromResult(default(GitHubRoundResult));
             var info = await _git.InspectAsync(scripts.RepoPath, _gitHubStop.Token).ConfigureAwait(false);
-            var fresh = line with
+            var read = line with
             {
                 Branch = info.Branch, DirtyCount = info.DirtyCount, Head = info.Head, IsRepository = info.IsRepository, GitDir = info.GitDir,
-                StableBuild = StableBuildOf(info, [line]),
+                StableBuild = StableBuildOf(info, [line]), TrackedChanges = info.TrackedChanges, Behind = null, BehindAgainst = null,
             };
+            // Another branch, changes, no git: refused whatever GitHub has, and said at once rather than after up to 5 s.
+            if (StableBuildCheck.BuildBlock(read) is not null)
+            {
+                return read;
+            }
+
+            try
+            {
+                // It queues behind a GitHub round that runs, and gh may take its time: the press goes by the last read rather than wait long.
+                await gitHubRead.WaitAsync(BuildGitHubWait, _time, _gitHubStop.Token).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                _logger.LogInformation("GitHub did not answer within {Wait} for a build; its last read stands", BuildGitHubWait);
+            }
+            // With what GitHub has now, as the comparison goes by: the line's own is the one it was shown with.
+            var fresh = WithGitHub(read with { Behind = line.Behind, BehindAgainst = line.BehindAgainst });
             return (await WithBehindAsync([fresh], [line], _gitHubStop.Token).ConfigureAwait(false))[0];
         }
         catch (OperationCanceledException)
@@ -858,14 +881,29 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         var info = await _git.InspectAsync(tile.RootPath, ct).ConfigureAwait(false);
         // Read once for both steps: the second tells the lines the first carried over by their instances.
         var previous = tile.GitLines;
-        var lines = await WithBehindAsync(await GitLinesAsync(tile, info, previous, ct).ConfigureAwait(false), previous, ct).ConfigureAwait(false);
+        var found = await GitLinesAsync(tile, info, previous, ct).ConfigureAwait(false);
+        // GitHub's commit for each line as git is about to be asked about it: none where GitHub was not read yet.
+        var given = found.Select(GitHubHeadOf).ToList();
+        var lines = await WithBehindAsync(found, previous, ct).ConfigureAwait(false);
         paths.AddRange(lines.Where(HasRepository).Select(l => l.Path).OfType<string>());
+        // A line carried over is the one shown before, its folder not looked at: asking git again for it would carry it over again.
+        var compared = lines.Select(l => !previous.Any(p => ReferenceEquals(p, l))).ToList();
         // The pills are taken from the GitHub side when the tile shows the lines, not before: a result stored meanwhile is not overwritten by an older one.
         _ui.Post(() =>
         {
-            if (tile.ShowGit(lines.Select(WithGitHub).ToList(), read))
+            var shown = lines.Select(WithGitHub).ToList();
+            if (tile.ShowGit(shown, read))
             {
                 FollowPanelBranch();
+
+                // GitHub's commit moved while git compared against the one before, or GitHub was read only then (#429): the read of GitHub
+                // saw no line to ask about, as the line was not on the branch yet. This tile is read again now, not at the next round, up to 30 s on.
+                // Only for a line git compared this round, and against another commit than GitHub has now: a line git gave no answer for
+                // was given the commit it has now, so this never asks round after round.
+                if (shown.Select((l, i) => compared[i] && GitLine.ComparedHead(l, l.GitHub)?.Sha != given[i]).Any(again => again) && !_disposed)
+                {
+                    RefreshGitOf(tile);
+                }
             }
         });
 
@@ -933,6 +971,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             return line.WithBehind(await _git.BehindAsync(path, line.Head, onGitHub.Sha, onGitHub.Commits, ct).ConfigureAwait(false), before, onGitHub.Sha);
         })).ConfigureAwait(false);
     }
+
+    /// <summary>The commit GitHub was last read to have for <paramref name="line"/> to be compared with (#426); null when there is none.</summary>
+    private string? GitHubHeadOf(GitLine line) => line.Path is { } path ? GitLine.ComparedHead(line, _gitHub?.ForFolder(path))?.Sha : null;
 
     /// <summary>The line's folder is in a repository of its own, whatever its branch: a git above the user profile is not this folder's repository, and its origin is not the folder's.</summary>
     private static bool HasRepository(GitLine line) => line.IsRepository;
@@ -1037,12 +1078,22 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
     });
 
+    /// <summary>The tile the open panel follows its checkout on (<see cref="FollowPanelBranch"/>) reads its git now (#429).</summary>
+    private void ReadGitOfCheckout(string path)
+    {
+        var key = YardGitJobs.Key(path);
+        if (Tiles.FirstOrDefault(t => t.GitLines.Any(l => l.Path is { } p && YardGitJobs.Key(p) == key)) is { } tile)
+        {
+            RefreshGitOf(tile);
+        }
+    }
+
     /// <summary>The open panel's Pull names what a press does now: its line's branch as last read (review of #407).</summary>
     private void FollowPanelBranch()
     {
         if (GitHubPanel?.CheckoutPath is { } path && LinesOf(path).FirstOrDefault() is { } line)
         {
-            GitHubPanel.FollowBranch(line.Branch);
+            GitHubPanel.FollowBranch(line.Branch, line.TrackedChanges);
         }
     }
 
@@ -1095,7 +1146,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
                 : [previous[0] with
                 {
                     Branch = root.Branch, DirtyCount = root.DirtyCount, Path = tile.RootPath, IsRepository = root.IsRepository, GitDir = root.GitDir,
-                    StableBuild = rootStableBuild, Head = root.Head,
+                    StableBuild = rootStableBuild, Head = root.Head, TrackedChanges = root.TrackedChanges,
                 }, .. previous.Skip(1)];
         }
 
@@ -1108,7 +1159,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             IsRepository: root.IsRepository,
             GitDir: root.GitDir,
             StableBuild: rootStableBuild,
-            Head: root.Head);
+            Head: root.Head,
+            TrackedChanges: root.TrackedChanges);
         var others = folders.Where(f => PathNormalizer.Normalize(f.Path) != rootKey).ToList();
 
         // Each folder's git directory first, which reads a file or two, so git status runs once per checkout, not once per
@@ -1181,7 +1233,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             {
                 var info = await _git.InspectAsync(folder.Path, ct).ConfigureAwait(false);
                 return new GitLine(folder.Label, info.Branch, info.DirtyCount, folder.Path, IsRepository: info.IsRepository, GitDir: info.GitDir,
-                    StableBuild: StableBuildOf(info, previous), Head: info.Head);
+                    StableBuild: StableBuildOf(info, previous), Head: info.Head, TrackedChanges: info.TrackedChanges);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -1344,7 +1396,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
 
         GitHubPanel?.CloseCommand.Execute(null);
-        var checkout = line?.Path is { } path ? new PanelCheckout(path, line.Branch, () => ChatIsWorkingIn(line, activity.Repo), GitJobs, line.GitDir) : null;
+        var checkout = line?.Path is { } path
+            ? new PanelCheckout(path, line.Branch, () => ChatIsWorkingIn(line, activity.Repo), GitJobs, line.GitDir, line.TrackedChanges, () => ReadGitOfCheckout(path))
+            : null;
         var panel = new GitHubPanelViewModel(activity, kind, _gitHubReader, _gitHub, _gitHubBrowsers, _clipboard, _ui, _time, _logger,
             closed => { if (ReferenceEquals(GitHubPanel, closed)) { GitHubPanel = null; } }, checkout);
         GitHubPanel = panel;

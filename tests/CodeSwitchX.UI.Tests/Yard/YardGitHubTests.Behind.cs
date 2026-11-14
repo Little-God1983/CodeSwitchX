@@ -1,4 +1,5 @@
 using CodeSwitchX.Core.Workspaces;
+using CodeSwitchX.UI.Yard;
 
 namespace CodeSwitchX.UI.Tests.Yard;
 
@@ -137,6 +138,89 @@ public partial class YardGitHubTests
         yard.FindTile(app.Id)!.GitLines[0].Behind.ShouldBeNull();
         yard.FindTile(app.Id)!.GitLines[0].GitStateLabel.ShouldBe("clean");
         GitWasAsked("rev-list").ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_line_git_could_not_compare_yet_is_not_called_clean()
+    {
+        // "clean" stands only where nothing is left to do; with no answer from git, nobody knows (#429).
+        _gh.DefaultHead = OnGitHub;
+        _gitRunner = args => args.StartsWith("status", StringComparison.Ordinal) ? $"# branch.oid {Here}\n# branch.head main\n"
+            : args.StartsWith("rev-list", StringComparison.Ordinal) ? null
+            : string.Empty;
+        var (yard, app) = await SettledYard();
+
+        await yard.RefreshGitAsync(CancellationToken.None);
+
+        var line = yard.FindTile(app.Id)!.GitLines[0];
+        line.Behind.ShouldBeNull();
+        line.GitStateLabel.ShouldBeNull();
+        line.BehindLabel.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_build_pressed_reads_GitHub_before_it_judges_the_line()
+    {
+        // A merge made on github.com: the last read of GitHub is up to ten minutes old, and the press must not go by it (#429).
+        _gh.DefaultHead = OnGitHub;
+        GitIsAt(OnGitHub);
+        var (yard, app) = await SettledYard();
+        var root = yard.FindTile(app.Id)!.RootPath;
+        Directory.CreateDirectory(Path.Combine(root, "scripts"));
+        File.WriteAllText(Path.Combine(root, "scripts", "build.ps1"), "# build");
+        File.WriteAllText(Path.Combine(root, "scripts", "_common.ps1"), "$script:ShortcutName = 'App.lnk'\n$script:ReleaseBranch = 'main'\n");
+        await yard.RefreshGitAsync(CancellationToken.None);
+        var line = yard.FindTile(app.Id)!.GitLines[0];
+        StableBuildCheck.BuildBlock(line).ShouldBeNull("as last read, the line is at GitHub's commit");
+        _gh.DefaultHead = new string('a', 40);
+        GitIsAt(OnGitHub, behind: 3);
+
+        var fresh = await yard.FreshLineAsync(line);
+
+        StableBuildCheck.BuildBlock(fresh.ShouldNotBeNull()).ShouldBe("3 commits behind GitHub - pull first");
+        fresh.GitHub.ShouldNotBeNull().DefaultHead.ShouldNotBeNull().Sha.ShouldBe(new string('a', 40), "the line goes with the read it waited for");
+    }
+
+    [Fact]
+    public async Task A_round_that_compared_with_a_commit_GitHub_moved_past_asks_git_again_at_once()
+    {
+        // The checkout switches to the default branch while a round runs, and GitHub's commit moves in the same moment (#429): the read of
+        // GitHub sees the line still on its other branch, and only the round's own lines can tell.
+        _gh.DefaultHead = OnGitHub;
+        GitIsAt(Here, behind: 1);
+        var app = Add("App", Repo("app"));
+        File.WriteAllText(Path.Combine(app.RootPath, ".git", "HEAD"), "ref: refs/heads/feature\n");
+        var yard = Yard(true, app);
+        await yard.InitializeAsync(CancellationToken.None);
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Issues is not null);
+        await Quiet();
+        await yard.CurrentGitRefresh;
+
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var held = 0;
+        var git = _gitRunner!;
+        _gitRunner = args =>
+        {
+            if (args.StartsWith("rev-list --no-walk", StringComparison.Ordinal) && Interlocked.Exchange(ref held, 1) == 0)
+            {
+                entered.Set();
+                release.Wait(TimeSpan.FromSeconds(10));
+            }
+
+            return git(args);
+        };
+        File.WriteAllText(Path.Combine(app.RootPath, ".git", "HEAD"), "ref: refs/heads/main\n");
+        var round = yard.RefreshGitAsync(CancellationToken.None);
+        entered.Wait(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken).ShouldBeTrue("the round compares the line with GitHub's commit as it was");
+        var moved = new string('b', 40);
+        _gh.DefaultHead = moved;
+        await _activity!.RefreshAsync([app.RootPath], TestContext.Current.CancellationToken);
+        release.Set();
+        await round;
+
+        // No timer is advanced: the round's own lines ask again.
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].BehindAgainst == moved);
     }
 
     [Fact]

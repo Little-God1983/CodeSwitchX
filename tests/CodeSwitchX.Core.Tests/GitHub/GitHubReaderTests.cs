@@ -57,10 +57,59 @@ public class GitHubReaderTests
 
     private const string NotFound = """{"data":{"repository":null},"errors":[{"type":"NOT_FOUND","path":["repository"],"message":"Could not resolve to a Repository."}]}""";
 
+    /// <summary>GitHub's answer when only the default branch's count of commits failed (#429): the data is there, with an error for that one field.</summary>
+    private const string CountFailed = """
+        {"data":{"repository":{"viewerPermission":"ADMIN","defaultBranchRef":{"name":"main","target":{"oid":"7d6783b6e4ca65062d1ab6cdfe82e5b5f29e0728"},"commits":null},
+        "issues":{"totalCount":3,"nodes":[]},"pullRequests":{"totalCount":1,"nodes":[]}}},
+        "errors":[{"type":"SERVICE_UNAVAILABLE","path":["repository","defaultBranchRef","commits","history","totalCount"],"message":"Timeout on history"}]}
+        """;
+
     private static Task<RepoRead> Outcome(FakeGh gh, GitHubRepo? repo = null) =>
         new GitHubReader(gh).ReadAsync(repo ?? Repo, gh.Accounts, CancellationToken.None);
 
     private static async Task<RepoActivity?> Read(FakeGh gh, GitHubRepo? repo = null) => (await Outcome(gh, repo)).Activity;
+
+    [Fact]
+    public async Task An_error_on_the_default_branchs_count_of_commits_still_reads_the_repository()
+    {
+        // gh exits with an error for a partial answer; the pills must not go with the count they do not need (#429).
+        var gh = Fake(["acme"], new() { ["acme"] = null });
+        gh.Printed["acme"] = CountFailed;
+
+        var activity = (await Read(gh)).ShouldNotBeNull();
+
+        activity.OpenIssues.ShouldBe(3);
+        activity.OpenPullRequests.ShouldBe(1);
+        activity.DefaultHead.ShouldBe(new GitHubHead("7d6783b6e4ca65062d1ab6cdfe82e5b5f29e0728", null), "the commit is there, its count is not");
+    }
+
+    [Fact]
+    public async Task An_answer_without_the_commit_still_fails_the_read()
+    {
+        // GraphQL nulls the commit when its count fails at a non-null field: no read, so the last one's "behind" stands (#429).
+        var gh = Fake(["acme"], new() { ["acme"] = null });
+        gh.Printed["acme"] = CountFailed.Replace("""{"oid":"7d6783b6e4ca65062d1ab6cdfe82e5b5f29e0728"}""", "null", StringComparison.Ordinal);
+
+        (await Read(gh)).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task An_error_on_the_counted_field_itself_is_read_as_one_on_the_count()
+    {
+        var gh = Fake(["acme"], new() { ["acme"] = null });
+        gh.Printed["acme"] = CountFailed.Replace("""["repository","defaultBranchRef","commits","history","totalCount"]""", """["repository","defaultBranchRef","commits"]""", StringComparison.Ordinal);
+
+        (await Read(gh)).ShouldNotBeNull().DefaultHead.ShouldBe(new GitHubHead("7d6783b6e4ca65062d1ab6cdfe82e5b5f29e0728", null));
+    }
+
+    [Fact]
+    public async Task An_error_anywhere_else_still_fails_the_read()
+    {
+        var gh = Fake(["acme"], new() { ["acme"] = null });
+        gh.Printed["acme"] = CountFailed.Replace("""["repository","defaultBranchRef","commits","history","totalCount"]""", """["repository","issues"]""", StringComparison.Ordinal);
+
+        (await Read(gh)).ShouldBeNull();
+    }
 
     [Theory]
     [InlineData("Zed", "acme")]
@@ -90,9 +139,9 @@ public class GitHubReaderTests
     }
 
     [Theory]
-    [InlineData("\"defaultBranchRef\":{\"name\":\"main\",\"target\":{\"oid\":\"7d6783b6\",\"history\":{\"totalCount\":1155}}},", "7d6783b6", 1155)]
+    [InlineData("\"defaultBranchRef\":{\"name\":\"main\",\"target\":{\"oid\":\"7d6783b6\"},\"commits\":{\"history\":{\"totalCount\":1155}}},", "7d6783b6", 1155)]
     [InlineData("\"defaultBranchRef\":{\"name\":\"main\",\"target\":{\"oid\":\"7d6783b6\"}},", "7d6783b6", null)]
-    [InlineData("\"defaultBranchRef\":{\"name\":\"main\",\"target\":{\"oid\":\"7d6783b6\",\"history\":{\"totalCount\":\"many\"}}},", "7d6783b6", null)]
+    [InlineData("\"defaultBranchRef\":{\"name\":\"main\",\"target\":{\"oid\":\"7d6783b6\"},\"commits\":{\"history\":{\"totalCount\":\"many\"}}},", "7d6783b6", null)]
     [InlineData("\"defaultBranchRef\":{\"name\":\"main\",\"target\":null},", null, null)]
     [InlineData("\"defaultBranchRef\":{\"name\":\"main\",\"target\":{\"oid\":7}},", null, null)]
     [InlineData("\"defaultBranchRef\":{\"name\":\"main\"},", null, null)]
@@ -104,7 +153,7 @@ public class GitHubReaderTests
         var activity = await Read(gh);
 
         activity.ShouldNotBeNull().DefaultHead.ShouldBe(sha is null ? null : new GitHubHead(sha, commits));
-        gh.Commands[0].ShouldContain(a => a.Contains("defaultBranchRef{name target{oid ... on Commit{history{totalCount}}}}", StringComparison.Ordinal));
+        gh.Commands[0].ShouldContain(a => a.Contains("defaultBranchRef{name target{oid} commits:target{... on Commit{history{totalCount}}}}", StringComparison.Ordinal));
     }
 
     [Fact]

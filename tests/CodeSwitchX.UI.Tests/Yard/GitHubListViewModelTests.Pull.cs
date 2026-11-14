@@ -177,7 +177,7 @@ public partial class GitHubListViewModelTests
         var changed = new List<string?>();
         model.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
 
-        model.FollowBranch("feature/z");
+        model.FollowBranch("feature/z", null);
 
         model.PullText.ShouldBe("Switch to main and pull");
         changed.ShouldContain(nameof(GitHubPanelViewModel.PullAutomationName));

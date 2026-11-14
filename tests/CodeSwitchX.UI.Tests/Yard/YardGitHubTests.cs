@@ -23,7 +23,7 @@ public partial class YardGitHubTests : IDisposable
     private readonly List<YardViewModel> _yards = [];
     private GitHubActivity? _activity;
     private string? _profile;
-    private Func<string, string>? _gitRunner;
+    private Func<string, string?>? _gitRunner;
 
     /// <summary>What each folder's git says its origin is: github.com/acme/&lt;folder name&gt;.</summary>
     private Func<string, OriginLookup> _originOf = path => new OriginLookup($"https://github.com/acme/{Path.GetFileName(path)}.git");
@@ -225,7 +225,7 @@ public partial class YardGitHubTests : IDisposable
         pricing.Pricing.Returns(PricingTable.Default);
         var registry = new WorkspaceRegistry(_store, resolver, _bus);
         // Git answers "clean" to status.
-        var git = new GitInspector((dir, args, _) => Task.FromResult<string?>(_gitRunner?.Invoke(args) ?? string.Empty), _profile);
+        var git = new GitInspector((dir, args, _) => Task.FromResult(_gitRunner is { } run ? run(args) : string.Empty), _profile);
         _activity = withGitHub
             ? new GitHubActivity(_gh, new GitHubReader(_gh), (path, _) => Task.FromResult(_originOf(path)), NullLogger<GitHubActivity>.Instance)
             : null;

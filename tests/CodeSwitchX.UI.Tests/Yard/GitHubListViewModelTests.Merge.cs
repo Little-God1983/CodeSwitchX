@@ -22,13 +22,13 @@ public partial class GitHubListViewModelTests
     /// and merges into <paramref name="into"/>; the repository's default branch is main.
     /// </summary>
     private async Task<GitHubPanelViewModel> OpenForMerge(string? branch = "b", string into = "main", bool fromFork = false, Func<bool>? working = null, YardGitJobs? jobs = null,
-        string? head = null)
+        string? head = null, int? changed = 0, Action? readGit = null)
     {
         var (activity, pill) = await PillAsync();
         var pr = pill.Activity.NewestPullRequests.Single() with { BaseBranch = into, IsCrossRepository = fromFork, HeadSha = head };
         var repo = pill.Activity with { DefaultBranch = "main", NewestPullRequests = [pr] };
         return new GitHubPanelViewModel(repo, GitHubItemKind.PullRequest, new GitHubReader(_gh), activity, Browsers(), _clipboard, new ImmediateDispatcher(), _time,
-            NullLogger.Instance, _closedLists.Add, new PanelCheckout(@"C:\app", branch, working ?? (() => false), jobs ?? MergingJobs()));
+            NullLogger.Instance, _closedLists.Add, new PanelCheckout(@"C:\app", branch, working ?? (() => false), jobs ?? MergingJobs(), ChangedFiles: changed, ReadGit: readGit));
     }
 
     private static GitHubRow Row(GitHubPanelViewModel model) => model.PullRequests.Rows.Single();
@@ -58,6 +58,75 @@ public partial class GitHubListViewModelTests
         model.OpenMergeCommand.Execute(Row(model));
 
         model.MergeStrip.ShouldBe(new MergeStrip(Row(model), "Merge #9 into main?", "This workspace is on its branch. Merge and pull switches it to main and pulls.", true, "Merge only", "main"));
+    }
+
+    [Theory]
+    [InlineData("main", 3, "This workspace is on main with 3 changed files, so the pull is left out.")]
+    [InlineData("b", 1, "This workspace is on its branch with 1 changed file, so the switch is left out.")]
+    public async Task Changed_files_leave_the_pull_out_and_say_so(string branch, int changed, string line)
+    {
+        // The pull stops at uncommitted changes: the strip must not promise it (#429).
+        var model = await OpenForMerge(branch, changed: changed);
+
+        model.OpenMergeCommand.Execute(Row(model));
+
+        var strip = model.MergeStrip.ShouldNotBeNull();
+        strip.OffersPull.ShouldBeFalse();
+        strip.MergeText.ShouldBe("Merge only");
+        strip.CheckoutLine.ShouldBe(line);
+    }
+
+    [Fact]
+    public async Task Changed_files_unknown_to_git_leave_the_pull_offered()
+    {
+        var model = await OpenForMerge("main", changed: null);
+
+        model.OpenMergeCommand.Execute(Row(model));
+
+        model.MergeStrip.ShouldNotBeNull().OffersPull.ShouldBeTrue("the pull checks for itself; nothing known is no reason to hold it back");
+    }
+
+    [Fact]
+    public async Task A_line_that_gets_changed_files_takes_the_pull_out_of_the_open_strip()
+    {
+        var model = await OpenForMerge("main");
+        model.OpenMergeCommand.Execute(Row(model));
+        model.MergeStrip.ShouldNotBeNull().OffersPull.ShouldBeTrue();
+
+        model.FollowBranch("main", 2);
+
+        var strip = model.MergeStrip.ShouldNotBeNull("the strip stays open, worked out again");
+        strip.OffersPull.ShouldBeFalse();
+        strip.CheckoutLine.ShouldBe("This workspace is on main with 2 changed files, so the pull is left out.");
+    }
+
+    [Fact]
+    public async Task Opening_the_strip_reads_git_again_and_a_commit_made_meanwhile_brings_the_pull_back()
+    {
+        // The count is up to a git round old (#429): changes committed a moment ago still read as changed files.
+        var reads = 0;
+        var model = await OpenForMerge("main", changed: 3, readGit: () => reads++);
+
+        model.OpenMergeCommand.Execute(Row(model));
+        model.MergeStrip.ShouldNotBeNull().OffersPull.ShouldBeFalse();
+        reads.ShouldBe(1);
+
+        model.FollowBranch("main", 0);
+
+        model.MergeStrip.ShouldNotBeNull().OffersPull.ShouldBeTrue();
+        model.MergeStrip.CheckoutLine.ShouldBe("This workspace is on main. Merge and pull brings it up to date.");
+    }
+
+    [Fact]
+    public async Task A_new_count_that_changes_nothing_in_the_strip_leaves_it_as_it_is()
+    {
+        var model = await OpenForMerge("other");
+        model.OpenMergeCommand.Execute(Row(model));
+        var strip = model.MergeStrip.ShouldNotBeNull();
+
+        model.FollowBranch("other", 5);
+
+        model.MergeStrip.ShouldBeSameAs(strip, "off the branch, the changed files do not come into it");
     }
 
     [Theory]
@@ -271,9 +340,9 @@ public partial class GitHubListViewModelTests
         var model = await OpenForMerge("b");
         model.OpenMergeCommand.Execute(Row(model));
 
-        model.FollowBranch("b");
+        model.FollowBranch("b", 0);
         model.MergeStrip.ShouldNotBeNull("the same branch keeps it");
-        model.FollowBranch("feature/y");
+        model.FollowBranch("feature/y", 0);
 
         model.MergeStrip.ShouldBeNull("its choices were worked out from the branch the checkout left");
     }

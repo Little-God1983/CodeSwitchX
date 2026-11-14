@@ -154,7 +154,7 @@ public partial class YardGitHubTests
         var (yard, app) = await SettledYard();
         yard.OpenGitHubLineCommand.Execute(yard.FindTile(app.Id)!.GitLines[0]);
         var panel = yard.GitHubPanel.ShouldNotBeNull();
-        panel.FollowBranch("main-after-a-pull");
+        panel.FollowBranch("main-after-a-pull", null);
         _gh.Issues = 7;
 
         // A GitHub round alone: the timers would run git rounds too, which do know the branch.

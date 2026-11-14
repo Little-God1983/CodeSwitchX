@@ -70,6 +70,7 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     {
         _checkout = checkout;
         _branch = checkout?.Branch;
+        _changedFiles = checkout?.ChangedFiles;
         _repo = repo;
         _browsers = browsers;
         _clipboard = clipboard;
@@ -172,13 +173,25 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     /// <summary>The checkout's folder, for the Yard to keep <see cref="Branch"/> up to date; null when the panel has none.</summary>
     public string? CheckoutPath => _checkout?.Path;
 
+    /// <summary>Changed files git tracks in the checkout as last read (#429); null when git could not tell. A pull stops at them.</summary>
+    private int? _changedFiles;
+
     /// <summary>The line was read again: the button names what a press does now, not what it did when the panel opened.</summary>
-    public void FollowBranch(string? branch)
+    /// <param name="changedFiles">The line's changed files git tracks; null when git could not tell.</param>
+    public void FollowBranch(string? branch, int? changedFiles)
     {
+        var recounted = changedFiles != _changedFiles;
+        _changedFiles = changedFiles;
         // An open strip worked out its choices from the branch the checkout was on (review of #408).
         if (branch != Branch)
         {
             MergeStrip = null;
+        }
+        // Its words and whether it pulls go by the changed files (#429): worked out again where it is, so a count read after it opened (the
+        // read its opening asks for, a commit made meanwhile) shows in it. A strip that comes out the same stays as it is.
+        else if (recounted && MergeStrip is { } open && _checkout is not null)
+        {
+            MergeStrip = StripFor(open.Row, _checkout);
         }
 
         Branch = branch;
@@ -234,6 +247,15 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
             return;
         }
 
+        MergeStrip = StripFor(row, _checkout);
+        ActionMessage = null;
+        // The changed files are as the last git round read them, up to 30 s ago (#429): read again now, and the strip follows.
+        _checkout.ReadGit?.Invoke();
+    }
+
+    /// <summary>The strip for <paramref name="row"/>'s Merge as the checkout is now: its branch, its changed files, a chat working there.</summary>
+    private MergeStrip StripFor(GitHubRow row, PanelCheckout checkout)
+    {
         var item = row.Item;
         var main = _repo.DefaultBranch;
         var into = item.BaseBranch ?? main ?? "its base branch";
@@ -242,15 +264,20 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
         // nothing on the tile to say so. Wherever the pull request comes from, a fork too.
         var onBase = main is not null && into == main && Branch == main;
         var pullable = onBase || (onBranch && main is not null && into == main);
-        var busy = pullable && _checkout.ChatIsWorking();
+        var busy = pullable && checkout.ChatIsWorking();
+        // A pull stops at changes to tracked files, and would leave the branch behind after promising otherwise (#429): said here, before the
+        // merge. Untracked files go along with the switch, as the pull lets them.
+        var changed = pullable && !busy && _changedFiles is > 0 ? (_changedFiles == 1 ? "1 changed file" : $"{_changedFiles} changed files") : null;
         var stays = Branch is { } branch ? $"This workspace stays on {branch}." : "This workspace stays as it is.";
-        var line = onBase ? (busy ? "A chat is working here, so the pull is left out." : $"This workspace is on {main}. Merge and pull brings it up to date.")
+        var line = onBase ? (busy ? "A chat is working here, so the pull is left out."
+                : changed is not null ? $"This workspace is on {main} with {changed}, so the pull is left out."
+                : $"This workspace is on {main}. Merge and pull brings it up to date.")
             : !onBranch ? (item.IsCrossRepository ? $"It comes from a fork. {stays}" : stays)
             : busy ? "A chat is working here, so the switch is left out."
+            : changed is not null ? $"This workspace is on its branch with {changed}, so the switch is left out."
             : pullable ? $"This workspace is on its branch. Merge and pull switches it to {main} and pulls."
             : $"It merges into {into}, not {main ?? "the default branch"}. {stays}";
-        MergeStrip = new MergeStrip(row, $"Merge {row.NumberText} into {into}?", line, pullable && !busy, pullable ? "Merge only" : "Merge", into);
-        ActionMessage = null;
+        return new MergeStrip(row, $"Merge {row.NumberText} into {into}?", line, pullable && !busy && changed is null, pullable ? "Merge only" : "Merge", into);
     }
 
     /// <summary>The merge, then the switch to the default branch and the pull (#408).</summary>

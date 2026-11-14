@@ -9,7 +9,8 @@ namespace CodeSwitchX.Core.Workspaces;
 /// <param name="GitDir">The repository's git directory, full path; two folders with the same one are in the same checkout.</param>
 /// <param name="Head">The commit the checkout is at, the full hash (#426); null when git could not tell, or there is no commit yet.</param>
 /// <param name="Top">The checkout's top folder, full path: where its <c>.git</c> is (#425). Null outside a repository.</param>
-public sealed record GitInfo(bool IsRepository, string? Branch, int? DirtyCount, string? GitDir = null, string? Head = null, string? Top = null);
+/// <param name="TrackedChanges">The changed files git tracks, untracked ones left out: what a pull stops at (#429). Null when git could not report them.</param>
+public sealed record GitInfo(bool IsRepository, string? Branch, int? DirtyCount, string? GitDir = null, string? Head = null, string? Top = null, int? TrackedChanges = null);
 
 /// <summary>A checkout's branch lacks commits its branch on GitHub has (#426).</summary>
 /// <param name="Commits">How many; null when only "behind" can be told (a shallow clone, commits of its own, no count from GitHub).</param>
@@ -125,8 +126,10 @@ public sealed class GitInspector
         var status = await _runGit(root, "status --porcelain=v2 --branch --no-ahead-behind --untracked-files=normal", ct).ConfigureAwait(false);
         var lines = status?.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.Trim('\r')).Where(l => l.Length > 0).ToList();
         int? dirty = lines?.Count(l => !l.StartsWith('#'));
+        // "?" is an untracked file; the others are changes to tracked files.
+        int? tracked = lines?.Count(l => !l.StartsWith('#') && !l.StartsWith('?'));
         var head = lines?.FirstOrDefault(l => l.StartsWith(HeadLinePrefix, StringComparison.Ordinal))?[HeadLinePrefix.Length..].Trim();
-        return new GitInfo(true, branch, dirty, Path.GetFullPath(gitDir), IsFullHash(head) ? head : null, top);
+        return new GitInfo(true, branch, dirty, Path.GetFullPath(gitDir), IsFullHash(head) ? head : null, top, tracked);
     }
 
     /// <summary>
