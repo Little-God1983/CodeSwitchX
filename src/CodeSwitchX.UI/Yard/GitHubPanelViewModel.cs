@@ -228,9 +228,9 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     public bool CanMerge => _checkout is not null && _checkout.Jobs.CanMerge;
 
     /// <summary>
-    /// A row's Merge button (#408): opens the strip under the row, and does nothing else. Merge and pull is offered when it merges into the
-    /// default branch, the workspace is on the pull request's branch (not a fork's) or on the default branch itself (#426), and no chat is
-    /// working here. A press while a job of the checkout runs does nothing, as Pull does.
+    /// A row's Merge button (#408): opens the strip under the row, and does nothing else. Merge and pull is offered when the workspace is on
+    /// the pull request's branch (not a fork's) or on the branch it merges into (#426), the default one or another (#428), with no changed
+    /// files (#429), and no chat is working here. A press while a job of the checkout runs does nothing, as Pull does.
     /// </summary>
     [RelayCommand]
     private void OpenMerge(GitHubRow row)
@@ -281,7 +281,7 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
         return new MergeStrip(row, $"Merge {row.NumberText} into {into}?", line, pullable && !busy && changed is null, pullable ? "Merge only" : "Merge", into);
     }
 
-    /// <summary>The merge, then the switch to the default branch and the pull (#408).</summary>
+    /// <summary>The merge, then the switch to the branch it landed on and the pull (#408, #428).</summary>
     [RelayCommand]
     private void MergeAndPull() => Merge(pull: true);
 

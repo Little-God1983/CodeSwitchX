@@ -18,7 +18,7 @@ namespace CodeSwitchX.UI.Yard;
 /// <param name="GitHub">What was last read on GitHub for the line's repository, whatever its counts: with nothing open there are no pills, but the line still opens the panel (#406). Null when the repository is not on GitHub or has not been read.</param>
 /// <param name="StableBuild">The repository's stable-build scripts (#423), which the tile's menu builds and runs; null when it has none.</param>
 /// <param name="Head">The commit the checkout is at, the full hash (#426); null when git could not tell.</param>
-/// <param name="BehindAgainst">The commit of GitHub's default branch that <paramref name="Behind"/> was worked out against; null when the line was not compared. One that differs from what <paramref name="GitHub"/> has now says <paramref name="Behind"/> is out of date.</param>
+/// <param name="BehindAgainst">The commit of the line's branch on GitHub (#426, #428) that <paramref name="Behind"/> was worked out against; null when the line was not compared. One that differs from what <paramref name="GitHub"/> has now says <paramref name="Behind"/> is out of date.</param>
 /// <param name="Behind">The line lacks commits GitHub has on its branch (#426, #428), as of the last read of GitHub; null when it is not behind, its branch is not on GitHub, or nothing is known.</param>
 /// <param name="TrackedChanges">Of <paramref name="DirtyCount"/>, the files git tracks: what a pull stops at (#429). Null when git could not tell.</param>
 public sealed record GitLine(string? Folder, string? Branch, int? DirtyCount, string? Path = null, GitHubPill? Issues = null, GitHubPill? PullRequests = null, bool IsRepository = false, RepoActivity? GitHub = null, string? GitDir = null,

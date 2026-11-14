@@ -175,6 +175,36 @@ public partial class YardGitHubTests
     }
 
     [Fact]
+    public async Task A_switch_back_to_a_branch_a_later_read_let_go_of_asks_about_it_again()
+    {
+        _gh.DefaultHead = OnGitHub;
+        _gh.Branches["develop"] = OnGitHub;
+        GitIsAt(Here, behind: 4);
+        var (yard, app) = await SettledYard();
+        var head = Path.Combine(yard.FindTile(app.Id)!.RootPath, ".git", "HEAD");
+        File.WriteAllText(head, "ref: refs/heads/develop\n");
+        await yard.RefreshGitAsync(CancellationToken.None);
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0] is { Branch: "develop", Behind: not null });
+
+        // On main, a regular read asks about main alone and lets develop go.
+        File.WriteAllText(head, "ref: refs/heads/main\n");
+        await yard.RefreshGitAsync(CancellationToken.None);
+        await yard.RefreshCommand.ExecuteAsync(null);
+        await Quiet();
+        File.WriteAllText(head, "ref: refs/heads/develop\n");
+        await yard.RefreshGitAsync(CancellationToken.None);
+
+        await Eventually(() =>
+        {
+            lock (_gh.Names)
+            {
+                return _gh.BranchesAsked.Count(b => b == "develop") >= 2;
+            }
+        });
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0] is { Branch: "develop", Behind: not null });
+    }
+
+    [Fact]
     public async Task A_branch_GitHub_has_not_got_is_asked_about_once_and_the_line_stays_clean()
     {
         GitIsAt(Here);

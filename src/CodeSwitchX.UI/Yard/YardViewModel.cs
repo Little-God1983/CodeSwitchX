@@ -754,6 +754,10 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
         try
         {
+            // Beside git, not after it: the branch from HEAD, which takes no process, is what GitHub is asked about (review of #428), so one
+            // switched to since the last pass is compared. A GitHub read that fails leaves what was last read, which the comparison then
+            // goes by, as the round does.
+            var gitHubRead = _gitHub is not null && line is { IsRepository: true, Path: { } path } ? ReadGitHubForBuildAsync(path, line) : Task.FromResult(default(GitHubRoundResult));
             var info = await _git.InspectAsync(scripts.RepoPath, _gitHubStop.Token).ConfigureAwait(false);
             var read = line with
             {
@@ -764,15 +768,6 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             if (StableBuildCheck.BuildBlock(read) is not null)
             {
                 return read;
-            }
-
-            // After git, with the branch it read: one switched to since the last pass is what GitHub is asked about (review of #428). A GitHub
-            // read that fails leaves what was last read, which the comparison then goes by, as the round does.
-            var gitHubRead = Task.FromResult(default(GitHubRoundResult));
-            if (_gitHub is not null && read is { IsRepository: true, Path: { } path })
-            {
-                _gitHub.FollowBranches([(path, BranchOf(read))]);
-                gitHubRead = RefreshGitHubAsync([path]);
             }
 
             try
@@ -798,6 +793,23 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             return null;
         }
     }
+
+    /// <summary>The Build press's read of GitHub (#429), for the branch <paramref name="path"/>'s HEAD names now (#428).</summary>
+    private Task<GitHubRoundResult> ReadGitHubForBuildAsync(string path, GitLine line) => Task.Run(() =>
+    {
+        string? branch;
+        try
+        {
+            branch = GitInspector.ReadBranch(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            branch = null;
+        }
+
+        _gitHub!.FollowBranches([(path, BranchOf(line with { Branch = branch }))]);
+        return RefreshGitHubAsync([path]);
+    });
 
     /// <summary>Whether a round runs and whether another was asked for are decided under one lock, so a request never falls between a round's last look and its end.</summary>
     private Task RequestGitRefresh(CancellationToken ct, bool again)
@@ -860,35 +872,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
                     // Only the lines of the tiles still there, as for the folders above.
                     var lines = found.Where(l => HasRepository(l) && l.Path is { } p && paths.Contains(p, StringComparer.OrdinalIgnoreCase)).ToList();
                     _gitHub.FollowBranches(lines.Select(l => (l.Path!, BranchOf(l))));
-                    var unasked = new List<(string Path, string Branch)>();
-                    foreach (var line in lines)
-                    {
-                        if (BranchOf(line) is not { } branch || _gitHub.ForFolder(line.Path!) is not { } activity)
-                        {
-                            // Detached, or nothing read yet: whatever it was asked for before is no longer where it is.
-                            ForgetBranchAsk(line.Path!);
-                            continue;
-                        }
-
-                        if (!activity.Covers(branch))
-                        {
-                            unasked.Add((line.Path!, branch));
-                        }
-                        else
-                        {
-                            // Read for the branch it is on now: a switch back to one the reads have let go of since is asked about again.
-                            ForgetBranchAsk(line.Path!);
-                        }
-                    }
-
-                    unasked = [.. unasked.Where(l => !BranchAsked(l.Path, l.Branch))];
-                    lock (_gitHubAsked)
-                    {
-                        foreach (var gone in _branchAsked.Keys.Where(f => !paths.Contains(f, StringComparer.OrdinalIgnoreCase)).ToList())
-                        {
-                            _branchAsked.Remove(gone);
-                        }
-                    }
+                    var unasked = BranchesToAsk(lines, paths);
                     var round = new object();
                     var unknown = AskGitHubOf(paths.Where(p => !_gitHub.Knows(p)).Concat(unasked.Select(l => l.Path)).Distinct(StringComparer.OrdinalIgnoreCase), round);
                     lock (_gitHubAsked)
@@ -1108,29 +1092,48 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     });
 
     /// <summary>
-    /// The branch a line is on, for GitHub (#428); null for a detached HEAD, which the tile names by the first 7 characters of its commit.
-    /// A branch named like that, the start of the very commit it is at, is taken for one: it would never be found on GitHub anyway.
+    /// The branch a line is on, for GitHub (#428); null for a detached HEAD, which the tile names by the start of its commit (7 characters
+    /// from HEAD, more from git in a reftable repository), and for the placeholder a reftable HEAD holds. A branch named like the start of
+    /// the very commit it is at is taken for a detached HEAD: it would hardly be found on GitHub anyway.
     /// </summary>
     private static string? BranchOf(GitLine line) =>
-        line.Branch is { Length: > 0 } branch
-        && !(branch.Length == 7 && branch.All(char.IsAsciiHexDigit) && (line.Head is null || line.Head.StartsWith(branch, StringComparison.OrdinalIgnoreCase)))
+        line.Branch is { Length: > 0 } branch && branch != ".invalid"
+        && !(branch.Length is >= 7 and <= 40 && branch.All(char.IsAsciiHexDigit) && (line.Head is null || line.Head.StartsWith(branch, StringComparison.OrdinalIgnoreCase)))
             ? branch : null;
 
-    private void ForgetBranchAsk(string folder)
+    /// <summary>
+    /// The folders of <paramref name="lines"/> on a branch the last read of GitHub did not ask about where it stands (#428), each once for as
+    /// long as it stays on that branch: a read that fails, or a branch past the cut of a repository on many, is not asked about again every
+    /// pass (the regular rounds do). A folder that moves to another branch is let go of, so a switch back is asked about again; so is one
+    /// that left <paramref name="paths"/>.
+    /// </summary>
+    private List<(string Path, string Branch)> BranchesToAsk(IReadOnlyList<GitLine> lines, IReadOnlyCollection<string> paths)
     {
+        var asks = new List<(string Path, string Branch)>();
         lock (_gitHubAsked)
         {
-            _branchAsked.Remove(folder);
-        }
-    }
+            foreach (var gone in _branchAsked.Keys.Where(f => !paths.Contains(f, StringComparer.OrdinalIgnoreCase)).ToList())
+            {
+                _branchAsked.Remove(gone);
+            }
 
-    /// <summary>GitHub was read for <paramref name="folder"/> on <paramref name="branch"/> outside the regular rounds already (#428).</summary>
-    private bool BranchAsked(string folder, string branch)
-    {
-        lock (_gitHubAsked)
-        {
-            return _branchAsked.TryGetValue(folder, out var asked) && asked == branch;
+            foreach (var line in lines)
+            {
+                var path = line.Path!;
+                var branch = BranchOf(line);
+                if (_branchAsked.TryGetValue(path, out var asked) && asked != branch)
+                {
+                    _branchAsked.Remove(path);
+                }
+
+                if (branch is not null && !_branchAsked.ContainsKey(path) && _gitHub?.ForFolder(path) is { } activity && !activity.Covers(branch))
+                {
+                    asks.Add((path, branch));
+                }
+            }
         }
+
+        return asks;
     }
 
     /// <summary>True the first time a folder is asked for; again only after the round that was asked to read it has ended, whatever it came to.</summary>
@@ -1519,6 +1522,12 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         // after one gh ran out of time on, which may have gone through.
         if (outcome.ChangedGitHub && _gitHub is not null)
         {
+            // On the branch the pull left it on, which the git pass that tells it has not yet (#428).
+            if (outcome.PulledBranch is { } pulled)
+            {
+                _gitHub.FollowBranches([(outcome.Checkout, pulled)]);
+            }
+
             _ = RefreshGitHubAsync([outcome.Checkout]);
         }
     }

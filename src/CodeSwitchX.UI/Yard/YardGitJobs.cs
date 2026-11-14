@@ -11,13 +11,15 @@ namespace CodeSwitchX.UI.Yard;
 /// <param name="Checkout">The checkout's folder, as the job was given it.</param>
 /// <param name="Name">The repository's name, for a line that is not in its panel.</param>
 /// <param name="Merged">The pull request a merge job merged (#408), whatever the pull after it came to; null when nothing was merged.</param>
-/// <param name="Pulled">The checkout is on <paramref name="PulledBranch"/> and up to date: a pull, or the pull after a merge, went through.</param>
 /// <param name="ChangedGitHub">A merge job that merged, or may have (gh ran out of time, the job threw): the Yard reads GitHub again. A refusal changed nothing.</param>
 /// <param name="Key">The checkout's key the job ran under (<see cref="YardGitJobs.Key"/>).</param>
 /// <param name="Reread">The pull request moved since the panel read it (#414): the panel reads its list again before another try.</param>
 /// <param name="Tree">The working tree the job ran in, by its own git directory: a subfolder's line shares it, a linked worktree has one of its own.</param>
-/// <param name="PulledBranch">The branch the pull left the checkout on: the default one, or the one a merge landed on (#428); null when nothing was pulled.</param>
-public sealed record GitJobOutcome(string Checkout, string Name, bool Succeeded, string Message, int? Merged = null, bool Pulled = false, bool ChangedGitHub = false,
+/// <param name="PulledBranch">
+/// A pull, or the pull after a merge, went through: the branch it left the checkout on, up to date, the default one or the one a merge
+/// landed on (#428). Null when nothing was pulled.
+/// </param>
+public sealed record GitJobOutcome(string Checkout, string Name, bool Succeeded, string Message, int? Merged = null, bool ChangedGitHub = false,
     string Key = "", string Tree = "", bool Reread = false, string? PulledBranch = null);
 
 /// <summary>
@@ -125,7 +127,7 @@ public sealed class YardGitJobs
         Run(checkout, key, tree, name, $"Pulling {branch}…", "A pull", async () =>
         {
             var pull = await _puller.PullAsync(checkout, branch, name, CancellationToken.None, _ => StillFreeAsync(chatIsWorking)).ConfigureAwait(false);
-            return new GitJobOutcome(checkout, name, pull.Succeeded, pull.Succeeded ? pull.Text : $"Pull stopped: {pull.Text}", Pulled: pull.Succeeded,
+            return new GitJobOutcome(checkout, name, pull.Succeeded, pull.Succeeded ? pull.Text : $"Pull stopped: {pull.Text}",
                 PulledBranch: pull.Succeeded ? branch : null);
         }, "Pull stopped: something went wrong. See the log.");
 
@@ -167,7 +169,7 @@ public sealed class YardGitJobs
             var pull = await _puller.PullAsync(checkout, pullBranch, name, CancellationToken.None, _ => StillFreeAsync(chatIsWorking), leavePushedOnly: true)
                 .ConfigureAwait(false);
             return pull.Succeeded
-                ? new GitJobOutcome(checkout, name, true, $"{merged}. {pull.Text}", number, Pulled: true, ChangedGitHub: true, PulledBranch: pullBranch)
+                ? new GitJobOutcome(checkout, name, true, $"{merged}. {pull.Text}", number, ChangedGitHub: true, PulledBranch: pullBranch)
                 : new GitJobOutcome(checkout, name, false, $"{merged}, but didn't {(onPullBranch ? "pull" : "switch")}: {pull.Text}", number, ChangedGitHub: true);
         }, $"#{number} may or may not be merged: something went wrong. See the log and GitHub.", fromMerge: true);
     }
