@@ -483,6 +483,9 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     /// <summary>The read of this tile's git a menu started, while it runs: a menu opened again, or Build pressed, waits for it (#425). UI thread.</summary>
     internal Task<IReadOnlyList<GitLine>?>? MenuGitRead { get; set; }
 
+    /// <summary>A read of git as it is now was asked for while <see cref="MenuGitRead"/> ran, which may have run git before (#433): one follows it. UI thread.</summary>
+    internal bool GitReadAgain { get; set; }
+
     /// <summary>
     /// The Build new version / Run entries for the menu that opens now (#423): one per repository with the stable-build
     /// scripts, in the order of the lines. Made afresh each time, so a shortcut the last build wrote counts at once. One Run per

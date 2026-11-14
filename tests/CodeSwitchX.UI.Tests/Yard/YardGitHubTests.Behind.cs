@@ -320,6 +320,51 @@ public partial class YardGitHubTests
     }
 
     [Fact]
+    public async Task The_strips_read_of_git_comes_after_a_menu_read_under_way_not_instead_of_it()
+    {
+        // The menu's read may have run git before a commit made since (#433).
+        GitIsAt(OnGitHub);
+        var (yard, app) = await SettledYard();
+        await yard.CurrentGitRefresh;
+        var tile = yard.FindTile(app.Id)!;
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var statuses = 0;
+        var secondBeforeRelease = false;
+        var git = _gitRunner!;
+        _gitRunner = args =>
+        {
+            if (args.StartsWith("status", StringComparison.Ordinal))
+            {
+                var n = Interlocked.Increment(ref statuses);
+                if (n == 1)
+                {
+                    entered.Set();
+                    release.Wait(TimeSpan.FromSeconds(10));
+                }
+                else
+                {
+                    secondBeforeRelease |= !release.IsSet;
+                }
+            }
+
+            return git(args);
+        };
+        yard.RefreshGitOf(tile);
+        entered.Wait(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken).ShouldBeTrue();
+
+        // Asked twice meanwhile: one read follows.
+        yard.ReadGitOfCheckout(tile.RootPath);
+        yard.ReadGitOfCheckout(tile.RootPath);
+        release.Set();
+
+        await Eventually(() => Volatile.Read(ref statuses) >= 2);
+        await Quiet();
+        secondBeforeRelease.ShouldBeFalse("after the read under way, not beside it");
+        Volatile.Read(ref statuses).ShouldBe(2, "one read follows however many asked");
+    }
+
+    [Fact]
     public async Task A_round_that_compared_with_a_commit_GitHub_moved_past_asks_git_again_at_once()
     {
         // The checkout switches to the default branch while a round runs, and GitHub's commit moves in the same moment (#429): the read of

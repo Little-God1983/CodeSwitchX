@@ -232,6 +232,42 @@ public class GitPullerTests : IDisposable
     }
 
     [Fact]
+    public async Task The_strips_count_and_the_pulls_refusal_agree_on_one_checkout()
+    {
+        // The strip leaves the pull out by the count the pull stops at (#429, #433): a staged rename with an edit is one file, an untracked
+        // file is none.
+        await Arrange();
+        await Git(Work, "switch", "-q", "main");
+        await PushToMain(1);
+        await Git(Work, "mv", "a.txt", "renamed.txt");
+        await File.WriteAllTextAsync(Path.Combine(Work, "renamed.txt"), "edited", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(Work, "untracked.txt"), "new", TestContext.Current.CancellationToken);
+
+        var info = await new GitInspector().InspectAsync(Work, TestContext.Current.CancellationToken);
+
+        info.TrackedChanges.ShouldBe(1, "the rename with its edit is one file");
+        (await Pull()).ShouldBe(new PullOutcome(false, "1 file has uncommitted changes."));
+    }
+
+    [Fact]
+    public async Task A_submodule_with_only_untracked_content_neither_stops_the_pull_nor_the_strip()
+    {
+        // The case the two status calls once told apart (#433): the strip said the pull was left out, and the pull went.
+        await Arrange();
+        await Git(Work, "switch", "-q", "main");
+        await Git(Work, "-c", "protocol.file.allow=always", "submodule", "add", "-q", Origin, "sub");
+        await Git(Work, "commit", "-q", "-m", "sub");
+        await Git(Work, "push", "-q", "origin", "main");
+        await File.WriteAllTextAsync(Path.Combine(Work, "sub", "scratch.txt"), "untracked", TestContext.Current.CancellationToken);
+
+        var info = await new GitInspector().InspectAsync(Work, TestContext.Current.CancellationToken);
+
+        info.DirtyCount.ShouldBe(1, "the tile still shows it as changed");
+        info.TrackedChanges.ShouldBe(0);
+        (await Pull()).Succeeded.ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task An_edit_made_while_the_fetch_ran_refuses_the_switch()
     {
         await Arrange();
