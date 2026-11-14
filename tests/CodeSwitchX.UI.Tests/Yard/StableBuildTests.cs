@@ -128,18 +128,77 @@ public class StableBuildTests : IDisposable
     }
 
     [Fact]
-    public void Find_looks_at_the_top_of_the_repository_for_a_folder_inside_it()
+    public void An_assignment_in_a_block_comment_is_no_setting()
+    {
+        var repo = Repo(("build.ps1", "# build"), ("_common.ps1", "$script:ShortcutName = 'Real.lnk'\n<#\n$script:ShortcutName = 'Old.lnk'\n$script:ReleaseBranch = 'develop'\n#>\n"));
+
+        var found = StableBuildRepo.Find(repo).ShouldNotBeNull();
+
+        found.ShortcutName.ShouldBe("Real.lnk", "the last assignment counts, and the one in the comment is none (#425)");
+        found.ReleaseBranch.ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_common_file_that_cannot_be_read_for_a_moment_keeps_what_was_found_before()
     {
         var repo = Repo(("build.ps1", "# build"), ("_common.ps1", Common));
-        var src = Path.Combine(repo, "src");
-        Directory.CreateDirectory(Path.Combine(src, "scripts"));
-        File.WriteAllText(Path.Combine(src, "scripts", "build.ps1"), "# not the stable build");
-        File.WriteAllText(Path.Combine(src, "scripts", "_common.ps1"), "$script:ShortcutName = 'Other.lnk'\n");
+        var before = StableBuildRepo.Find(repo).ShouldNotBeNull();
+        var other = new StableBuildRepo(Path.Combine(_root, "elsewhere"), "Else.lnk");
 
-        var found = StableBuildRepo.Find(src).ShouldNotBeNull();
+        using (new FileStream(Path.Combine(repo, "scripts", "_common.ps1"), FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            StableBuildRepo.Find(repo, [other, before]).ShouldBeSameAs(before, "an editor or a scanner holding the file is no reason to drop the entries (#425)");
+            StableBuildRepo.Find(repo).ShouldBeNull("with nothing found before, nothing is made up");
+            StableBuildRepo.Find(repo, [other]).ShouldBeNull("what another repository had says nothing about this one");
+        }
+    }
 
-        found.RepoPath.ShouldBe(repo);
-        found.ShortcutName.ShouldBe("Some App.lnk");
+    [Fact]
+    public void A_block_comment_mark_inside_a_line_starts_no_comment()
+    {
+        // In a string or after a # it is no comment for PowerShell, and the settings below it are real.
+        var repo = Repo(("build.ps1", "# build"), ("_common.ps1", "# usage: build.ps1 <#args>\n$script:Marker = '<#'\n$script:Other = \"a`\"<#\"\n$script:ShortcutName = 'App.lnk'\n# done #>\n"));
+
+        StableBuildRepo.Find(repo).ShouldNotBeNull().ShortcutName.ShouldBe("App.lnk");
+    }
+
+    [Fact]
+    public void A_block_comment_opened_after_code_hides_the_lines_up_to_its_end()
+    {
+        var repo = Repo(("build.ps1", "# build"), ("_common.ps1", "$script:ShortcutName = 'App.lnk'\n$x = 1 <#\n$script:ReleaseBranch = 'develop'\n#> $script:Late = 'x'\n"));
+
+        StableBuildRepo.Find(repo).ShouldNotBeNull().ReleaseBranch.ShouldBeNull("PowerShell never runs it");
+    }
+
+    [Fact]
+    public void A_here_string_hides_neither_its_quote_nor_a_comment_after_it()
+    {
+        // An apostrophe inside a here-string must not leave a quote open, or a commented-out setting below it would count.
+        var repo = Repo(("build.ps1", "# build"), ("_common.ps1", "$script:ShortcutName = 'App.lnk'\n$help = @'\nDon't #edit\n'@\n# $script:ShortcutName = 'Old.lnk'\n"));
+
+        StableBuildRepo.Find(repo).ShouldNotBeNull().ShortcutName.ShouldBe("App.lnk");
+    }
+
+    [Fact]
+    public void A_hash_within_a_word_or_escaped_starts_no_comment()
+    {
+        StableBuildRepo.WithoutComments("$a = C:\\tools#1 `#tag # gone\n").ShouldBe("$a = C:\\tools#1 `#tag \n");
+    }
+
+    [Fact]
+    public void Comments_go_and_line_breaks_stay()
+    {
+        StableBuildRepo.WithoutComments("a # one\nb <# two\nthree #> c\n'#' \"<#\" 'it''s'\n").ShouldBe("a \nb \n c\n'#' \"<#\" 'it''s'\n");
+    }
+
+    [Fact]
+    public void A_common_file_that_is_gone_keeps_nothing()
+    {
+        var repo = Repo(("build.ps1", "# build"), ("_common.ps1", Common));
+        var before = StableBuildRepo.Find(repo).ShouldNotBeNull();
+        File.Delete(Path.Combine(repo, "scripts", "_common.ps1"));
+
+        StableBuildRepo.Find(repo, [before]).ShouldBeNull("only a file held for a moment keeps the last round's scripts");
     }
 
     [Theory]

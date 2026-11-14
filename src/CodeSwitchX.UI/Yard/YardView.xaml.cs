@@ -12,6 +12,9 @@ public partial class YardView : UserControl
     /// <summary>Marks the items <see cref="OnTileContextMenuOpening"/> put in, so the next opening takes them out first.</summary>
     private static readonly object StableBuildItem = new();
 
+    /// <summary>The open tile menu with Build / Run entries and its tile (#425): the entries follow the tile's git rounds until it closes.</summary>
+    private (ContextMenu Menu, WorkspaceTileViewModel Tile)? _buildMenu;
+
     private IDataObject? _dragData;
     private string? _dragPath;
 
@@ -55,9 +58,10 @@ public partial class YardView : UserControl
 
     /// <summary>
     /// A tile's menu is about to open (#423): its Build new version / Run entries go in above Unregister, made afresh from the
-    /// tile's last git round (the state its lines show, up to one round old) and a shortcut written since counts at once.
-    /// Before the menu shows, so it does not grow on screen. In code, because the list changes beside fixed items. Not
-    /// handled: the board holds the tiles' order on it too.
+    /// tile's last git round, and a shortcut written since counts at once. Before the menu shows, so it does not grow on screen.
+    /// That round can be up to 30 s old (a branch switched a moment ago): the tile's git is read again now, and the entries follow
+    /// what it finds while the menu is open (#425). In code, because the list changes beside fixed items. Not handled: the board
+    /// holds the tiles' order on it too.
     /// </summary>
     private void OnTileContextMenuOpening(object sender, ContextMenuEventArgs e)
     {
@@ -66,30 +70,98 @@ public partial class YardView : UserControl
             return;
         }
 
+        StopFollowingBuildMenu();
+        if (PutStableBuildItems(menu, tile.OpenBuildMenu()))
+        {
+            _buildMenu = (menu, tile);
+            tile.PropertyChanged += OnBuildMenuTileChanged;
+            menu.Closed += OnBuildMenuClosed;
+        }
+    }
+
+    /// <summary>
+    /// The tile of the open menu shows new git lines (#425): its entries are made again. The same headers keep their items, which only
+    /// take the new commands and tooltips, so the item under the pointer or the keyboard stays where it is.
+    /// </summary>
+    private void OnBuildMenuTileChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(WorkspaceTileViewModel.GitLines) || _buildMenu is not var (menu, tile) || !menu.IsOpen)
+        {
+            return;
+        }
+
+        var wanted = Items(tile.StableBuildEntries()).ToList();
+        var shown = menu.Items.OfType<MenuItem>().Where(i => i.Tag == StableBuildItem).ToList();
+        if (!wanted.Select(w => Header(w.Header)).SequenceEqual(shown.Select(i => i.Header as string)))
+        {
+            PutStableBuildItems(menu, wanted);
+            return;
+        }
+
+        foreach (var (item, (_, command, block)) in shown.Zip(wanted))
+        {
+            item.Command = command;
+            item.ToolTip = block;
+        }
+    }
+
+    private void OnBuildMenuClosed(object sender, RoutedEventArgs e) => StopFollowingBuildMenu();
+
+    private void StopFollowingBuildMenu()
+    {
+        if (_buildMenu is var (menu, tile))
+        {
+            tile.PropertyChanged -= OnBuildMenuTileChanged;
+            menu.Closed -= OnBuildMenuClosed;
+            _buildMenu = null;
+        }
+    }
+
+    /// <summary>"__" shows a folder's underscore, which a header would otherwise take for an access key.</summary>
+    private static string Header(string text) => text.Replace("_", "__");
+
+    /// <summary>The menu items the entries make, in order: each Build, and its Run where it has one.</summary>
+    private static IEnumerable<(string Header, System.Windows.Input.ICommand Command, string? Block)> Items(IEnumerable<StableBuildEntry> entries)
+    {
+        foreach (var entry in entries)
+        {
+            yield return (entry.BuildHeader, entry.BuildCommand, entry.BuildBlock);
+            if (entry.RunHeader is { } run)
+            {
+                yield return (run, entry.RunCommand, entry.RunBlock);
+            }
+        }
+    }
+
+    private static bool PutStableBuildItems(ContextMenu menu, IReadOnlyList<StableBuildEntry> entries) => PutStableBuildItems(menu, Items(entries).ToList());
+
+    /// <summary>The Build / Run items in place of the ones the menu has; false when there are none.</summary>
+    private static bool PutStableBuildItems(ContextMenu menu, IReadOnlyList<(string Header, System.Windows.Input.ICommand Command, string? Block)> items)
+    {
         foreach (var old in menu.Items.OfType<Control>().Where(i => i.Tag == StableBuildItem).ToList())
         {
             menu.Items.Remove(old);
         }
 
-        if (tile.StableBuildEntries() is not { Count: > 0 } entries)
+        if (items.Count == 0)
         {
-            return;
+            return false;
         }
 
         // Above the separator that sets Unregister apart; at the end should the menu ever have none.
         var at = menu.Items.OfType<Separator>().LastOrDefault() is { } separator ? menu.Items.IndexOf(separator) : menu.Items.Count;
         menu.Items.Insert(at++, new Separator { Tag = StableBuildItem });
-        foreach (var entry in entries)
+        foreach (var (header, command, block) in items)
         {
-            menu.Items.Insert(at++, Item(entry.BuildHeader, entry.BuildCommand, entry.BuildBlock));
-            menu.Items.Insert(at++, Item(entry.RunHeader, entry.RunCommand, entry.RunBlock));
+            menu.Items.Insert(at++, Item(header, command, block));
         }
 
-        // Enabled or not by the command's CanExecute; the tooltip says why on a greyed one. "__" shows a folder's underscore,
-        // which a header would otherwise take for an access key.
+        return true;
+
+        // Enabled or not by the command's CanExecute; the tooltip says why on a greyed one.
         static MenuItem Item(string header, System.Windows.Input.ICommand command, string? block)
         {
-            var item = new MenuItem { Header = header.Replace("_", "__"), Command = command, ToolTip = block, Tag = StableBuildItem };
+            var item = new MenuItem { Header = Header(header), Command = command, ToolTip = block, Tag = StableBuildItem };
             ToolTipService.SetShowOnDisabled(item, true);
             return item;
         }

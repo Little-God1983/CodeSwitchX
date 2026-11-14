@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.IO;
+using System.Text;
 using System.Text.RegularExpressions;
+using CodeSwitchX.Core.Paths;
 using CodeSwitchX.UI.Infrastructure;
 using CommunityToolkit.Mvvm.Input;
 using Path = System.IO.Path;
@@ -18,15 +20,19 @@ public sealed partial record StableBuildRepo(string RepoPath, string ShortcutNam
 {
     public string BuildScript => Path.Combine(RepoPath, "scripts", "build.ps1");
 
+    /// <summary>Windows' "another program has the file open" and "has part of it locked": a refusal for a moment, not for good.</summary>
+    private const int SharingViolation = unchecked((int)0x80070020), LockViolation = unchecked((int)0x80070021);
+
     /// <summary>
-    /// The scripts of the repository <paramref name="folder"/> is in, looked for at its top; null when it has none, or they
-    /// cannot be read. A lookup that goes wrong in any way only means no entries: it must not cost the tile its git round.
+    /// The scripts of the repository whose top is <paramref name="top"/> (git found it, <see cref="Core.Workspaces.GitInfo.Top"/>); null
+    /// when it has none. A lookup that goes wrong in any way must not cost the tile its git round. A read another program holds up for a
+    /// moment (an editor or a scanner has the file open) says nothing new: it gives what the last round found there (#425).
     /// </summary>
-    public static StableBuildRepo? Find(string folder)
+    /// <param name="known">The scripts the tile's lines had after the last round: what a held file keeps.</param>
+    public static StableBuildRepo? Find(string top, IEnumerable<StableBuildRepo?>? known = null)
     {
         try
         {
-            var top = TopOf(folder);
             var scripts = Path.Combine(top, "scripts");
             var common = Path.Combine(scripts, "_common.ps1");
             if (!File.Exists(Path.Combine(scripts, "build.ps1")) || !File.Exists(common))
@@ -34,7 +40,7 @@ public sealed partial record StableBuildRepo(string RepoPath, string ShortcutNam
                 return null;
             }
 
-            var text = File.ReadAllText(common);
+            var text = WithoutComments(File.ReadAllText(common));
             if (Setting(text, "ShortcutName") is not { } shortcut
                 || shortcut != Path.GetFileName(shortcut) || !shortcut.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase))
             {
@@ -44,31 +50,120 @@ public sealed partial record StableBuildRepo(string RepoPath, string ShortcutNam
 
             return new StableBuildRepo(top, shortcut, Setting(text, "ReleaseBranch"));
         }
+        catch (IOException ex) when (ex.HResult is SharingViolation or LockViolation)
+        {
+            // What another repository had says nothing about this one. A file that is gone, may not be read, or sits on a share that
+            // went away has no scripts to offer.
+            var key = PathNormalizer.Normalize(top);
+            return known?.FirstOrDefault(s => s is not null && PathNormalizer.Normalize(s.RepoPath) == key);
+        }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return null;
         }
     }
 
-    /// <summary>The folder itself or the nearest one above it with a .git (a folder, or a file in a worktree): the repository's top.</summary>
-    private static string TopOf(string folder)
+    /// <summary>
+    /// The file's code without its comments (#425): a <c>#</c> line comment and a <c>&lt;# … #&gt;</c> block (they do not nest) give way,
+    /// so an assignment inside one is no setting. Quoted strings and here-strings are stepped over, so a <c>#</c> or <c>&lt;#</c> inside
+    /// one starts no comment, and neither does a <c>#</c> within a word or escaped with a backtick, as in PowerShell. Line breaks stay,
+    /// so a setting after a comment still starts its line.
+    /// </summary>
+    internal static string WithoutComments(string text)
     {
-        if (HasGit(folder))
+        var code = new StringBuilder(text.Length);
+        var inBlock = false;
+        var quote = '\0';
+        var hereString = '\0';
+        for (var i = 0; i < text.Length; i++)
         {
-            return folder;
-        }
-
-        for (var dir = new DirectoryInfo(folder).Parent; dir is not null; dir = dir.Parent)
-        {
-            if (HasGit(dir.FullName))
+            var c = text[i];
+            var next = i + 1 < text.Length ? text[i + 1] : '\0';
+            if (hereString != '\0')
             {
-                return dir.FullName;
+                code.Append(c);
+                // It ends with its quote and @ at the start of a line.
+                if (c == '\n' && i + 2 < text.Length && text[i + 1] == hereString && text[i + 2] == '@')
+                {
+                    code.Append(hereString).Append('@');
+                    i += 2;
+                    hereString = '\0';
+                }
+            }
+            else if (inBlock)
+            {
+                if (c == '#' && next == '>')
+                {
+                    inBlock = false;
+                    i++;
+                }
+                else if (c == '\n')
+                {
+                    code.Append(c);
+                }
+            }
+            else if (quote != '\0')
+            {
+                code.Append(c);
+                if (quote == '"' && c == '`' && next != '\0')
+                {
+                    code.Append(next); // an escaped character, a quote among them, ends nothing
+                    i++;
+                }
+                else if (c == quote)
+                {
+                    quote = '\0'; // a doubled quote closes and opens again
+                }
+            }
+            else if (c == '@' && next is '\'' or '"' && LineEndsAfter(text, i + 2))
+            {
+                hereString = next;
+                code.Append(c).Append(next);
+                i++;
+            }
+            else if (c is '\'' or '"')
+            {
+                quote = c;
+                code.Append(c);
+            }
+            else if (c == '`' && next != '\0')
+            {
+                code.Append(c).Append(next); // an escaped character is no quote and no comment
+                i++;
+            }
+            else if (c == '<' && next == '#')
+            {
+                inBlock = true;
+                i++;
+            }
+            else if (c == '#' && (i == 0 || char.IsWhiteSpace(text[i - 1]) || text[i - 1] is ';' or '(' or '{' or '|' or ','))
+            {
+                while (i + 1 < text.Length && text[i + 1] != '\n')
+                {
+                    i++;
+                }
+            }
+            else
+            {
+                code.Append(c);
             }
         }
 
-        return folder;
+        return code.ToString();
 
-        static bool HasGit(string dir) => Directory.Exists(Path.Combine(dir, ".git")) || File.Exists(Path.Combine(dir, ".git"));
+        // A here-string's opening is the last thing on its line, but for spaces.
+        static bool LineEndsAfter(string text, int at)
+        {
+            for (; at < text.Length && text[at] != '\n'; at++)
+            {
+                if (!char.IsWhiteSpace(text[at]))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
     }
 
     /// <summary>
@@ -188,27 +283,51 @@ public sealed class StableBuildLauncher : IStableBuildLauncher
             .Any(dir => File.Exists(Path.Combine(dir, exe)));
 }
 
-/// <summary>One repository's pair of entries on a tile's menu (#423), made when the menu opens.</summary>
+/// <summary>Whether a <see cref="StableBuildEntry"/> has a Run, and whether it names the app (#425).</summary>
+public enum StableBuildRun
+{
+    /// <summary>"Run": the only shortcut on the tile.</summary>
+    Plain,
+
+    /// <summary>"Run Name": the tile's entries open several shortcuts.</summary>
+    Named,
+
+    /// <summary>No Run: an entry before it opens the same shortcut (a checkout and a worktree of one app).</summary>
+    None,
+}
+
+/// <summary>One repository's entries on a tile's menu (#423), made when the menu opens: Build, and Run unless another repository on the tile opens the same shortcut (#425).</summary>
 public sealed partial class StableBuildEntry
 {
     private readonly StableBuildRepo _repo;
     private readonly string _shortcutPath;
     private readonly IStableBuildLauncher _launcher;
     private readonly IYardDialogs _dialogs;
+    private readonly GitLine _line;
+    private readonly Func<GitLine, Task<GitLine?>>? _freshLine;
 
     /// <param name="line">A line with stable-build scripts; its git state is what the precheck reads.</param>
-    /// <param name="named">The tile has several such repositories: the entries say which.</param>
-    public StableBuildEntry(GitLine line, bool named, IStableBuildLauncher launcher, IYardDialogs dialogs)
+    /// <param name="named">The tile has several such repositories: Build says which.</param>
+    /// <param name="run">The entry's Run (#425).</param>
+    /// <param name="freshLine">The line as git has it now; null when it could not be read. Build checks it before it asks (#425).</param>
+    public StableBuildEntry(GitLine line, bool named, StableBuildRun run, IStableBuildLauncher launcher, IYardDialogs dialogs, Func<GitLine, Task<GitLine?>>? freshLine = null)
     {
         var repo = line.StableBuild ?? throw new ArgumentException("The line has no stable-build scripts.", nameof(line));
         _repo = repo;
+        _line = line;
         _launcher = launcher;
         _dialogs = dialogs;
+        _freshLine = freshLine;
         var folder = Path.TrimEndingDirectorySeparator(repo.RepoPath);
         // The name the tile's line shows (a workspace file's label), else the folder's; a drive root has no folder name: "E:\".
         Name = line.Folder ?? (Path.GetFileName(folder) is { Length: > 0 } name ? name : folder);
         BuildHeader = named ? $"Build {Name}" : "Build new version";
-        RunHeader = named ? $"Run {Name}" : "Run";
+        RunHeader = run switch
+        {
+            StableBuildRun.Plain => "Run",
+            StableBuildRun.Named => $"Run {Name}",
+            _ => null,
+        };
         BuildBlock = StableBuildCheck.BuildBlock(line);
         _shortcutPath = launcher.ShortcutPath(repo.ShortcutName);
         RunBlock = launcher.ShortcutExists(_shortcutPath) ? null : "No stable build yet";
@@ -217,30 +336,52 @@ public sealed partial class StableBuildEntry
     /// <summary>The repository's folder name: what the dialog and the headers call the app.</summary>
     public string Name { get; }
     public string BuildHeader { get; }
-    public string RunHeader { get; }
+
+    /// <summary>Null when the entry has no Run: another one on the tile opens the same shortcut (#425).</summary>
+    public string? RunHeader { get; }
     public string? BuildBlock { get; }
     public string? RunBlock { get; }
     public bool CanBuild => BuildBlock is null;
-    public bool CanRun => RunBlock is null;
+    public bool CanRun => RunHeader is not null && RunBlock is null;
 
     [RelayCommand(CanExecute = nameof(CanBuild))]
-    private Task BuildAsync()
+    private async Task BuildAsync()
     {
+        // The menu's lines can be older than the press (a branch switched a moment ago, #425): the tile's git is read once more, and a
+        // block found now is said instead of asking. A read that finds nothing keeps the menu's word; the script checks again anyway.
+        if (await FreshBlockAsync().ConfigureAwait(true) is { } block)
+        {
+            _dialogs.Tell($"Not building {Name}: {block}.");
+            return;
+        }
+
         if (!_dialogs.Confirm($"Build a new version of {Name}?\n\nThe build script bumps the version, commits and pushes it, and may close the running {Name} and start the new one. Its window shows every step."))
         {
-            return Task.CompletedTask;
+            return;
         }
-
-        return StartAsync();
 
         // Off the UI thread: the launcher looks along PATH, and a folder there on an offline share blocks for about 20 s.
-        async Task StartAsync()
+        if (!await Task.Run(() => _launcher.StartBuild(_repo)).ConfigureAwait(true))
         {
-            if (!await Task.Run(() => _launcher.StartBuild(_repo)).ConfigureAwait(true))
-            {
-                _dialogs.Tell($"Could not start the build of {Name}.");
-            }
+            _dialogs.Tell($"Could not start the build of {Name}.");
         }
+    }
+
+    /// <summary>Why the repository cannot be built as it stands now; null when it can, or a fresh read found nothing to say.</summary>
+    private async Task<string?> FreshBlockAsync()
+    {
+        if (_freshLine is null || await _freshLine(_line).ConfigureAwait(true) is not { } line)
+        {
+            return null;
+        }
+
+        return line switch
+        {
+            // Not a repository right now (a share gone offline, git gave no state): nothing new either.
+            { IsRepository: false } or { Branch: null } or { DirtyCount: null } => null,
+            { StableBuild: null } => "its build scripts are not there any more",
+            _ => StableBuildCheck.BuildBlock(line),
+        };
     }
 
     [RelayCommand(CanExecute = nameof(CanRun))]

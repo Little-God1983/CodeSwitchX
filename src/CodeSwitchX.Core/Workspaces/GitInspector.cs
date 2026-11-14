@@ -8,7 +8,8 @@ namespace CodeSwitchX.Core.Workspaces;
 /// <param name="DirtyCount">Changed and untracked files; null when git could not report them (not a repository, git missing, refused or timed out).</param>
 /// <param name="GitDir">The repository's git directory, full path; two folders with the same one are in the same checkout.</param>
 /// <param name="Head">The commit the checkout is at, the full hash (#426); null when git could not tell, or there is no commit yet.</param>
-public sealed record GitInfo(bool IsRepository, string? Branch, int? DirtyCount, string? GitDir = null, string? Head = null);
+/// <param name="Top">The checkout's top folder, full path: where its <c>.git</c> is (#425). Null outside a repository.</param>
+public sealed record GitInfo(bool IsRepository, string? Branch, int? DirtyCount, string? GitDir = null, string? Head = null, string? Top = null);
 
 /// <summary>A checkout's branch lacks commits its branch on GitHub has (#426).</summary>
 /// <param name="Commits">How many; null when only "behind" can be told (a shallow clone, commits of its own, no count from GitHub).</param>
@@ -75,7 +76,7 @@ public sealed class GitInspector
     /// folder has a <c>.git</c> file whose pointer leads nowhere: that is a repository that cannot be reached, not a folder without one.
     /// </summary>
     internal static string? GitDirOfFolder(string folder, out bool dangling) =>
-        ResolveGitDir(folder, DefaultProfileDirectory, out dangling) is { } gitDir ? Path.GetFullPath(gitDir) : null;
+        ResolveGitDir(folder, DefaultProfileDirectory, out dangling, out _) is { } gitDir ? Path.GetFullPath(gitDir) : null;
 
     public static string? ReadBranch(string root) => ReadHead(ResolveGitDir(root, DefaultProfileDirectory));
 
@@ -107,7 +108,7 @@ public sealed class GitInspector
         // Off the caller's thread before touching the disk: callers start on the UI thread, and a folder on an offline
         // network share blocks Directory.Exists for about 20 s. Task.Yield would come back to the UI thread.
         await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
-        var gitDir = ResolveGitDir(root, _profileDirectory);
+        var gitDir = ResolveGitDir(root, _profileDirectory, out _, out var top);
         if (gitDir is null)
         {
             return new GitInfo(false, null, null);
@@ -125,7 +126,7 @@ public sealed class GitInspector
         var lines = status?.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.Trim('\r')).Where(l => l.Length > 0).ToList();
         int? dirty = lines?.Count(l => !l.StartsWith('#'));
         var head = lines?.FirstOrDefault(l => l.StartsWith(HeadLinePrefix, StringComparison.Ordinal))?[HeadLinePrefix.Length..].Trim();
-        return new GitInfo(true, branch, dirty, Path.GetFullPath(gitDir), IsFullHash(head) ? head : null);
+        return new GitInfo(true, branch, dirty, Path.GetFullPath(gitDir), IsFullHash(head) ? head : null, top);
     }
 
     /// <summary>
@@ -330,11 +331,13 @@ public sealed class GitInspector
         }
     }
 
-    private static string? ResolveGitDir(string root, string profileDirectory) => ResolveGitDir(root, profileDirectory, out _);
+    private static string? ResolveGitDir(string root, string profileDirectory) => ResolveGitDir(root, profileDirectory, out _, out _);
 
-    private static string? ResolveGitDir(string root, string profileDirectory, out bool dangling)
+    /// <param name="top">The folder the <c>.git</c> was found in: the checkout's top, full path; null where no git directory is returned.</param>
+    private static string? ResolveGitDir(string root, string profileDirectory, out bool dangling, out string? top)
     {
         dangling = false;
+        top = null;
         if (!Directory.Exists(root))
         {
             return null;
@@ -355,6 +358,7 @@ public sealed class GitInspector
             var dotGit = Path.Combine(dir.FullName, ".git");
             if (Directory.Exists(dotGit))
             {
+                top = dir.FullName;
                 return dotGit;
             }
 
@@ -362,6 +366,7 @@ public sealed class GitInspector
             {
                 var followed = FollowGitDirPointer(dir.FullName, dotGit);
                 dangling = followed is null;
+                top = followed is null ? null : dir.FullName;
                 return followed;
             }
         }

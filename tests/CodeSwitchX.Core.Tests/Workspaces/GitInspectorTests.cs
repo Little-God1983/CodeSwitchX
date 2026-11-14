@@ -63,7 +63,7 @@ public class GitInspectorTests : IDisposable
 
         var info = await inspector.InspectAsync(_root, CancellationToken.None);
 
-        info.ShouldBe(new GitInfo(true, "main", 2, Path.Combine(_root, ".git"), Here), "the git directory tells folders of one checkout apart from another repository");
+        info.ShouldBe(new GitInfo(true, "main", 2, Path.Combine(_root, ".git"), Here, _root), "the git directory tells folders of one checkout apart from another repository");
         asked.ShouldBe(["status --porcelain=v2 --branch --no-ahead-behind --untracked-files=normal"], "the commit comes with the status, at no process of its own");
     }
 
@@ -208,7 +208,7 @@ public class GitInspectorTests : IDisposable
         File.WriteAllText(Path.Combine(_root, ".git", "HEAD"), "ref: refs/heads/main\n");
         var inspector = new GitInspector((_, _, _) => Task.FromResult<string?>(null));
 
-        (await inspector.InspectAsync(_root, CancellationToken.None)).ShouldBe(new GitInfo(true, "main", null, Path.Combine(_root, ".git")), "a failed status must not claim a clean tree");
+        (await inspector.InspectAsync(_root, CancellationToken.None)).ShouldBe(new GitInfo(true, "main", null, Path.Combine(_root, ".git"), Top: _root), "a failed status must not claim a clean tree");
         (await inspector.InspectAsync(Path.Combine(_root, "nope"), CancellationToken.None)).ShouldBe(new GitInfo(false, null, null));
     }
 
@@ -276,6 +276,7 @@ public class GitInspectorTests : IDisposable
 
         info.IsRepository.ShouldBeTrue();
         info.Branch.ShouldBe("main");
+        info.Top.ShouldBe(_root, "the top is where the .git is, which the stable-build scripts are looked for at (#425)");
     }
 
     [Fact]
@@ -293,6 +294,7 @@ public class GitInspectorTests : IDisposable
 
         info.GitDir.ShouldBe(gitdir);
         inspector.GitDirOf(worktree).ShouldBe(info.GitDir);
+        info.Top.ShouldBe(worktree, "a worktree's top is the folder with the .git file, not the git directory it points at");
     }
 
     [Fact]
