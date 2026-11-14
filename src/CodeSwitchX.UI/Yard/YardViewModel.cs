@@ -735,8 +735,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// <paramref name="line"/>'s repository as it is now, for a Build pressed (#425): its git, its scripts and how far it is behind, read
-    /// for that one repository and nothing else on the tile, so the answer comes quickly and from after the press. Null when it could not
-    /// be read, or the Yard closed.
+    /// for that one repository and nothing else on the tile, so the answer comes quickly and from after the press. Where it stands on
+    /// GitHub is read too, beside git (#429): a merge made outside the Yard (on github.com, by a chat) would otherwise be up to ten minutes
+    /// away, and the build start only for its script to refuse. Null when git could not be read, or the Yard closed.
     /// </summary>
     internal async Task<GitLine?> FreshLineAsync(GitLine line)
     {
@@ -747,7 +748,10 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
         try
         {
+            // A GitHub read that fails leaves what was last read, which the comparison then goes by, as the round does.
+            var gitHubRead = _gitHub is not null && line is { IsRepository: true, Path: { } path } ? RefreshGitHubAsync([path]) : Task.FromResult(default(GitHubRoundResult));
             var info = await _git.InspectAsync(scripts.RepoPath, _gitHubStop.Token).ConfigureAwait(false);
+            await gitHubRead.ConfigureAwait(false);
             var fresh = line with
             {
                 Branch = info.Branch, DirtyCount = info.DirtyCount, Head = info.Head, IsRepository = info.IsRepository, GitDir = info.GitDir,
@@ -863,9 +867,18 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         // The pills are taken from the GitHub side when the tile shows the lines, not before: a result stored meanwhile is not overwritten by an older one.
         _ui.Post(() =>
         {
-            if (tile.ShowGit(lines.Select(WithGitHub).ToList(), read))
+            var shown = lines.Select(WithGitHub).ToList();
+            if (tile.ShowGit(shown, read))
             {
                 FollowPanelBranch();
+
+                // GitHub's commit moved while git compared against the one before (#429): the read of GitHub saw no line to ask about, as
+                // the line was not on the branch yet. Asked again now, not at the next round, up to 30 s on. A line git gave no answer for
+                // has no commit it was compared with, so this never asks round after round.
+                if (shown.Any(l => l.BehindAgainst is not null && l.BehindIsOutOfDate) && !_disposed)
+                {
+                    _ = RequestGitRefresh(CancellationToken.None, again: true);
+                }
             }
         });
 
@@ -1042,7 +1055,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     {
         if (GitHubPanel?.CheckoutPath is { } path && LinesOf(path).FirstOrDefault() is { } line)
         {
-            GitHubPanel.FollowBranch(line.Branch);
+            GitHubPanel.FollowBranch(line.Branch, line.DirtyCount);
         }
     }
 
@@ -1344,7 +1357,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
 
         GitHubPanel?.CloseCommand.Execute(null);
-        var checkout = line?.Path is { } path ? new PanelCheckout(path, line.Branch, () => ChatIsWorkingIn(line, activity.Repo), GitJobs, line.GitDir) : null;
+        var checkout = line?.Path is { } path ? new PanelCheckout(path, line.Branch, () => ChatIsWorkingIn(line, activity.Repo), GitJobs, line.GitDir, line.DirtyCount) : null;
         var panel = new GitHubPanelViewModel(activity, kind, _gitHubReader, _gitHub, _gitHubBrowsers, _clipboard, _ui, _time, _logger,
             closed => { if (ReferenceEquals(GitHubPanel, closed)) { GitHubPanel = null; } }, checkout);
         GitHubPanel = panel;

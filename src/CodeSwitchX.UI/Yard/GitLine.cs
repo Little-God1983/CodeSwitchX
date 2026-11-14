@@ -71,8 +71,17 @@ public sealed record GitLine(string? Folder, string? Branch, int? DirtyCount, st
 
     private bool SameCommitsAs([NotNullWhen(true)] GitLine? before, string onGitHub) => before is not null && before.Head == Head && before.BehindAgainst == onGitHub;
 
-    /// <summary>The state pill: "clean" or "3 changed". A line that is behind GitHub is not clean (#426), so it has none for no changed files.</summary>
-    public string? GitStateLabel => Label(DirtyCount, Behind is not null);
+    /// <summary>
+    /// The state pill: "clean" or "3 changed". A line that is behind GitHub is not clean (#426), so it has none for no changed files; nor
+    /// has one that is still to be compared with GitHub's commit (#429): git gave no answer yet, and "clean" would be made up.
+    /// </summary>
+    public string? GitStateLabel => Label(DirtyCount, Behind is not null || BehindUnknown);
+
+    /// <summary>
+    /// The line is to be compared with a commit GitHub has, and is not yet (#429): git gave no answer, or GitHub was read after git. A
+    /// line not on the default branch, or with nothing read on GitHub, has nothing to be compared with, and this is false.
+    /// </summary>
+    internal bool BehindUnknown => Behind is null && BehindAgainst is null && ComparedHead(this, GitHub) is not null;
 
     /// <summary>The second pill (#426): "12 behind", or "behind" where the count cannot be told; null when the line is not behind.</summary>
     public string? BehindLabel => Behind switch

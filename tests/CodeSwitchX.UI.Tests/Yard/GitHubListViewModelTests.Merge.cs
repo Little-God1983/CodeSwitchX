@@ -22,13 +22,13 @@ public partial class GitHubListViewModelTests
     /// and merges into <paramref name="into"/>; the repository's default branch is main.
     /// </summary>
     private async Task<GitHubPanelViewModel> OpenForMerge(string? branch = "b", string into = "main", bool fromFork = false, Func<bool>? working = null, YardGitJobs? jobs = null,
-        string? head = null)
+        string? head = null, int? changed = 0)
     {
         var (activity, pill) = await PillAsync();
         var pr = pill.Activity.NewestPullRequests.Single() with { BaseBranch = into, IsCrossRepository = fromFork, HeadSha = head };
         var repo = pill.Activity with { DefaultBranch = "main", NewestPullRequests = [pr] };
         return new GitHubPanelViewModel(repo, GitHubItemKind.PullRequest, new GitHubReader(_gh), activity, Browsers(), _clipboard, new ImmediateDispatcher(), _time,
-            NullLogger.Instance, _closedLists.Add, new PanelCheckout(@"C:\app", branch, working ?? (() => false), jobs ?? MergingJobs()));
+            NullLogger.Instance, _closedLists.Add, new PanelCheckout(@"C:\app", branch, working ?? (() => false), jobs ?? MergingJobs(), ChangedFiles: changed));
     }
 
     private static GitHubRow Row(GitHubPanelViewModel model) => model.PullRequests.Rows.Single();
@@ -58,6 +58,44 @@ public partial class GitHubListViewModelTests
         model.OpenMergeCommand.Execute(Row(model));
 
         model.MergeStrip.ShouldBe(new MergeStrip(Row(model), "Merge #9 into main?", "This workspace is on its branch. Merge and pull switches it to main and pulls.", true, "Merge only", "main"));
+    }
+
+    [Theory]
+    [InlineData("main", 3, "This workspace is on main with 3 changed files, so the pull is left out.")]
+    [InlineData("b", 1, "This workspace is on its branch with 1 changed file, so the switch is left out.")]
+    public async Task Changed_files_leave_the_pull_out_and_say_so(string branch, int changed, string line)
+    {
+        // The pull stops at uncommitted changes: the strip must not promise it (#429).
+        var model = await OpenForMerge(branch, changed: changed);
+
+        model.OpenMergeCommand.Execute(Row(model));
+
+        var strip = model.MergeStrip.ShouldNotBeNull();
+        strip.OffersPull.ShouldBeFalse();
+        strip.MergeText.ShouldBe("Merge only");
+        strip.CheckoutLine.ShouldBe(line);
+    }
+
+    [Fact]
+    public async Task Changed_files_unknown_to_git_leave_the_pull_offered()
+    {
+        var model = await OpenForMerge("main", changed: null);
+
+        model.OpenMergeCommand.Execute(Row(model));
+
+        model.MergeStrip.ShouldNotBeNull().OffersPull.ShouldBeTrue("the pull checks for itself; nothing known is no reason to hold it back");
+    }
+
+    [Fact]
+    public async Task A_line_that_gets_changed_files_closes_the_open_strip()
+    {
+        var model = await OpenForMerge("main");
+        model.OpenMergeCommand.Execute(Row(model));
+        model.MergeStrip.ShouldNotBeNull().OffersPull.ShouldBeTrue();
+
+        model.FollowBranch("main", 2);
+
+        model.MergeStrip.ShouldBeNull("its choices were worked out for a checkout without changes");
     }
 
     [Theory]

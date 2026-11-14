@@ -127,7 +127,7 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
 
         // A cancelled run gives nothing, which is neither "cannot see it" nor a reason to start the other accounts.
         ct.ThrowIfCancellationRequested();
-        if (answer.Output is not { } output)
+        if ((answer.Output ?? OnlyTheHeadFailed(answer.FailureOutput)) is not { } output)
         {
             return new AccountRead(NotFound: IsNotFound(answer.FailureOutput));
         }
@@ -195,6 +195,40 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
         var rows = parsed.ToList();
         var list = new GitHubList(rows.OfType<GitHubItem>().ToList(), rows.Count(item => item is null));
         return list.Items.Count == 0 && list.Skipped > 1 ? null : list;
+    }
+
+    /// <summary>
+    /// What <c>gh api graphql</c> printed before exiting with an error, when every error is about where the default branch stands (#429):
+    /// its commit or its count of commits, which ride in the one request for the pills. The counts and the lists are read all the same, and
+    /// the tiles then say nothing about being behind, as for an answer without them. Null for any other answer.
+    /// </summary>
+    internal static string? OnlyTheHeadFailed(string? printed)
+    {
+        if (printed is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(printed);
+            var root = doc.RootElement;
+            return root.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Object
+                && data.TryGetProperty("repository", out var repository) && repository.ValueKind == JsonValueKind.Object
+                && root.TryGetProperty("errors", out var errors) && errors.ValueKind == JsonValueKind.Array && errors.GetArrayLength() > 0
+                && errors.EnumerateArray().All(UnderTheHead)
+                ? printed
+                : null;
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+        {
+            return null;
+        }
+
+        static bool UnderTheHead(JsonElement error) =>
+            error.ValueKind == JsonValueKind.Object && error.TryGetProperty("path", out var path) && path.ValueKind == JsonValueKind.Array
+            && path.GetArrayLength() > 2
+            && path[0].ValueEquals("repository") && path[1].ValueEquals("defaultBranchRef") && path[2].ValueEquals("target");
     }
 
     /// <summary>

@@ -57,10 +57,40 @@ public class GitHubReaderTests
 
     private const string NotFound = """{"data":{"repository":null},"errors":[{"type":"NOT_FOUND","path":["repository"],"message":"Could not resolve to a Repository."}]}""";
 
+    /// <summary>GitHub's answer when only the default branch's count of commits failed (#429): the data is there, with an error for that one field.</summary>
+    private const string CountFailed = """
+        {"data":{"repository":{"viewerPermission":"ADMIN","defaultBranchRef":{"name":"main","target":{"oid":"7d6783b6e4ca65062d1ab6cdfe82e5b5f29e0728","history":null}},
+        "issues":{"totalCount":3,"nodes":[]},"pullRequests":{"totalCount":1,"nodes":[]}}},
+        "errors":[{"type":"SERVICE_UNAVAILABLE","path":["repository","defaultBranchRef","target","history"],"message":"Timeout on history"}]}
+        """;
+
     private static Task<RepoRead> Outcome(FakeGh gh, GitHubRepo? repo = null) =>
         new GitHubReader(gh).ReadAsync(repo ?? Repo, gh.Accounts, CancellationToken.None);
 
     private static async Task<RepoActivity?> Read(FakeGh gh, GitHubRepo? repo = null) => (await Outcome(gh, repo)).Activity;
+
+    [Fact]
+    public async Task An_error_on_the_default_branchs_count_of_commits_still_reads_the_repository()
+    {
+        // gh exits with an error for a partial answer; the pills must not go with the count they do not need (#429).
+        var gh = Fake(["acme"], new() { ["acme"] = null });
+        gh.Printed["acme"] = CountFailed;
+
+        var activity = (await Read(gh)).ShouldNotBeNull();
+
+        activity.OpenIssues.ShouldBe(3);
+        activity.OpenPullRequests.ShouldBe(1);
+        activity.DefaultHead.ShouldBe(new GitHubHead("7d6783b6e4ca65062d1ab6cdfe82e5b5f29e0728", null), "the commit is there, its count is not");
+    }
+
+    [Fact]
+    public async Task An_error_anywhere_else_still_fails_the_read()
+    {
+        var gh = Fake(["acme"], new() { ["acme"] = null });
+        gh.Printed["acme"] = CountFailed.Replace("""["repository","defaultBranchRef","target","history"]""", """["repository","issues"]""", StringComparison.Ordinal);
+
+        (await Read(gh)).ShouldBeNull();
+    }
 
     [Theory]
     [InlineData("Zed", "acme")]
