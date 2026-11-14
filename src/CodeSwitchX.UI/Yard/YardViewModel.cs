@@ -975,7 +975,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         _ui.Post(() =>
         {
             var shown = lines.Select(WithGitHub).ToList();
-            if (tile.ShowGit(shown, read, compared))
+            if (tile.ShowGit(shown, read, compared) is { } applied)
             {
                 FollowPanelBranch();
 
@@ -983,7 +983,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
                 // saw no line to ask about, as the line was not on the branch yet. This tile is read again now, not at the next round, up to 30 s on.
                 // Only for a line git compared this round, and against another commit than GitHub has now: a line git gave no answer for
                 // was given the commit it has now, so this never asks round after round.
-                if (shown.Select((l, i) => compared[i] && GitLine.ComparedHead(l, l.GitHub)?.Sha != given[i]).Any(again => again) && !_disposed)
+                // Only for a line shown from this read.
+                if (shown.Select((l, i) => applied[i] && compared[i] && GitLine.ComparedHead(l, l.GitHub)?.Sha != given[i]).Any(again => again) && !_disposed)
                 {
                     // After a read of the tile under way, which may be the very one that found the line out of date (#433).
                     RefreshGitOf(tile, after: true);

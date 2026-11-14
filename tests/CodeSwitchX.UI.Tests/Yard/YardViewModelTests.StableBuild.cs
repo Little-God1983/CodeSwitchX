@@ -92,17 +92,19 @@ public partial class YardViewModelTests
         await yard.InitializeAsync(CancellationToken.None);
         await yard.RefreshGitAsync(CancellationToken.None);
         var tile = yard.FindTile(app.Id)!;
-        tile.OpenBuildMenu().ShouldBeEmpty();
+        var (entries, reads) = tile.OpenBuildMenu();
+        entries.ShouldBeEmpty();
+        reads.ShouldBeTrue();
         await tile.MenuGitRead.ShouldNotBeNull();
         Directory.CreateDirectory(Path.Combine(app.RootPath, "scripts"));
         File.WriteAllText(Path.Combine(app.RootPath, "scripts", "build.ps1"), "# build");
         File.WriteAllText(Path.Combine(app.RootPath, "scripts", "_common.ps1"), "$script:ShortcutName = 'App.lnk'\n");
 
-        tile.OpenBuildMenu().ShouldBeEmpty("as of the last read");
+        tile.OpenBuildMenu().Entries.ShouldBeEmpty("as of the last read");
         await tile.MenuGitRead!;
 
         tile.StableBuildEntries().ShouldHaveSingleItem();
-        yard.FindTile(plain.Id)!.OpenBuildMenu();
+        yard.FindTile(plain.Id)!.OpenBuildMenu().Reads.ShouldBeFalse();
         yard.FindTile(plain.Id)!.MenuGitRead.ShouldBeNull("a tile with no repository has nothing to read");
     }
 
@@ -121,8 +123,13 @@ public partial class YardViewModelTests
         var tile = yard.FindTile(app.Id)!;
         var before = tile.StableBuildInputs();
 
-        tile.ShowGit([tile.GitLines[0] with { Head = new string('c', 40) }]);
+        tile.ShowGit([tile.GitLines[0] with { Issues = null, PullRequests = null, GitHub = null, Path = tile.GitLines[0].Path }]);
+        tile.ShowGit([tile.GitLines[0] with { TrackedChanges = 7 }]);
         tile.StableBuildInputs().SequenceEqual(before).ShouldBeTrue("nothing the entries come from changed");
+
+        tile.ShowGit([tile.GitLines[0] with { Head = new string('c', 40) }]);
+        tile.StableBuildInputs().SequenceEqual(before).ShouldBeFalse("a build moves the commit as it writes the shortcut");
+        before = tile.StableBuildInputs();
 
         tile.ShowGit([tile.GitLines[0] with { DirtyCount = 2 }]);
         tile.StableBuildInputs().SequenceEqual(before).ShouldBeFalse();
@@ -142,14 +149,34 @@ public partial class YardViewModelTests
         var earlier = tile.StartGitRead();
         var later = tile.StartGitRead();
 
-        tile.ShowGit([shown], later, [false]).ShouldBeTrue();
-        tile.ShowGit([shown with { DirtyCount = 3 }], earlier, [true]).ShouldBeTrue();
+        tile.ShowGit([shown], later, [false]).ShouldNotBeNull();
+        tile.ShowGit([shown with { DirtyCount = 3 }], earlier, [true]).ShouldBe([true]);
         tile.GitLines[0].DirtyCount.ShouldBe(3);
 
         var newest = tile.StartGitRead();
-        tile.ShowGit([shown with { DirtyCount = 1 }], newest, [true]).ShouldBeTrue();
-        tile.ShowGit([shown with { DirtyCount = 5 }], earlier, [true]).ShouldBeFalse("a later read looked at the folder");
+        tile.ShowGit([shown with { DirtyCount = 1 }], newest, [true]).ShouldBe([true]);
+        tile.ShowGit([shown with { DirtyCount = 5 }], earlier, [true]).ShouldBeNull("a later read looked at the folder");
         tile.GitLines[0].DirtyCount.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_later_read_that_carried_a_line_over_does_not_put_it_back_over_an_earlier_reads_look()
+    {
+        // The other order (review of #431): the earlier read is shown first, then the later one, which could not look at the folder.
+        var app = new Workspace { Name = "App", RootPath = Repo("app"), TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([app]));
+        var yard = Yard((_, _, _) => Task.FromResult<string?>(string.Empty));
+        await yard.InitializeAsync(CancellationToken.None);
+        await yard.RefreshGitAsync(CancellationToken.None);
+        var tile = yard.FindTile(app.Id)!;
+        var stale = tile.GitLines[0];
+        var earlier = tile.StartGitRead();
+        var later = tile.StartGitRead();
+
+        tile.ShowGit([stale with { DirtyCount = 3 }], earlier, [true]).ShouldBe([true]);
+        tile.ShowGit([stale], later, [false]).ShouldBe([false]);
+
+        tile.GitLines[0].DirtyCount.ShouldBe(3, "the carried line is older than the earlier read's look");
     }
 
     [Fact]
