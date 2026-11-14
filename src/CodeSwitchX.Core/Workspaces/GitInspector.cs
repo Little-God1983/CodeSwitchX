@@ -260,7 +260,8 @@ public sealed class GitInspector
     /// The commits <paramref name="branch"/> pointed at here, newest first, as its own reflog keeps them (#435): made, amended, rebased,
     /// pulled or created on it. A commit only looked at on another branch, or fetched, is not among them, nor under them. Empty where the
     /// reflog is (logging off, expired) or the name has a quote, which git allows and the command line cannot carry; null when git gave no
-    /// answer.
+    /// answer. A tip rewritten away is kept as long as git keeps its entry: 30 days by default (gc.reflogExpireUnreachable), after which its
+    /// commits, should GitHub still have them, count as behind.
     /// </summary>
     private async Task<List<string>?> FormerTipsAsync(string root, string branch, CancellationToken ct)
     {
