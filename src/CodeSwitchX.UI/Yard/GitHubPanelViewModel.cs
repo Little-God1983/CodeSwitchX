@@ -263,7 +263,8 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
         // The workspace is on the branch the merge lands on (#426), the default one or another (#428): the merge alone would leave it behind
         // GitHub, with nothing on the tile to say so until the next read. Wherever the pull request comes from, a fork too.
         var onBase = Branch is not null && Branch == (item.BaseBranch ?? main);
-        var pullable = onBase || (onBranch && main is not null && into == main);
+        // From the pull request's own branch, the switch goes to the branch it merges into, the default one or another (#428).
+        var pullable = onBase || (onBranch && (item.BaseBranch ?? main) is not null);
         var busy = pullable && checkout.ChatIsWorking();
         // A pull stops at changes to tracked files, and would leave the branch behind after promising otherwise (#429): said here, before the
         // merge. Untracked files go along with the switch, as the pull lets them.
@@ -275,8 +276,8 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
             : !onBranch ? (item.IsCrossRepository ? $"It comes from a fork. {stays}" : stays)
             : busy ? "A chat is working here, so the switch is left out."
             : changed is not null ? $"This workspace is on its branch with {changed}, so the switch is left out."
-            : pullable ? $"This workspace is on its branch. Merge and pull switches it to {main} and pulls."
-            : $"It merges into {into}, not {main ?? "the default branch"}. {stays}";
+            : pullable ? $"This workspace is on its branch. Merge and pull switches it to {into} and pulls."
+            : stays;
         return new MergeStrip(row, $"Merge {row.NumberText} into {into}?", line, pullable && !busy && changed is null, pullable ? "Merge only" : "Merge", into);
     }
 
@@ -342,10 +343,10 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
         if (!busy && jobs.TakeOutcome(_checkout.Key, _checkout.Tree) is { } outcome)
         {
             ShowAction(outcome.Message, failed: !outcome.Succeeded);
-            if (outcome.Pulled && !opening)
+            if (outcome.PulledBranch is { } pulled && !opening)
             {
                 // Where the pull left it: develop after a Merge and pull into develop (#428).
-                Branch = outcome.PulledBranch ?? _repo.DefaultBranch;
+                Branch = pulled;
             }
 
             // A pull request that moved since it was read: the list is read again, so the next Merge goes for its new head (#414).

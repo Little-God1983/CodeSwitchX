@@ -132,7 +132,6 @@ public partial class GitHubListViewModelTests
     [Theory]
     [InlineData("other", "main", false, "This workspace stays on other.")]
     [InlineData("b", "main", true, "It comes from a fork. This workspace stays on b.")]
-    [InlineData("b", "develop", false, "It merges into develop, not main. This workspace stays on b.")]
     public async Task Elsewhere_a_forks_branch_or_another_base_offer_merge_alone(string branch, string into, bool fromFork, string line)
     {
         var model = await OpenForMerge(branch, into, fromFork);
@@ -270,15 +269,22 @@ public partial class GitHubListViewModelTests
     }
 
     [Fact]
-    public async Task On_the_pull_requests_branch_with_another_base_the_strip_still_offers_merge_alone()
+    public async Task On_the_pull_requests_branch_with_another_base_merge_and_pull_switches_to_that_base()
     {
-        // Only the default branch is switched to from a pull request's branch (#408); #428 changed the workspace already on the base.
+        // The pull goes to whatever branch the merge lands on (#428), as it went to the default one (#408).
+        _git.Current = "b";
         var model = await OpenForMerge("b", into: "develop");
 
         model.OpenMergeCommand.Execute(Row(model));
 
-        model.MergeStrip.ShouldNotBeNull().OffersPull.ShouldBeFalse();
-        model.MergeStrip.CheckoutLine.ShouldBe("It merges into develop, not main. This workspace stays on b.");
+        model.MergeStrip.ShouldNotBeNull().OffersPull.ShouldBeTrue();
+        model.MergeStrip.CheckoutLine.ShouldBe("This workspace is on its branch. Merge and pull switches it to develop and pulls.");
+
+        model.MergeAndPullCommand.Execute(null);
+
+        await Eventually(() => !model.IsBusy && model.ActionMessage is not null);
+        _git.Ran.ShouldContain(r => r.Contains("origin/develop", StringComparison.Ordinal));
+        _git.Ran.ShouldNotContain(r => r.Contains("main", StringComparison.Ordinal));
     }
 
     [Fact]

@@ -754,8 +754,6 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
         try
         {
-            // A GitHub read that fails leaves what was last read, which the comparison then goes by, as the round does.
-            var gitHubRead = _gitHub is not null && line is { IsRepository: true, Path: { } path } ? RefreshGitHubAsync([path]) : Task.FromResult(default(GitHubRoundResult));
             var info = await _git.InspectAsync(scripts.RepoPath, _gitHubStop.Token).ConfigureAwait(false);
             var read = line with
             {
@@ -766,6 +764,15 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             if (StableBuildCheck.BuildBlock(read) is not null)
             {
                 return read;
+            }
+
+            // After git, with the branch it read: one switched to since the last pass is what GitHub is asked about (review of #428). A GitHub
+            // read that fails leaves what was last read, which the comparison then goes by, as the round does.
+            var gitHubRead = Task.FromResult(default(GitHubRoundResult));
+            if (_gitHub is not null && read is { IsRepository: true, Path: { } path })
+            {
+                _gitHub.FollowBranches([(path, BranchOf(read))]);
+                gitHubRead = RefreshGitHubAsync([path]);
             }
 
             try
@@ -858,6 +865,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
                     {
                         if (BranchOf(line) is not { } branch || _gitHub.ForFolder(line.Path!) is not { } activity)
                         {
+                            // Detached, or nothing read yet: whatever it was asked for before is no longer where it is.
+                            ForgetBranchAsk(line.Path!);
                             continue;
                         }
 
@@ -873,6 +882,13 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
                     }
 
                     unasked = [.. unasked.Where(l => !BranchAsked(l.Path, l.Branch))];
+                    lock (_gitHubAsked)
+                    {
+                        foreach (var gone in _branchAsked.Keys.Where(f => !paths.Contains(f, StringComparer.OrdinalIgnoreCase)).ToList())
+                        {
+                            _branchAsked.Remove(gone);
+                        }
+                    }
                     var round = new object();
                     var unknown = AskGitHubOf(paths.Where(p => !_gitHub.Knows(p)).Concat(unasked.Select(l => l.Path)).Distinct(StringComparer.OrdinalIgnoreCase), round);
                     lock (_gitHubAsked)
@@ -993,7 +1009,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
                 return line;
             }
 
-            if (line.Path is not { } path || GitLine.ComparedHead(line, _gitHub.ForFolder(path)) is not { } onGitHub)
+            var activity = line.Path is { } folder ? _gitHub.ForFolder(folder) : null;
+            if (line.Path is not { } path || GitLine.ComparedHead(line, activity) is not { } onGitHub)
             {
                 return line is { Behind: null, BehindAgainst: null } ? line : line with { Behind = null, BehindAgainst = null };
             }
@@ -1005,7 +1022,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
                 return line with { Behind = before.Behind, BehindAgainst = onGitHub.Sha };
             }
 
-            return line.WithBehind(await _git.BehindAsync(path, line.Head, onGitHub.Sha, onGitHub.Commits, ct).ConfigureAwait(false), before, onGitHub.Sha);
+            // A branch other than the default one is rewritten as a matter of course (#428): only a fast-forward away is behind there.
+            var fastForwardOnly = line.Branch != activity?.DefaultBranch;
+            return line.WithBehind(await _git.BehindAsync(path, line.Head, onGitHub.Sha, onGitHub.Commits, ct, fastForwardOnly).ConfigureAwait(false), before, onGitHub.Sha);
         })).ConfigureAwait(false);
     }
 
@@ -1088,9 +1107,14 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
     });
 
-    /// <summary>The branch a line is on, for GitHub (#428); null for a detached HEAD, which git names by the start of its commit.</summary>
+    /// <summary>
+    /// The branch a line is on, for GitHub (#428); null for a detached HEAD, which the tile names by the first 7 characters of its commit.
+    /// A branch named like that, the start of the very commit it is at, is taken for one: it would never be found on GitHub anyway.
+    /// </summary>
     private static string? BranchOf(GitLine line) =>
-        line.Branch is { Length: > 0 } branch && !(line.Head?.StartsWith(branch, StringComparison.OrdinalIgnoreCase) ?? false) ? branch : null;
+        line.Branch is { Length: > 0 } branch
+        && !(branch.Length == 7 && branch.All(char.IsAsciiHexDigit) && (line.Head is null || line.Head.StartsWith(branch, StringComparison.OrdinalIgnoreCase)))
+            ? branch : null;
 
     private void ForgetBranchAsk(string folder)
     {

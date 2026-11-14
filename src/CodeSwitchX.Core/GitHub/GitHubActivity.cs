@@ -314,18 +314,18 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
     private IEnumerable<string> FoldersOf(GitHubRepo repo) => _repoOfFolder.Where(p => p.Value == repo).Select(p => p.Key);
 
     /// <summary>
-    /// <paramref name="activity"/> with where the branches it was not asked about stood in <paramref name="last"/>, for those a folder of the
-    /// repository is still on (#428): a read of one folder, or one that left a branch out, does not make the others' lines "clean".
+    /// <paramref name="activity"/> with where the branches it asked about and got no answer for (an error on that one field) stood in
+    /// <paramref name="last"/> (#428): an error is not "GitHub has not got it", and must not turn a line that is behind "clean". A branch not
+    /// asked about is not carried: its commit would be kept round after round as if it were read.
     /// </summary>
-    private RepoActivity WithBranchesKept(RepoActivity activity, RepoActivity? last)
+    private static RepoActivity WithBranchesKept(RepoActivity activity, RepoActivity? last, IReadOnlyList<string> asked)
     {
         if (last?.BranchHeads is not { Count: > 0 } kept)
         {
             return activity;
         }
 
-        var inUse = FoldersOf(activity.Repo).Select(f => _branchOfFolder.GetValueOrDefault(f)).OfType<string>().ToHashSet(StringComparer.Ordinal);
-        var carried = kept.Where(p => inUse.Contains(p.Key) && p.Key != activity.DefaultBranch && activity.BranchHeads?.ContainsKey(p.Key) != true).ToList();
+        var carried = kept.Where(p => asked.Contains(p.Key) && p.Key != activity.DefaultBranch && activity.BranchHeads?.ContainsKey(p.Key) != true).ToList();
         if (carried.Count == 0)
         {
             return activity;
@@ -371,7 +371,7 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
 
             lock (_gate)
             {
-                activity = WithBranchesKept(activity, _results.GetValueOrDefault(repo));
+                activity = WithBranchesKept(activity, _results.GetValueOrDefault(repo), branches);
                 if (_results.TryGetValue(repo, out var last) && last.SameAs(activity))
                 {
                     return (false, null);

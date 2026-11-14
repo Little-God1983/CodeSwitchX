@@ -57,10 +57,10 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
     /// Counts and the newest items, read as the best of <paramref name="accounts"/>. Nothing read is <see cref="RepoRead.NotFound"/>
     /// only when every account said so; an account that failed might be the one that can see it, and no accounts said nothing.
     /// </summary>
-    /// <param name="branches">Branches besides the default one to read where they stand (#428), the first <see cref="MostBranches"/> of them.</param>
+    /// <param name="branches">Branches besides the default one to read where they stand (#428), each once; the caller keeps them few (<see cref="MostBranches"/>).</param>
     public async Task<RepoRead> ReadAsync(GitHubRepo repo, IReadOnlyList<string> accounts, CancellationToken ct, IReadOnlyList<string>? branches = null)
     {
-        branches = branches is null ? [] : [.. branches.Distinct(StringComparer.Ordinal).Take(MostBranches)];
+        branches ??= [];
         var candidates = accounts.Order(StringComparer.OrdinalIgnoreCase).ToList();
         var everyoneSaysNotFound = candidates.Count > 0;
 

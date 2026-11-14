@@ -12,8 +12,11 @@ public partial class YardGitHubTests
 
     private readonly List<string> _gitRan = [];
 
-    /// <summary>Git with the checkout at <paramref name="head"/>, a clean tree, GitHub's commit fetched and <paramref name="behind"/> commits short of it.</summary>
-    private void GitIsAt(string head, int behind = 0) => _gitRunner = args =>
+    /// <summary>
+    /// Git with the checkout at <paramref name="head"/>, a clean tree, GitHub's commit fetched and <paramref name="behind"/> commits short of it,
+    /// holding <paramref name="ahead"/> commits of its own that GitHub's lacks.
+    /// </summary>
+    private void GitIsAt(string head, int behind = 0, int ahead = 0) => _gitRunner = args =>
     {
         lock (_gitRan)
         {
@@ -23,6 +26,7 @@ public partial class YardGitHubTests
         return args.StartsWith("status", StringComparison.Ordinal) ? $"# branch.oid {head}\n# branch.head main\n"
             : args.StartsWith("rev-list --no-walk", StringComparison.Ordinal) ? args[(args.LastIndexOf(' ') + 1)..] + "\n"
             : args.StartsWith("rev-list --count HEAD..", StringComparison.Ordinal) ? $"{behind}\n"
+            : args.StartsWith("rev-list --count ", StringComparison.Ordinal) && args.EndsWith("..HEAD", StringComparison.Ordinal) ? $"{ahead}\n"
             : args.StartsWith("rev-parse --is-shallow-repository", StringComparison.Ordinal) ? "false\n"
             : string.Empty;
     };
@@ -191,6 +195,24 @@ public partial class YardGitHubTests
         }
 
         yard.FindTile(app.Id)!.GitLines[0].GitStateLabel.ShouldBe("clean", "nothing on GitHub to be behind");
+    }
+
+    [Fact]
+    public async Task A_branch_rewritten_here_is_not_behind_the_commit_GitHub_had_before()
+    {
+        // A rebase or an amend on develop leaves GitHub's old commit here (review of #428): no pull brings anything, so nothing is behind.
+        _gh.DefaultHead = new string('a', 40);
+        _gh.Branches["develop"] = OnGitHub;
+        GitIsAt(Here, behind: 4, ahead: 5);
+        var app = Add("App", Repo("app"));
+        File.WriteAllText(Path.Combine(app.RootPath, ".git", "HEAD"), "ref: refs/heads/develop\n");
+        var yard = Yard(true, app);
+
+        await yard.InitializeAsync(CancellationToken.None);
+
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].BehindAgainst == OnGitHub);
+        yard.FindTile(app.Id)!.GitLines[0].Behind.ShouldBeNull();
+        yard.FindTile(app.Id)!.GitLines[0].GitStateLabel.ShouldBe("clean");
     }
 
     [Fact]
