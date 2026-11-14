@@ -330,13 +330,22 @@ public partial class YardGitHubTests
         using var entered = new ManualResetEventSlim();
         using var release = new ManualResetEventSlim();
         var statuses = 0;
+        var secondBeforeRelease = false;
         var git = _gitRunner!;
         _gitRunner = args =>
         {
-            if (args.StartsWith("status", StringComparison.Ordinal) && Interlocked.Increment(ref statuses) == 1)
+            if (args.StartsWith("status", StringComparison.Ordinal))
             {
-                entered.Set();
-                release.Wait(TimeSpan.FromSeconds(10));
+                var n = Interlocked.Increment(ref statuses);
+                if (n == 1)
+                {
+                    entered.Set();
+                    release.Wait(TimeSpan.FromSeconds(10));
+                }
+                else
+                {
+                    secondBeforeRelease |= !release.IsSet;
+                }
             }
 
             return git(args);
@@ -344,10 +353,15 @@ public partial class YardGitHubTests
         yard.RefreshGitOf(tile);
         entered.Wait(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken).ShouldBeTrue();
 
+        // Asked twice meanwhile: one read follows.
+        yard.ReadGitOfCheckout(tile.RootPath);
         yard.ReadGitOfCheckout(tile.RootPath);
         release.Set();
 
         await Eventually(() => Volatile.Read(ref statuses) >= 2);
+        await Quiet();
+        secondBeforeRelease.ShouldBeFalse("after the read under way, not beside it");
+        Volatile.Read(ref statuses).ShouldBe(2, "one read follows however many asked");
     }
 
     [Fact]

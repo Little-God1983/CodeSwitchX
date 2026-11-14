@@ -701,25 +701,32 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// </param>
     public void RefreshGitOf(WorkspaceTileViewModel tile, bool after = false)
     {
-        if (after && tile.MenuGitRead is { IsCompleted: false } running)
+        if (after && tile.MenuGitRead is { IsCompleted: false })
         {
-            _ = ReadAfterAsync(running, tile);
+            // However many ask meanwhile, one read follows.
+            tile.GitReadAgain = true;
             return;
         }
 
         _ = ReadGitOfAsync(tile);
     }
 
-    /// <summary>Reads the tile's git again once <paramref name="running"/> is done, on the UI thread, which owns the tile.</summary>
-    private async Task ReadAfterAsync(Task running, WorkspaceTileViewModel tile)
+    /// <summary>Once <paramref name="read"/> is done, the read asked for after it (<see cref="RefreshGitOf"/>), on the UI thread, which owns the tile.</summary>
+    private async Task ReadAgainAfterAsync(Task read, WorkspaceTileViewModel tile)
     {
         // The read handles and logs its own failures.
-        await running.ConfigureAwait(false);
+        await read.ConfigureAwait(false);
         _ui.Post(() =>
         {
-            if (!_disposed)
+            if (!tile.GitReadAgain)
             {
-                RefreshGitOf(tile, after: true);
+                return;
+            }
+
+            tile.GitReadAgain = false;
+            if (!_disposed && !tile.Removed)
+            {
+                _ = ReadGitOfAsync(tile);
             }
         });
     }
@@ -760,6 +767,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             }
         });
         tile.MenuGitRead = read;
+        _ = ReadAgainAfterAsync(read, tile);
         return read;
     }
 
@@ -948,9 +956,10 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         // Read once for both steps: the second tells the lines the first carried over by their instances.
         var previous = tile.GitLines;
         var found = await GitLinesAsync(tile, info, previous, ct).ConfigureAwait(false);
-        // GitHub's commit each line was compared with, from the one look the comparison takes: none where GitHub was not read yet (#433).
-        var given = new string?[found.Count];
-        var lines = await WithBehindAsync(found, previous, ct, given).ConfigureAwait(false);
+        // With GitHub's commit each line was compared with, from the one look the comparison takes: none where GitHub was not read yet (#433).
+        var comparedWith = await CompareAsync(found, previous, ct).ConfigureAwait(false);
+        var lines = comparedWith.Select(c => c.Line).ToList();
+        var given = comparedWith.Select(c => c.OnGitHub).ToList();
         paths.AddRange(lines.Where(HasRepository).Select(l => l.Path).OfType<string>());
         // A line carried over is the one shown before, its folder not looked at: asking git again for it would carry it over again.
         var compared = lines.Select(l => !previous.Any(p => ReferenceEquals(p, l))).ToList();
@@ -1009,39 +1018,44 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// <paramref name="previous"/> was compared. A line carried over from <paramref name="previous"/> is left as it is: its folder could
     /// not be looked at this round (an offline share blocks every look for about 20 s).
     /// </summary>
-    /// <param name="given">Filled with GitHub's commit each line was compared with (null for none), when given: what a later read of GitHub is told apart from.</param>
-    private async Task<IReadOnlyList<GitLine>> WithBehindAsync(IReadOnlyList<GitLine> lines, IReadOnlyList<GitLine> previous, CancellationToken ct, string?[]? given = null)
+    private async Task<IReadOnlyList<GitLine>> WithBehindAsync(IReadOnlyList<GitLine> lines, IReadOnlyList<GitLine> previous, CancellationToken ct) =>
+        [.. (await CompareAsync(lines, previous, ct).ConfigureAwait(false)).Select(c => c.Line)];
+
+    /// <summary>
+    /// <see cref="WithBehindAsync"/>, each line with GitHub's commit it was compared with (#433): null where there was none, and for a line
+    /// carried over, which was not compared.
+    /// </summary>
+    private async Task<(GitLine Line, string? OnGitHub)[]> CompareAsync(IReadOnlyList<GitLine> lines, IReadOnlyList<GitLine> previous, CancellationToken ct)
     {
         if (_gitHub is null)
         {
-            return lines;
+            return [.. lines.Select(l => (l, (string?)null))];
         }
 
-        return await Task.WhenAll(lines.Select(async (line, i) =>
+        return await Task.WhenAll(lines.Select(async line =>
         {
             if (previous.Any(p => ReferenceEquals(p, line)))
             {
-                return line;
+                return (line, (string?)null);
             }
 
             var activity = line.Path is { } folder ? _gitHub.ForFolder(folder) : null;
-            var compared = GitLine.ComparedHead(line, activity);
-            given?[i] = compared?.Sha;
-            if (line.Path is not { } path || compared is not { } onGitHub)
+            if (line.Path is not { } path || GitLine.ComparedHead(line, activity) is not { } onGitHub)
             {
-                return line is { Behind: null, BehindAgainst: null } ? line : line with { Behind = null, BehindAgainst = null };
+                return (line is { Behind: null, BehindAgainst: null } ? line : line with { Behind = null, BehindAgainst = null }, (string?)null);
             }
 
             var key = YardGitJobs.Key(path);
             var before = previous.FirstOrDefault(p => p.Path is { } shown && YardGitJobs.Key(shown) == key);
             if (line.IsAnsweredBy(before, onGitHub.Sha))
             {
-                return line with { Behind = before.Behind, BehindAgainst = onGitHub.Sha };
+                return (line with { Behind = before.Behind, BehindAgainst = onGitHub.Sha }, onGitHub.Sha);
             }
 
             // A branch other than the default one is rewritten as a matter of course (#428): only a fast-forward away is behind there.
             var fastForwardOnly = line.Branch != activity?.DefaultBranch;
-            return line.WithBehind(await _git.BehindAsync(path, line.Head, onGitHub.Sha, onGitHub.Commits, ct, fastForwardOnly).ConfigureAwait(false), before, onGitHub.Sha);
+            var answer = await _git.BehindAsync(path, line.Head, onGitHub.Sha, onGitHub.Commits, ct, fastForwardOnly).ConfigureAwait(false);
+            return (line.WithBehind(answer, before, onGitHub.Sha), onGitHub.Sha);
         })).ConfigureAwait(false);
     }
 

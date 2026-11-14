@@ -209,10 +209,13 @@ public sealed class GitInspector
         (await _runGit(root, "rev-parse --is-shallow-repository", ct).ConfigureAwait(false))?.Trim() == "false";
 
     /// <summary>
-    /// The changed files git tracks among <c>git status --porcelain</c> lines, either format (#429, #433): "#" lines are headers and "?" an
-    /// untracked file. What a pull stops at: <see cref="GitPuller"/> counts by it, and so does the merge strip that says the pull is left out.
+    /// The changed files git tracks among <c>git status --porcelain</c> lines, either format (#429, #433): what a pull stops at.
+    /// <see cref="GitPuller"/> counts by it from <c>--untracked-files=no</c>, and so does the merge strip, from the tile's status with untracked
+    /// files: "#" lines are headers, "?" an untracked file, "!" an ignored one, and a submodule whose only change is untracked content inside
+    /// it (<c>1 .M S..U</c>) is what <c>--untracked-files=no</c> leaves out too.
     /// </summary>
-    public static int TrackedChangesIn(IEnumerable<string> statusLines) => statusLines.Count(l => l.Length > 0 && !l.StartsWith('#') && !l.StartsWith('?'));
+    internal static int TrackedChangesIn(IEnumerable<string> statusLines) =>
+        statusLines.Select(l => l.Trim('\r')).Count(l => l.Length > 0 && l[0] is not ('#' or '?' or '!') && !l.StartsWith("1 .M S..U ", StringComparison.Ordinal));
 
     /// <summary>What <c>git rev-list --count</c> printed, as a number; null when it printed none.</summary>
     internal static int? Count(string? output) =>
