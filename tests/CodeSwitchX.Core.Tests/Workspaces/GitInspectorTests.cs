@@ -281,13 +281,12 @@ public class GitInspectorTests : IDisposable
 
     [Theory]
     [InlineData("# branch.oid abc\n1 .M N... 100644 100644 100644 92cd 92cd a.cs\n? new.cs\n", 1)]
-    [InlineData("M  a.cs\nR  b.cs -> c.cs\n", 2)]
     [InlineData("", 0)]
     [InlineData("1 .M S..U 160000 160000 160000 92cd 92cd sub\r\n1 .M N... 100644 100644 100644 92cd 92cd a.cs\r\n", 1)]
-    public void Tracked_changes_are_counted_alike_in_either_status_format(string status, int tracked)
+    public void Tracked_changes_leave_headers_untracked_files_and_submodules_with_only_untracked_content_out(string status, int tracked)
     {
-        // The merge strip counts from format 2, the pull from format 1 without untracked files (#433); GitPullerTests runs both on one checkout.
-        GitInspector.TrackedChangesIn(status.Split('\n')).ShouldBe(tracked);
+        // The merge strip and the pull count from one status by one rule (#433); GitPullerTests runs both on one real checkout.
+        GitInspector.TrackedChangesIn(status.Split('\n').Select(l => l.Trim('\r'))).ShouldBe(tracked);
     }
 
     [Fact]

@@ -113,13 +113,13 @@ public sealed class GitPuller
 
         // Checked last, right before the switch: an edit made while the fetch ran would be carried across (review of #407). Tracked files
         // only: untracked ones go along with the switch, and git refuses on its own when one would be overwritten.
-        var status = await _run(checkout, ["status", "--porcelain", "--untracked-files=no"], ReadTimeout, ct).ConfigureAwait(false);
+        // The status the tile reads (#433): one command and one rule, so the merge strip never says the pull goes when it stops, or the other way.
+        var status = await _run(checkout, ["status", ..GitInspector.StatusArguments], ReadTimeout, ct).ConfigureAwait(false);
         if (status.Output is null)
         {
             return Failed(status, "git couldn't read the checkout.");
         }
 
-        // By the rule the merge strip goes by when it says the pull is left out (#433).
         var changed = GitInspector.TrackedChangesIn(Lines(status.Output));
         if (changed > 0)
         {

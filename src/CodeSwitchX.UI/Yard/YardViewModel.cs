@@ -694,17 +694,26 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// </summary>
     public Task RefreshGitAsync(CancellationToken ct) => RequestGitRefresh(ct, again: true);
 
-    /// <summary>A tile's menu opens with Build new version on it (#425): <see cref="ReadGitOfAsync"/>, not waited for.</summary>
+    /// <summary>
+    /// <see cref="ReadGitOfAsync"/>, not waited for: a tile's menu opens with Build new version on it (#425), the merge strip opens (#429),
+    /// a round's line found out of date (#429).
+    /// </summary>
     /// <param name="after">
-    /// A read under way is not enough: it may have run git before what the caller knows of (a commit made a moment ago, GitHub moving on), so
-    /// this one starts once it is done (#433). Otherwise a read under way is the one.
+    /// A menu read under way is not enough: it may have run git before what the caller knows of (a commit made a moment ago, GitHub moving
+    /// on), so one read starts once it is done (#433). Otherwise a menu read under way is the one. A round's read of the tile is not waited
+    /// for: one started now runs beside it, and of the two the later one's lines stand (#425).
     /// </param>
     public void RefreshGitOf(WorkspaceTileViewModel tile, bool after = false)
     {
-        if (after && tile.MenuGitRead is { IsCompleted: false })
+        if (after && tile.MenuGitRead is { IsCompleted: false } running)
         {
             // However many ask meanwhile, one read follows.
-            tile.GitReadAgain = true;
+            if (!tile.GitReadAgain)
+            {
+                tile.GitReadAgain = true;
+                _ = ReadAgainAfterAsync(running, tile);
+            }
+
             return;
         }
 
@@ -767,7 +776,6 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             }
         });
         tile.MenuGitRead = read;
-        _ = ReadAgainAfterAsync(read, tile);
         return read;
     }
 
@@ -816,7 +824,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             }
             // With what GitHub has now, as the comparison goes by: the line's own is the one it was shown with.
             var fresh = WithGitHub(read with { Behind = line.Behind, BehindAgainst = line.BehindAgainst });
-            return (await WithBehindAsync([fresh], [line], _gitHubStop.Token).ConfigureAwait(false))[0];
+            return (await CompareAsync([fresh], [line], _gitHubStop.Token).ConfigureAwait(false))[0].Line;
         }
         catch (OperationCanceledException)
         {
@@ -1013,17 +1021,11 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
-    /// Each line with how far it is behind GitHub (#426): a line on its repository's default branch is compared with the commit GitHub was last
-    /// read to have there, by git and without a fetch, and only when one of the two commits changed since the folder's line in
+    /// Each line with how far it is behind GitHub (#426): a line is compared with the commit GitHub was last read to have on its branch (the
+    /// default one, or another, #428), by git and without a fetch, and only when one of the two commits changed since the folder's line in
     /// <paramref name="previous"/> was compared. A line carried over from <paramref name="previous"/> is left as it is: its folder could
-    /// not be looked at this round (an offline share blocks every look for about 20 s).
-    /// </summary>
-    private async Task<IReadOnlyList<GitLine>> WithBehindAsync(IReadOnlyList<GitLine> lines, IReadOnlyList<GitLine> previous, CancellationToken ct) =>
-        [.. (await CompareAsync(lines, previous, ct).ConfigureAwait(false)).Select(c => c.Line)];
-
-    /// <summary>
-    /// <see cref="WithBehindAsync"/>, each line with GitHub's commit it was compared with (#433): null where there was none, and for a line
-    /// carried over, which was not compared.
+    /// not be looked at this round (an offline share blocks every look for about 20 s). Each comes with GitHub's commit it was compared
+    /// with (#433): null where there was none, and for a line carried over.
     /// </summary>
     private async Task<(GitLine Line, string? OnGitHub)[]> CompareAsync(IReadOnlyList<GitLine> lines, IReadOnlyList<GitLine> previous, CancellationToken ct)
     {
