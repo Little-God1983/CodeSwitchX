@@ -320,6 +320,60 @@ public partial class YardGitHubTests
     }
 
     [Fact]
+    public async Task The_strips_read_of_git_comes_after_a_menu_read_under_way_not_instead_of_it()
+    {
+        // The menu's read may have run git before a commit made since (#433).
+        GitIsAt(OnGitHub);
+        var (yard, app) = await SettledYard();
+        await yard.CurrentGitRefresh;
+        var tile = yard.FindTile(app.Id)!;
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var statuses = 0;
+        var git = _gitRunner!;
+        _gitRunner = args =>
+        {
+            if (args.StartsWith("status", StringComparison.Ordinal) && Interlocked.Increment(ref statuses) == 1)
+            {
+                entered.Set();
+                release.Wait(TimeSpan.FromSeconds(10));
+            }
+
+            return git(args);
+        };
+        yard.RefreshGitOf(tile);
+        entered.Wait(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken).ShouldBeTrue();
+
+        yard.ReadGitOfCheckout(tile.RootPath);
+        release.Set();
+
+        await Eventually(() => Volatile.Read(ref statuses) >= 2);
+    }
+
+    [Fact]
+    public async Task A_build_pressed_during_the_first_read_of_GitHub_waits_for_it_and_reads_no_second_time()
+    {
+        _gh.DefaultHead = OnGitHub;
+        GitIsAt(OnGitHub);
+        var app = Add("App", Repo("app"));
+        Directory.CreateDirectory(Path.Combine(app.RootPath, "scripts"));
+        File.WriteAllText(Path.Combine(app.RootPath, "scripts", "build.ps1"), "# build");
+        File.WriteAllText(Path.Combine(app.RootPath, "scripts", "_common.ps1"), "$script:ShortcutName = 'App.lnk'\n$script:ReleaseBranch = 'main'\n");
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _gh.Gate = gate;
+        var yard = Yard(true, app);
+        await yard.InitializeAsync(CancellationToken.None);
+        await Eventually(() => _gh.Reads == 1 && yard.FindTile(app.Id)!.GitLines is [{ StableBuild: not null }]);
+
+        var fresh = yard.FreshLineAsync(yard.FindTile(app.Id)!.GitLines[0]);
+        await Task.Delay(200, TestContext.Current.CancellationToken);
+        gate.SetResult();
+
+        (await fresh).ShouldNotBeNull();
+        _gh.Reads.ShouldBe(1, "the first read, under way at the press, is waited for");
+    }
+
+    [Fact]
     public async Task A_round_that_compared_with_a_commit_GitHub_moved_past_asks_git_again_at_once()
     {
         // The checkout switches to the default branch while a round runs, and GitHub's commit moves in the same moment (#429): the read of

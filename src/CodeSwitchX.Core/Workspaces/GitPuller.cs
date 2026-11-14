@@ -119,7 +119,8 @@ public sealed class GitPuller
             return Failed(status, "git couldn't read the checkout.");
         }
 
-        var changed = Lines(status.Output).Count;
+        // By the rule the merge strip goes by when it says the pull is left out (#433).
+        var changed = GitInspector.TrackedChangesIn(Lines(status.Output));
         if (changed > 0)
         {
             return new PullOutcome(false, changed == 1 ? "1 file has uncommitted changes." : $"{changed} files have uncommitted changes.");

@@ -126,8 +126,7 @@ public sealed class GitInspector
         var status = await _runGit(root, "status --porcelain=v2 --branch --no-ahead-behind --untracked-files=normal", ct).ConfigureAwait(false);
         var lines = status?.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.Trim('\r')).Where(l => l.Length > 0).ToList();
         int? dirty = lines?.Count(l => !l.StartsWith('#'));
-        // "?" is an untracked file; the others are changes to tracked files.
-        int? tracked = lines?.Count(l => !l.StartsWith('#') && !l.StartsWith('?'));
+        int? tracked = lines is null ? null : TrackedChangesIn(lines);
         var head = lines?.FirstOrDefault(l => l.StartsWith(HeadLinePrefix, StringComparison.Ordinal))?[HeadLinePrefix.Length..].Trim();
         return new GitInfo(true, branch, dirty, Path.GetFullPath(gitDir), IsFullHash(head) ? head : null, top, tracked);
     }
@@ -208,6 +207,12 @@ public sealed class GitInspector
     /// <summary>Git says the clone holds its whole history: not a shallow one. No answer is not a yes.</summary>
     private async Task<bool> IsCompleteAsync(string root, CancellationToken ct) =>
         (await _runGit(root, "rev-parse --is-shallow-repository", ct).ConfigureAwait(false))?.Trim() == "false";
+
+    /// <summary>
+    /// The changed files git tracks among <c>git status --porcelain</c> lines, either format (#429, #433): "#" lines are headers and "?" an
+    /// untracked file. What a pull stops at: <see cref="GitPuller"/> counts by it, and so does the merge strip that says the pull is left out.
+    /// </summary>
+    public static int TrackedChangesIn(IEnumerable<string> statusLines) => statusLines.Count(l => l.Length > 0 && !l.StartsWith('#') && !l.StartsWith('?'));
 
     /// <summary>What <c>git rev-list --count</c> printed, as a number; null when it printed none.</summary>
     internal static int? Count(string? output) =>

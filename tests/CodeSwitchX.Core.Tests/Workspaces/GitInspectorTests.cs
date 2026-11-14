@@ -279,6 +279,16 @@ public class GitInspectorTests : IDisposable
         info.TrackedChanges.ShouldBe(2);
     }
 
+    [Theory]
+    [InlineData("# branch.oid abc\n1 .M N... 100644 100644 100644 92cd 92cd a.cs\n? new.cs\n", 1)]
+    [InlineData("M  a.cs\nR  b.cs -> c.cs\n?? new.cs\n", 2)]
+    [InlineData("", 0)]
+    public void Tracked_changes_are_counted_alike_in_either_status_format(string status, int tracked)
+    {
+        // The merge strip counts from format 2, the pull from format 1: one rule, so the strip never promises a pull that stops (#433).
+        GitInspector.TrackedChangesIn(status.Split('\n')).ShouldBe(tracked);
+    }
+
     [Fact]
     public async Task Inspect_treats_a_subfolder_of_a_repository_as_a_repository()
     {

@@ -808,6 +808,16 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
 
         _gitHub!.FollowBranches([(path, BranchOf(line with { Branch = branch }))]);
+        lock (_gitHubAsked)
+        {
+            // The folder's first read of GitHub is under way, started a moment ago for this branch: it is waited for, not made twice (#433).
+            if (_gitHubAsked.GetValueOrDefault(path) is TaskCompletionSource<GitHubRoundResult> first && branch is not null
+                && _branchAsked.GetValueOrDefault(path) is var asked && (asked is null || asked == branch))
+            {
+                return first.Task;
+            }
+        }
+
         return RefreshGitHubAsync([path]);
     });
 
@@ -873,7 +883,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
                     var lines = found.Where(l => HasRepository(l) && l.Path is { } p && paths.Contains(p, StringComparer.OrdinalIgnoreCase)).ToList();
                     _gitHub.FollowBranches(lines.Select(l => (l.Path!, BranchOf(l))));
                     var unasked = BranchesToAsk(lines, paths);
-                    var round = new object();
+                    // What a Build press during it waits for instead of reading again (#433).
+                    var round = new TaskCompletionSource<GitHubRoundResult>(TaskCreationOptions.RunContinuationsAsynchronously);
                     var unknown = AskGitHubOf(paths.Where(p => !_gitHub.Knows(p)).Concat(unasked.Select(l => l.Path)).Distinct(StringComparer.OrdinalIgnoreCase), round);
                     lock (_gitHubAsked)
                     {
@@ -885,7 +896,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
                     if (unknown.Count > 0)
                     {
-                        _ = RefreshGitHubAsync(unknown, round);
+                        _ = RefreshGitHubAsync(unknown, round).ContinueWith(t => round.TrySetResult(t.Result), CancellationToken.None,
+                            TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
                     }
                 }
             }
@@ -919,9 +931,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         // Read once for both steps: the second tells the lines the first carried over by their instances.
         var previous = tile.GitLines;
         var found = await GitLinesAsync(tile, info, previous, ct).ConfigureAwait(false);
-        // GitHub's commit for each line as git is about to be asked about it: none where GitHub was not read yet.
-        var given = found.Select(GitHubHeadOf).ToList();
-        var lines = await WithBehindAsync(found, previous, ct).ConfigureAwait(false);
+        // GitHub's commit each line was compared with, from the one look the comparison takes: none where GitHub was not read yet (#433).
+        var given = new string?[found.Count];
+        var lines = await WithBehindAsync(found, previous, ct, given).ConfigureAwait(false);
         paths.AddRange(lines.Where(HasRepository).Select(l => l.Path).OfType<string>());
         // A line carried over is the one shown before, its folder not looked at: asking git again for it would carry it over again.
         var compared = lines.Select(l => !previous.Any(p => ReferenceEquals(p, l))).ToList();
@@ -979,14 +991,15 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// <paramref name="previous"/> was compared. A line carried over from <paramref name="previous"/> is left as it is: its folder could
     /// not be looked at this round (an offline share blocks every look for about 20 s).
     /// </summary>
-    private async Task<IReadOnlyList<GitLine>> WithBehindAsync(IReadOnlyList<GitLine> lines, IReadOnlyList<GitLine> previous, CancellationToken ct)
+    /// <param name="given">Filled with GitHub's commit each line was compared with (null for none), when given: what a later read of GitHub is told apart from.</param>
+    private async Task<IReadOnlyList<GitLine>> WithBehindAsync(IReadOnlyList<GitLine> lines, IReadOnlyList<GitLine> previous, CancellationToken ct, string?[]? given = null)
     {
         if (_gitHub is null)
         {
             return lines;
         }
 
-        return await Task.WhenAll(lines.Select(async line =>
+        return await Task.WhenAll(lines.Select(async (line, i) =>
         {
             if (previous.Any(p => ReferenceEquals(p, line)))
             {
@@ -994,7 +1007,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             }
 
             var activity = line.Path is { } folder ? _gitHub.ForFolder(folder) : null;
-            if (line.Path is not { } path || GitLine.ComparedHead(line, activity) is not { } onGitHub)
+            var compared = GitLine.ComparedHead(line, activity);
+            given?[i] = compared?.Sha;
+            if (line.Path is not { } path || compared is not { } onGitHub)
             {
                 return line is { Behind: null, BehindAgainst: null } ? line : line with { Behind = null, BehindAgainst = null };
             }
@@ -1011,9 +1026,6 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             return line.WithBehind(await _git.BehindAsync(path, line.Head, onGitHub.Sha, onGitHub.Commits, ct, fastForwardOnly).ConfigureAwait(false), before, onGitHub.Sha);
         })).ConfigureAwait(false);
     }
-
-    /// <summary>The commit GitHub was last read to have for <paramref name="line"/> to be compared with (#426); null when there is none.</summary>
-    private string? GitHubHeadOf(GitLine line) => line.Path is { } path ? GitLine.ComparedHead(line, _gitHub?.ForFolder(path))?.Sha : null;
 
     /// <summary>The line's folder is in a repository of its own, whatever its branch: a git above the user profile is not this folder's repository, and its origin is not the folder's.</summary>
     private static bool HasRepository(GitLine line) => line.IsRepository;
@@ -1164,12 +1176,21 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     });
 
     /// <summary>The tile the open panel follows its checkout on (<see cref="FollowPanelBranch"/>) reads its git now (#429).</summary>
-    private void ReadGitOfCheckout(string path)
+    internal void ReadGitOfCheckout(string path)
     {
         var key = YardGitJobs.Key(path);
         if (Tiles.FirstOrDefault(t => t.GitLines.Any(l => l.Path is { } p && YardGitJobs.Key(p) == key)) is { } tile)
         {
-            RefreshGitOf(tile);
+            // A read under way (the tile's menu opened a moment ago) may have run git before a commit made since: the strip's read comes
+            // after it, not instead of it (#433).
+            if (tile.MenuGitRead is { IsCompleted: false } running)
+            {
+                _ = running.ContinueWith(_ => _ui.Post(() => RefreshGitOf(tile)), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+            }
+            else
+            {
+                RefreshGitOf(tile);
+            }
         }
     }
 
