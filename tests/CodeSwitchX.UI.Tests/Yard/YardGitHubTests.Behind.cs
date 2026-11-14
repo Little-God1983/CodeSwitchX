@@ -194,6 +194,26 @@ public partial class YardGitHubTests
     }
 
     [Fact]
+    public async Task A_detached_HEAD_is_not_taken_for_a_branch_on_GitHub()
+    {
+        // Git names a detached HEAD by the start of its commit, which moves at every step of a rebase (review of #428).
+        _gh.DefaultHead = OnGitHub;
+        GitIsAt(Here);
+        var (yard, app) = await SettledYard();
+        File.WriteAllText(Path.Combine(yard.FindTile(app.Id)!.RootPath, ".git", "HEAD"), Here + "\n");
+
+        await yard.RefreshGitAsync(CancellationToken.None);
+        await Quiet();
+        await yard.RefreshCommand.ExecuteAsync(null);
+        await Quiet();
+
+        lock (_gh.Names)
+        {
+            _gh.BranchesAsked.ShouldNotContain(Here[..7]);
+        }
+    }
+
+    [Fact]
     public async Task Without_GitHubs_commit_a_line_says_nothing_about_being_behind()
     {
         GitIsAt(Here, behind: 12);

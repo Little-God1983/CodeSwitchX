@@ -19,7 +19,7 @@ namespace CodeSwitchX.UI.Yard;
 /// <param name="StableBuild">The repository's stable-build scripts (#423), which the tile's menu builds and runs; null when it has none.</param>
 /// <param name="Head">The commit the checkout is at, the full hash (#426); null when git could not tell.</param>
 /// <param name="BehindAgainst">The commit of GitHub's default branch that <paramref name="Behind"/> was worked out against; null when the line was not compared. One that differs from what <paramref name="GitHub"/> has now says <paramref name="Behind"/> is out of date.</param>
-/// <param name="Behind">The line is on its repository's default branch and lacks commits GitHub has there (#426), as of the last read of GitHub; null when it is not behind, on another branch, or nothing is known.</param>
+/// <param name="Behind">The line lacks commits GitHub has on its branch (#426, #428), as of the last read of GitHub; null when it is not behind, its branch is not on GitHub, or nothing is known.</param>
 /// <param name="TrackedChanges">Of <paramref name="DirtyCount"/>, the files git tracks: what a pull stops at (#429). Null when git could not tell.</param>
 public sealed record GitLine(string? Folder, string? Branch, int? DirtyCount, string? Path = null, GitHubPill? Issues = null, GitHubPill? PullRequests = null, bool IsRepository = false, RepoActivity? GitHub = null, string? GitDir = null,
     StableBuildRepo? StableBuild = null, string? Head = null, GitBehind? Behind = null, string? BehindAgainst = null, int? TrackedChanges = null)
@@ -81,7 +81,7 @@ public sealed record GitLine(string? Folder, string? Branch, int? DirtyCount, st
     /// <summary>
     /// The line is to be compared with a commit GitHub has, and is not yet (#429): git gave no answer, GitHub was read after git, or it moved
     /// on since git compared the line with the commit before. A
-    /// line not on the default branch, or with nothing read on GitHub, has nothing to be compared with, and this is false.
+    /// line on a branch GitHub has not got, or with nothing read on GitHub, has nothing to be compared with, and this is false.
     /// </summary>
     internal bool BehindUnknown => Behind is null && ComparedHead(this, GitHub) is { } head && head.Sha != BehindAgainst;
 

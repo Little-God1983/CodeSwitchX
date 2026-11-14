@@ -850,8 +850,29 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
                     // A folder already asked for waits for that round to end, so a slow one is not queued behind itself every 30 s.
                     // So does a line on a branch the last read did not ask about where it stands (#428): a switch to develop, say. Once per folder
                     // and branch, so a read that fails is not made again every 30 s; the regular rounds ask about it all the same.
-                    var unasked = found.Where(l => HasRepository(l) && l is { Path: { } p, Branch: { } b } && _gitHub.ForFolder(p) is { } a && !a.Covers(b))
-                        .Select(l => (Path: l.Path!, Branch: l.Branch!)).Where(l => !BranchAsked(l.Path, l.Branch)).ToList();
+                    // Only the lines of the tiles still there, as for the folders above.
+                    var lines = found.Where(l => HasRepository(l) && l.Path is { } p && paths.Contains(p, StringComparer.OrdinalIgnoreCase)).ToList();
+                    _gitHub.FollowBranches(lines.Select(l => (l.Path!, BranchOf(l))));
+                    var unasked = new List<(string Path, string Branch)>();
+                    foreach (var line in lines)
+                    {
+                        if (BranchOf(line) is not { } branch || _gitHub.ForFolder(line.Path!) is not { } activity)
+                        {
+                            continue;
+                        }
+
+                        if (!activity.Covers(branch))
+                        {
+                            unasked.Add((line.Path!, branch));
+                        }
+                        else
+                        {
+                            // Read for the branch it is on now: a switch back to one the reads have let go of since is asked about again.
+                            ForgetBranchAsk(line.Path!);
+                        }
+                    }
+
+                    unasked = [.. unasked.Where(l => !BranchAsked(l.Path, l.Branch))];
                     var round = new object();
                     var unknown = AskGitHubOf(paths.Where(p => !_gitHub.Knows(p)).Concat(unasked.Select(l => l.Path)).Distinct(StringComparer.OrdinalIgnoreCase), round);
                     lock (_gitHubAsked)
@@ -1066,6 +1087,18 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             }
         }
     });
+
+    /// <summary>The branch a line is on, for GitHub (#428); null for a detached HEAD, which git names by the start of its commit.</summary>
+    private static string? BranchOf(GitLine line) =>
+        line.Branch is { Length: > 0 } branch && !(line.Head?.StartsWith(branch, StringComparison.OrdinalIgnoreCase) ?? false) ? branch : null;
+
+    private void ForgetBranchAsk(string folder)
+    {
+        lock (_gitHubAsked)
+        {
+            _branchAsked.Remove(folder);
+        }
+    }
 
     /// <summary>GitHub was read for <paramref name="folder"/> on <paramref name="branch"/> outside the regular rounds already (#428).</summary>
     private bool BranchAsked(string folder, string branch)

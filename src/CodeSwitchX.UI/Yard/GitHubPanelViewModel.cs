@@ -344,7 +344,8 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
             ShowAction(outcome.Message, failed: !outcome.Succeeded);
             if (outcome.Pulled && !opening)
             {
-                Branch = _repo.DefaultBranch;
+                // Where the pull left it: develop after a Merge and pull into develop (#428).
+                Branch = outcome.PulledBranch ?? _repo.DefaultBranch;
             }
 
             // A pull request that moved since it was read: the list is read again, so the next Merge goes for its new head (#414).

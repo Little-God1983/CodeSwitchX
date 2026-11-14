@@ -266,6 +266,7 @@ public partial class GitHubListViewModelTests
         _merge.Runs.ShouldHaveSingleItem();
         _git.Ran.ShouldContain(r => r.Contains("origin/develop", StringComparison.Ordinal), "develop is pulled");
         _git.Ran.ShouldNotContain(r => r.Contains("main", StringComparison.Ordinal), "main is neither switched to nor pulled");
+        model.PullText.ShouldBe("Switch to main and pull", "the workspace stays on develop");
     }
 
     [Fact]

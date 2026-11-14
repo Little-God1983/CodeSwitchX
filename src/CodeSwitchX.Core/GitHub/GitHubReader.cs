@@ -179,7 +179,7 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
             var defaultBranch = node.TryGetProperty("defaultBranchRef", out var d) && d.ValueKind == JsonValueKind.Object
                 && d.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString() : null;
             var activity = new RepoActivity(repo, account, issueCount, pullRequestCount, newestIssues, newestPullRequests, defaultBranch,
-                defaultBranch is null ? null : HeadOf(d), BranchHeadsOf(doc.RootElement, node, branches));
+                defaultBranch is null ? null : HeadOf(d), BranchHeadsOf(doc.RootElement, node, branches, defaultBranch));
             var permission = node.TryGetProperty("viewerPermission", out var p) ? p.GetString() : null;
             return new AccountRead(activity, Array.IndexOf(PermissionOrder, permission));
         }
@@ -212,8 +212,9 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
     /// <summary>
     /// Where each of <paramref name="branches"/> stands (#428), as asked for by <see cref="QueryFor"/>: its commit, or null where GitHub has
     /// no such branch. One whose answer came with an error, or not at all, is left out, so it is not taken for a branch GitHub has not got.
+    /// The default branch is left out too: asked for before it was known, it is read with its count all the same.
     /// </summary>
-    private static Dictionary<string, GitHubHead?>? BranchHeadsOf(JsonElement root, JsonElement repository, IReadOnlyList<string> branches)
+    private static Dictionary<string, GitHubHead?>? BranchHeadsOf(JsonElement root, JsonElement repository, IReadOnlyList<string> branches, string? defaultBranch)
     {
         if (branches.Count == 0)
         {
@@ -227,7 +228,7 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
         for (var i = 0; i < branches.Count; i++)
         {
             var field = $"branch{i}";
-            if (failed.Contains(field) || !repository.TryGetProperty(field, out var branch))
+            if (branches[i] == defaultBranch || failed.Contains(field) || !repository.TryGetProperty(field, out var branch))
             {
                 continue;
             }
