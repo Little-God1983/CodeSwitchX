@@ -364,6 +364,13 @@ public sealed class GitInspector
 
     private static string? ResolveGitDir(string root, string profileDirectory) => ResolveGitDir(root, profileDirectory, out _, out _);
 
+    /// <summary>The top of the checkout <paramref name="root"/> is in, by the walk <see cref="InspectAsync"/> takes (#431); null outside a repository.</summary>
+    public static string? TopOf(string root)
+    {
+        ResolveGitDir(root, DefaultProfileDirectory, out _, out var top);
+        return top;
+    }
+
     /// <param name="top">The folder the <c>.git</c> was found in: the checkout's top, full path; null where no git directory is returned.</param>
     private static string? ResolveGitDir(string root, string profileDirectory, out bool dangling, out string? top)
     {

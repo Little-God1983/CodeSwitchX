@@ -152,6 +152,13 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
         // A newer read: its own lines, in its order, where a line it only carried over gives way to what is shown for that folder, which is
         // at least as new (an earlier read may have looked since this one started). An older read: only its looks at folders no later read
         // looked at take their place (#431).
+        // A newer read that carried over a line no longer shown holds a folder list from before the one on screen, which an earlier read
+        // found by looking (a folder left the workspace file, another came): only its own looks count, as an older read's do (#431).
+        if (newer && looked is not null && lines.Where((l, i) => !looked[i] && (l.Path is not { } p || !shownAt.ContainsKey(YardGitJobs.Key(p)))).Any())
+        {
+            newer = false;
+        }
+
         var next = newer ? new List<GitLine>(lines) : [.. GitLines];
         for (var i = 0; i < lines.Count; i++)
         {
@@ -543,38 +550,37 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
             return (entries, true);
         }
 
-        // A repository without entries is read only where the scripts are there now, added a moment ago: one look for a file per
-        // repository, off the UI thread (a share gone offline blocks a look for about 20 s), not git for every folder of every right-click.
-        var places = GitLines.Where(l => l.IsRepository).SelectMany(ScriptPlaces).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        if (places.Count == 0)
+        // A repository without entries is read only where the scripts are there now, added a moment ago (#431): a look for the two files
+        // at the top of each checkout, off the UI thread (a share gone offline blocks a look for about 20 s), one at a time, not git for
+        // every folder of every right-click.
+        var folders = GitLines.Where(l => l.IsRepository).Select(l => l.Path).OfType<string>().ToList();
+        if (folders.Count == 0)
         {
             return (entries, false);
         }
 
-        _ = Task.Run(() =>
+        if (ScriptLook is not { IsCompleted: false })
         {
-            if (places.Any(p => System.IO.File.Exists(System.IO.Path.Combine(p, "scripts", "build.ps1"))))
+            ScriptLook = Task.Run(() =>
             {
-                _owner.Post(() => _owner.RefreshGitOf(this));
-            }
-        });
+                if (!Removed && folders.Any(f => StableBuildRepo.Find(GitInspector.TopOf(f) ?? f) is not null))
+                {
+                    _owner.Post(() =>
+                    {
+                        if (!Removed)
+                        {
+                            _owner.RefreshGitOf(this);
+                        }
+                    });
+                }
+            });
+        }
+
         return (entries, true);
     }
 
-    /// <summary>Where a repository line's stable-build scripts would be: its folder, and the top of its checkout where git's folder tells it.</summary>
-    private static IEnumerable<string> ScriptPlaces(GitLine line)
-    {
-        if (line.Path is { } path)
-        {
-            yield return path;
-        }
-
-        if (line.GitDir is { } gitDir && System.IO.Path.GetFileName(System.IO.Path.TrimEndingDirectorySeparator(gitDir)).Equals(".git", StringComparison.OrdinalIgnoreCase)
-            && System.IO.Path.GetDirectoryName(System.IO.Path.TrimEndingDirectorySeparator(gitDir)) is { } top)
-        {
-            yield return top;
-        }
-    }
+    /// <summary>The look for scripts a menu started on a repository without entries (#431), while it runs or since it ended. UI thread.</summary>
+    internal Task? ScriptLook { get; private set; }
 
     /// <summary>The read of this tile's git a menu started, while it runs: a menu opened again, or Build pressed, waits for it (#425). UI thread.</summary>
     internal Task<IReadOnlyList<GitLine>?>? MenuGitRead { get; set; }

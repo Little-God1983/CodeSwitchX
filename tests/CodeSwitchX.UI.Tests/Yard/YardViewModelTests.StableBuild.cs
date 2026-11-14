@@ -95,17 +95,15 @@ public partial class YardViewModelTests
         var (entries, reads) = tile.OpenBuildMenu();
         entries.ShouldBeEmpty();
         reads.ShouldBeTrue("the menu is followed: the look for scripts may find some");
-        await Task.Delay(200, TestContext.Current.CancellationToken);
+        await tile.ScriptLook.ShouldNotBeNull();
         tile.MenuGitRead.ShouldBeNull("no scripts there: no git for every right-click");
         Directory.CreateDirectory(Path.Combine(app.RootPath, "scripts"));
         File.WriteAllText(Path.Combine(app.RootPath, "scripts", "build.ps1"), "# build");
         File.WriteAllText(Path.Combine(app.RootPath, "scripts", "_common.ps1"), "$script:ShortcutName = 'App.lnk'\n");
 
         tile.OpenBuildMenu().ShouldSatisfyAllConditions(m => m.Entries.ShouldBeEmpty("as of the last read"), m => m.Reads.ShouldBeTrue());
-        for (var i = 0; i < 250 && tile.MenuGitRead is not { IsCompleted: true }; i++)
-        {
-            await Task.Delay(20, TestContext.Current.CancellationToken);
-        }
+        await tile.ScriptLook.ShouldNotBeNull();
+        await tile.MenuGitRead.ShouldNotBeNull("the scripts are there now");
 
         tile.StableBuildEntries().ShouldHaveSingleItem();
         yard.FindTile(plain.Id)!.OpenBuildMenu().Reads.ShouldBeFalse();
@@ -154,6 +152,29 @@ public partial class YardViewModelTests
         tile.ShowGit([stale], later, [false]).ShouldBeNull("nothing of it is shown");
 
         tile.GitLines[0].DirtyCount.ShouldBe(3, "the carried line is older than the earlier read's look");
+    }
+
+    [Fact]
+    public async Task A_newer_read_with_a_folder_list_from_before_the_one_shown_does_not_bring_a_removed_folder_back()
+    {
+        // An earlier read found B gone from the workspace file and C added; a later one, unable to read the file, carried B over (review of #431).
+        var app = new Workspace { Name = "App", RootPath = Repo("app"), TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([app]));
+        var yard = Yard((_, _, _) => Task.FromResult<string?>(string.Empty));
+        await yard.InitializeAsync(CancellationToken.None);
+        await yard.RefreshGitAsync(CancellationToken.None);
+        var tile = yard.FindTile(app.Id)!;
+        var a = tile.GitLines[0];
+        var b = a with { Path = Path.Combine(_tempRoot, "b") };
+        var c = a with { Path = Path.Combine(_tempRoot, "c") };
+        var earlier = tile.StartGitRead();
+        var later = tile.StartGitRead();
+        tile.ShowGit([a, c], earlier, [true, true]);
+
+        tile.ShowGit([a with { DirtyCount = 4 }, b], later, [true, false]).ShouldBe([true, false]);
+
+        tile.GitLines.Select(l => l.Path).ShouldBe([a.Path, c.Path]);
+        tile.GitLines[0].DirtyCount.ShouldBe(4, "its own look at A counts");
     }
 
     [Fact]
