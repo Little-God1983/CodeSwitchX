@@ -59,9 +59,9 @@ public class GitHubReaderTests
 
     /// <summary>GitHub's answer when only the default branch's count of commits failed (#429): the data is there, with an error for that one field.</summary>
     private const string CountFailed = """
-        {"data":{"repository":{"viewerPermission":"ADMIN","defaultBranchRef":{"name":"main","target":{"oid":"7d6783b6e4ca65062d1ab6cdfe82e5b5f29e0728","history":null}},
+        {"data":{"repository":{"viewerPermission":"ADMIN","defaultBranchRef":{"name":"main","target":{"oid":"7d6783b6e4ca65062d1ab6cdfe82e5b5f29e0728"},"commits":null},
         "issues":{"totalCount":3,"nodes":[]},"pullRequests":{"totalCount":1,"nodes":[]}}},
-        "errors":[{"type":"SERVICE_UNAVAILABLE","path":["repository","defaultBranchRef","target","history"],"message":"Timeout on history"}]}
+        "errors":[{"type":"SERVICE_UNAVAILABLE","path":["repository","defaultBranchRef","commits","history","totalCount"],"message":"Timeout on history"}]}
         """;
 
     private static Task<RepoRead> Outcome(FakeGh gh, GitHubRepo? repo = null) =>
@@ -88,7 +88,7 @@ public class GitHubReaderTests
     {
         // GraphQL nulls the commit when its count fails at a non-null field: no read, so the last one's "behind" stands (#429).
         var gh = Fake(["acme"], new() { ["acme"] = null });
-        gh.Printed["acme"] = CountFailed.Replace("""{"oid":"7d6783b6e4ca65062d1ab6cdfe82e5b5f29e0728","history":null}""", "null", StringComparison.Ordinal);
+        gh.Printed["acme"] = CountFailed.Replace("""{"oid":"7d6783b6e4ca65062d1ab6cdfe82e5b5f29e0728"}""", "null", StringComparison.Ordinal);
 
         (await Read(gh)).ShouldBeNull();
     }
@@ -97,7 +97,7 @@ public class GitHubReaderTests
     public async Task An_error_anywhere_else_still_fails_the_read()
     {
         var gh = Fake(["acme"], new() { ["acme"] = null });
-        gh.Printed["acme"] = CountFailed.Replace("""["repository","defaultBranchRef","target","history"]""", """["repository","issues"]""", StringComparison.Ordinal);
+        gh.Printed["acme"] = CountFailed.Replace("""["repository","defaultBranchRef","commits","history","totalCount"]""", """["repository","issues"]""", StringComparison.Ordinal);
 
         (await Read(gh)).ShouldBeNull();
     }
@@ -130,9 +130,9 @@ public class GitHubReaderTests
     }
 
     [Theory]
-    [InlineData("\"defaultBranchRef\":{\"name\":\"main\",\"target\":{\"oid\":\"7d6783b6\",\"history\":{\"totalCount\":1155}}},", "7d6783b6", 1155)]
+    [InlineData("\"defaultBranchRef\":{\"name\":\"main\",\"target\":{\"oid\":\"7d6783b6\"},\"commits\":{\"history\":{\"totalCount\":1155}}},", "7d6783b6", 1155)]
     [InlineData("\"defaultBranchRef\":{\"name\":\"main\",\"target\":{\"oid\":\"7d6783b6\"}},", "7d6783b6", null)]
-    [InlineData("\"defaultBranchRef\":{\"name\":\"main\",\"target\":{\"oid\":\"7d6783b6\",\"history\":{\"totalCount\":\"many\"}}},", "7d6783b6", null)]
+    [InlineData("\"defaultBranchRef\":{\"name\":\"main\",\"target\":{\"oid\":\"7d6783b6\"},\"commits\":{\"history\":{\"totalCount\":\"many\"}}},", "7d6783b6", null)]
     [InlineData("\"defaultBranchRef\":{\"name\":\"main\",\"target\":null},", null, null)]
     [InlineData("\"defaultBranchRef\":{\"name\":\"main\",\"target\":{\"oid\":7}},", null, null)]
     [InlineData("\"defaultBranchRef\":{\"name\":\"main\"},", null, null)]
@@ -144,7 +144,7 @@ public class GitHubReaderTests
         var activity = await Read(gh);
 
         activity.ShouldNotBeNull().DefaultHead.ShouldBe(sha is null ? null : new GitHubHead(sha, commits));
-        gh.Commands[0].ShouldContain(a => a.Contains("defaultBranchRef{name target{oid ... on Commit{history{totalCount}}}}", StringComparison.Ordinal));
+        gh.Commands[0].ShouldContain(a => a.Contains("defaultBranchRef{name target{oid} commits:target{... on Commit{history{totalCount}}}}", StringComparison.Ordinal));
     }
 
     [Fact]

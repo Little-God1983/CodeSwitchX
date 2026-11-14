@@ -126,8 +126,8 @@ public sealed class GitInspector
         var status = await _runGit(root, "status --porcelain=v2 --branch --no-ahead-behind --untracked-files=normal", ct).ConfigureAwait(false);
         var lines = status?.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.Trim('\r')).Where(l => l.Length > 0).ToList();
         int? dirty = lines?.Count(l => !l.StartsWith('#'));
-        // "?" is an untracked file, "!" an ignored one; the others are changes to tracked files.
-        int? tracked = lines?.Count(l => !l.StartsWith('#') && !l.StartsWith('?') && !l.StartsWith('!'));
+        // "?" is an untracked file; the others are changes to tracked files.
+        int? tracked = lines?.Count(l => !l.StartsWith('#') && !l.StartsWith('?'));
         var head = lines?.FirstOrDefault(l => l.StartsWith(HeadLinePrefix, StringComparison.Ordinal))?[HeadLinePrefix.Length..].Trim();
         return new GitInfo(true, branch, dirty, Path.GetFullPath(gitDir), IsFullHash(head) ? head : null, top, tracked);
     }

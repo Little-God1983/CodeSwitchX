@@ -178,6 +178,7 @@ public partial class YardGitHubTests
         var fresh = await yard.FreshLineAsync(line);
 
         StableBuildCheck.BuildBlock(fresh.ShouldNotBeNull()).ShouldBe("3 commits behind GitHub - pull first");
+        fresh.GitHub.ShouldNotBeNull().DefaultHead.ShouldNotBeNull().Sha.ShouldBe(new string('a', 40), "the line goes with the read it waited for");
     }
 
     [Fact]
