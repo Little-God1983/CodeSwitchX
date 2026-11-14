@@ -16,7 +16,7 @@ public partial class YardGitHubTests
     /// Git with the checkout at <paramref name="head"/>, a clean tree, GitHub's commit fetched and <paramref name="behind"/> commits short of it,
     /// holding <paramref name="ahead"/> commits of its own that GitHub's lacks.
     /// </summary>
-    /// <param name="reflog">What HEAD's reflog holds, one commit a line (#435).</param>
+    /// <param name="reflog">What the branch's own reflog holds, one commit a line (#435); GitHub's commit among them makes every commit under it the branch's own.</param>
     private void GitIsAt(string head, int behind = 0, int ahead = 0, string reflog = "") => _gitRunner = args =>
     {
         lock (_gitRan)
@@ -28,6 +28,9 @@ public partial class YardGitHubTests
             : args.StartsWith("rev-list --no-walk", StringComparison.Ordinal) ? args[(args.LastIndexOf(' ') + 1)..] + "\n"
             : args.StartsWith("rev-list --count HEAD..", StringComparison.Ordinal) ? $"{behind}\n"
             : args.StartsWith("rev-list --count ", StringComparison.Ordinal) && args.EndsWith("..HEAD", StringComparison.Ordinal) ? $"{ahead}\n"
+            : args.StartsWith("rev-list --left-right --count HEAD...", StringComparison.Ordinal) ? $"{ahead}\t{behind}\n"
+            : args.StartsWith("rev-list --count ", StringComparison.Ordinal) && args.Contains(" --not HEAD ", StringComparison.Ordinal)
+                ? (reflog.Contains(args.Split(' ')[2], StringComparison.Ordinal) ? "0\n" : $"{behind}\n")
             : args.StartsWith("log -g ", StringComparison.Ordinal) ? reflog
             // GitHub's commit first, then the ones under it.
             : args.StartsWith("rev-list HEAD..", StringComparison.Ordinal) ? string.Concat(Enumerable.Range(0, behind).Select(i => (i == 0 ? args[(args.IndexOf("..", StringComparison.Ordinal) + 2)..] : $"{i:x40}") + "\n"))

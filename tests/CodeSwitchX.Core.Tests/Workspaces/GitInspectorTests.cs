@@ -290,50 +290,50 @@ public class GitInspectorTests : IDisposable
     }
 
     private const string Own = "3333333333333333333333333333333333333333";
-    private const string Pushed = "4444444444444444444444444444444444444444";
 
-    /// <summary>A checkout on develop that went apart from GitHub: one commit of its own, GitHub's two (<paramref name="lacking"/>) fetched here.</summary>
-    private static GitInspector WentApart(string? reflog, string lacking, List<string>? asked = null) => new((_, args, _) =>
+    /// <summary>A checkout on develop that went apart from GitHub: one commit of its own, GitHub's two; <paramref name="news"/> of them never the branch's own.</summary>
+    private static GitInspector WentApart(string? reflog, int news, List<string>? asked = null) => new((_, args, _) =>
     {
         asked?.Add(args);
         return Task.FromResult<string?>(args.StartsWith("rev-list --no-walk", StringComparison.Ordinal) ? OnGitHub + "\n"
-            : args == $"rev-list --count HEAD..{OnGitHub}" ? "2\n"
-            : args == $"rev-list --count {OnGitHub}..HEAD" ? "1\n"
+            : args == $"rev-list --left-right --count HEAD...{OnGitHub}" ? "1\t2\n"
             : args.StartsWith("log -g ", StringComparison.Ordinal) ? reflog
-            : args == $"rev-list HEAD..{OnGitHub}" ? lacking
+            : args.StartsWith($"rev-list --count {OnGitHub} --not HEAD ", StringComparison.Ordinal) ? $"{news}\n"
             : args.StartsWith("rev-parse --is-shallow-repository", StringComparison.Ordinal) ? "false\n"
             : null);
     });
 
     [Fact]
-    public async Task On_another_branch_commits_pushed_from_elsewhere_beside_work_of_its_own_are_behind()
+    public async Task On_another_branch_commits_never_its_own_are_behind_by_the_branchs_own_reflog()
     {
         var asked = new List<string>();
-        var answer = await WentApart($"{Here}\r\n", $"{OnGitHub}\n{Pushed}\n", asked).BehindAsync(_root, Here, OnGitHub, null, "develop", CancellationToken.None);
+        var answer = await WentApart($"{Here}\r\n{Own}\n", 1, asked).BehindAsync(_root, Here, OnGitHub, null, "fix/#12-größe", CancellationToken.None);
 
-        answer.ShouldBe(BehindAnswer.Of(new GitBehind(2)));
-        asked.ShouldContain("log -g --format=%H -n 1000 refs/heads/develop", "the branch's own reflog, not HEAD's");
-    }
-
-    [Fact]
-    public async Task On_another_branch_commits_it_once_held_are_rewritten_here_not_behind()
-    {
-        // A rebase or an amend (#435): GitHub's commits were this branch's own; only the one pushed from elsewhere is behind.
-        (await WentApart($"{Here}\n{OnGitHub}\n", $"{OnGitHub}\n", null).BehindAsync(_root, Here, OnGitHub, null, "develop", CancellationToken.None))
-            .ShouldBe(BehindAnswer.NotBehind);
-        (await WentApart($"{Here}\n{Own}\n", $"{OnGitHub}\n{Own}\n", null).BehindAsync(_root, Here, OnGitHub, null, "develop", CancellationToken.None))
-            .ShouldBe(BehindAnswer.Of(new GitBehind(1)), "the rewritten one is not counted");
+        answer.ShouldBe(BehindAnswer.Of(new GitBehind(1)));
+        asked.ShouldContain("log -g --format=%H \"refs/heads/fix/#12-größe\"", "the branch's own reflog, quoted, not HEAD's");
+        asked.ShouldContain($"rev-list --count {OnGitHub} --not HEAD {Here} {Own}", "under its former tips is the branch's own too");
     }
 
     [Theory]
-    [InlineData(null, "develop")]
-    [InlineData("", "develop")]
-    [InlineData("x", "we\"ird")]
-    public async Task Where_the_branchs_own_commits_cannot_be_told_nothing_is_said(string? reflog, string branch)
+    [InlineData(null, "develop", "unknown")]
+    [InlineData("", "develop", "not behind")]
+    [InlineData("x", "we\"ird", "not behind")]
+    public async Task Where_the_branchs_own_commits_cannot_be_told_it_is_not_called_behind(string? reflog, string branch, string said)
     {
-        // No answer, an empty reflog (logging off, expired), or a name not to put on git's command line.
-        (await WentApart(reflog, $"{OnGitHub}\n", null).BehindAsync(_root, Here, OnGitHub, null, branch, CancellationToken.None))
-            .ShouldBe(BehindAnswer.Unknown);
+        // No answer from git is unknown; an empty reflog (logging off, expired) or a quote in the name says nothing, as before #435.
+        (await WentApart(reflog, 2, null).BehindAsync(_root, Here, OnGitHub, null, branch, CancellationToken.None))
+            .ShouldBe(said == "unknown" ? BehindAnswer.Unknown : BehindAnswer.NotBehind);
+    }
+
+    [Fact]
+    public async Task On_another_branch_only_behind_is_a_count_without_its_reflog()
+    {
+        var inspector = new GitInspector((_, args, _) => Task.FromResult<string?>(args.StartsWith("rev-list --no-walk", StringComparison.Ordinal) ? OnGitHub + "\n"
+            : args.StartsWith("rev-list --left-right", StringComparison.Ordinal) ? "0\t3\n"
+            : args.StartsWith("rev-parse --is-shallow-repository", StringComparison.Ordinal) ? "false\n"
+            : null));
+
+        (await inspector.BehindAsync(_root, Here, OnGitHub, null, "develop", CancellationToken.None)).ShouldBe(BehindAnswer.Of(new GitBehind(3)));
     }
 
     [Fact]

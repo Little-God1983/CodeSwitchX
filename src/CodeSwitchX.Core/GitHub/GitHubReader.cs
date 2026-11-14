@@ -27,6 +27,12 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
     private static readonly string Query = QueryTemplate.Replace("PREVIEW", RepoActivity.PreviewCount.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal);
 
     /// <summary>
+    /// The most branches the one request asks where they stand (#435): far more than a repository's folders are on, and a bound on the
+    /// request's size and command line, so the read of the pills never fails for it.
+    /// </summary>
+    internal const int MostBranches = 100;
+
+    /// <summary>
     /// <see cref="Query"/> with where each of <paramref name="branches"/> stands (#428), each under a name of its own (<c>branch0</c>, ...) and
     /// passed as a variable: an error on one nulls that one alone.
     /// </summary>

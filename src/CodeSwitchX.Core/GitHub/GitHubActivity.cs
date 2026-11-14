@@ -306,7 +306,7 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
         {
             var main = _results.GetValueOrDefault(repo)?.DefaultBranch;
             return read.Select(Key).Concat(FoldersOf(repo)).Select(f => _branchOfFolder.GetValueOrDefault(f)).OfType<string>()
-                .Where(b => b != main).Distinct(StringComparer.Ordinal).ToList();
+                .Where(b => b != main).Distinct(StringComparer.Ordinal).Take(GitHubReader.MostBranches).ToList();
         }
     }
 

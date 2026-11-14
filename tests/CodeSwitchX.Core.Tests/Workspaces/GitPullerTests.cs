@@ -268,6 +268,36 @@ public class GitPullerTests : IDisposable
     }
 
     [Fact]
+    public async Task A_branch_rewritten_here_is_not_behind_and_a_commit_pushed_from_elsewhere_is()
+    {
+        // GitInspector on a real checkout (#435): a branch created from GitHub's three commits, squashed here, holds those three as its
+        // own, though only the newest was ever its tip. A commit pushed on top from the other clone is behind, and it alone.
+        await Arrange();
+        await Git(Other, "switch", "-q", "-c", "feature/y");
+        await Commit(Other, "y.txt", "1");
+        await Commit(Other, "y.txt", "2");
+        await Commit(Other, "y.txt", "3");
+        await Git(Other, "push", "-q", "origin", "feature/y");
+        await Git(Work, "fetch", "-q", "origin");
+        await Git(Work, "switch", "-q", "feature/y");
+        await Git(Work, "reset", "-q", "--soft", "HEAD~3");
+        await Git(Work, "commit", "-q", "-m", "squashed");
+        var inspector = new GitInspector();
+        var onGitHub = await Git(Work, "rev-parse", "origin/feature/y");
+
+        (await inspector.BehindAsync(Work, await Git(Work, "rev-parse", "HEAD"), onGitHub, null, "feature/y", TestContext.Current.CancellationToken))
+            .ShouldBe(BehindAnswer.NotBehind);
+
+        await Commit(Other, "y.txt", "4");
+        await Git(Other, "push", "-q", "origin", "feature/y");
+        await Git(Work, "fetch", "-q", "origin");
+        onGitHub = await Git(Work, "rev-parse", "origin/feature/y");
+
+        (await inspector.BehindAsync(Work, await Git(Work, "rev-parse", "HEAD"), onGitHub, null, "feature/y", TestContext.Current.CancellationToken))
+            .ShouldBe(BehindAnswer.Of(new GitBehind(1)));
+    }
+
+    [Fact]
     public async Task An_edit_made_while_the_fetch_ran_refuses_the_switch()
     {
         await Arrange();
