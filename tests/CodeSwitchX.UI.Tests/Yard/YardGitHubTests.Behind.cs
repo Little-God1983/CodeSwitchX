@@ -128,6 +128,72 @@ public partial class YardGitHubTests
     }
 
     [Fact]
+    public async Task A_line_on_another_branch_that_lacks_commits_its_branch_has_on_GitHub_is_behind()
+    {
+        // A repository whose work merges into develop (#428): the line on develop is compared with GitHub's develop.
+        _gh.DefaultHead = new string('a', 40);
+        _gh.Branches["develop"] = OnGitHub;
+        GitIsAt(Here, behind: 4);
+        var app = Add("App", Repo("app"));
+        File.WriteAllText(Path.Combine(app.RootPath, ".git", "HEAD"), "ref: refs/heads/develop\n");
+        var yard = Yard(true, app);
+
+        await yard.InitializeAsync(CancellationToken.None);
+
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Behind is not null);
+        var line = yard.FindTile(app.Id)!.GitLines[0];
+        line.BehindLabel.ShouldBe("4 behind");
+        line.GitStateLabel.ShouldBeNull("a branch that is behind is not clean");
+        line.BehindAgainst.ShouldBe(OnGitHub);
+    }
+
+    [Fact]
+    public async Task A_switch_to_a_branch_the_last_read_did_not_ask_about_reads_GitHub_for_it_at_once()
+    {
+        // The read of GitHub asks about the branches the folders are on; after a switch, the next one is up to ten minutes away (#428).
+        _gh.DefaultHead = OnGitHub;
+        _gh.Branches["develop"] = OnGitHub;
+        GitIsAt(Here, behind: 4);
+        var (yard, app) = await SettledYard();
+        await yard.CurrentGitRefresh;
+        _gh.BranchesAsked.ShouldNotContain("develop");
+
+        File.WriteAllText(Path.Combine(yard.FindTile(app.Id)!.RootPath, ".git", "HEAD"), "ref: refs/heads/develop\n");
+        await yard.RefreshGitAsync(CancellationToken.None);
+
+        // No timer is advanced and Refresh is not pressed.
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Behind is not null);
+        yard.FindTile(app.Id)!.GitLines[0].BehindLabel.ShouldBe("4 behind");
+        lock (_gh.Names)
+        {
+            _gh.BranchesAsked.Count(b => b == "develop").ShouldBe(1);
+        }
+    }
+
+    [Fact]
+    public async Task A_branch_GitHub_has_not_got_is_asked_about_once_and_the_line_stays_clean()
+    {
+        GitIsAt(Here);
+        _gh.DefaultHead = OnGitHub;
+        var (yard, app) = await SettledYard();
+        File.WriteAllText(Path.Combine(yard.FindTile(app.Id)!.RootPath, ".git", "HEAD"), "ref: refs/heads/local-only\n");
+
+        await yard.RefreshGitAsync(CancellationToken.None);
+        await Eventually(() => _gh.BranchesAsked.Contains("local-only"));
+        await Quiet();
+        await yard.RefreshGitAsync(CancellationToken.None);
+        await yard.RefreshGitAsync(CancellationToken.None);
+        await Quiet();
+
+        lock (_gh.Names)
+        {
+            _gh.BranchesAsked.Count(b => b == "local-only").ShouldBe(1, "not every 30 s");
+        }
+
+        yard.FindTile(app.Id)!.GitLines[0].GitStateLabel.ShouldBe("clean", "nothing on GitHub to be behind");
+    }
+
+    [Fact]
     public async Task Without_GitHubs_commit_a_line_says_nothing_about_being_behind()
     {
         GitIsAt(Here, behind: 12);

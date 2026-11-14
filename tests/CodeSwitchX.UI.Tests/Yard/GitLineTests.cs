@@ -152,6 +152,36 @@ public class GitLineTests
     [InlineData(null, "GitHub's main has commits this checkout lacks. In the Yard, click the line and press Pull main.")]
     public void The_behind_pill_says_what_to_do(int? commits, string tip)
     {
-        Line(0, new GitBehind(commits)).BehindToolTip.ShouldBe(tip);
+        (Line(0, new GitBehind(commits)) with { GitHub = OnGitHub }).BehindToolTip.ShouldBe(tip);
+    }
+
+    [Fact]
+    public void The_behind_pill_of_another_branch_does_not_point_at_the_panels_pull()
+    {
+        // The panel's Pull switches to the default branch (#407): it is no way to bring develop up to date (#428).
+        (Line(0, new GitBehind(3)) with { Branch = "develop", GitHub = OnGitHub }).BehindToolTip
+            .ShouldBe("GitHub's develop has 3 commits this checkout lacks. Pull develop to bring it up to date.");
+    }
+
+    private static readonly RepoActivity WithBranches = OnGitHub with
+    {
+        BranchHeads = new Dictionary<string, GitHubHead?> { ["develop"] = new GitHubHead("dev", null), ["local-only"] = null },
+    };
+
+    [Fact]
+    public void A_line_on_another_branch_is_compared_with_where_that_branch_stands_on_GitHub()
+    {
+        GitLine.ComparedHead(Compared(null, branch: "develop"), WithBranches).ShouldBe(new GitHubHead("dev", null));
+        GitLine.ComparedHead(Compared(null, branch: "local-only"), WithBranches).ShouldBeNull("GitHub has no such branch");
+        GitLine.ComparedHead(Compared(null, branch: "feature/x"), WithBranches).ShouldBeNull("the read did not ask about it");
+        GitLine.ComparedHead(Compared(null), WithBranches).ShouldBe(new GitHubHead("new", 10), "the default branch as before");
+    }
+
+    [Fact]
+    public void A_line_on_another_branch_GitHub_has_is_not_clean_until_compared()
+    {
+        (Compared(null, branch: "develop") with { GitHub = WithBranches }).GitStateLabel.ShouldBeNull();
+        (Compared("dev", branch: "develop") with { GitHub = WithBranches }).GitStateLabel.ShouldBe("clean");
+        (Compared(null, branch: "local-only") with { GitHub = WithBranches }).GitStateLabel.ShouldBe("clean", "nothing on GitHub to be behind");
     }
 }

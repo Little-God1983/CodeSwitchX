@@ -49,6 +49,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private readonly ITextClipboard _clipboard;
     private readonly CancellationTokenSource _gitHubStop = new();
     private readonly Dictionary<string, object> _gitHubAsked = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The branch each folder was last read from GitHub for, outside the regular rounds (#428); under the lock of <see cref="_gitHubAsked"/>.</summary>
+    private readonly Dictionary<string, string> _branchAsked = new(StringComparer.OrdinalIgnoreCase);
     private ITimer? _tabsTimer;
 
     /// <summary>The looks a moment after a VS Code closed (<see cref="ClosedListWait"/>), one per close; UI thread.</summary>
@@ -816,13 +819,14 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
                 var tiles = await TilesOnUiThreadAsync().ConfigureAwait(false);
                 var pathsOf = new Dictionary<WorkspaceTileViewModel, List<string>>();
                 var shownBefore = tiles.ToDictionary(t => t, t => ShownFolders([t]));
+                var found = new List<GitLine>();
                 foreach (var tile in tiles)
                 {
                     // Filled as the lines are computed, so a pass that throws later still has them.
                     var paths = pathsOf[tile] = [];
                     try
                     {
-                        await RefreshGitAsync(tile, paths, ct).ConfigureAwait(false);
+                        found.AddRange(await RefreshGitAsync(tile, paths, ct).ConfigureAwait(false));
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
@@ -844,8 +848,20 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
                     // A folder no GitHub round has looked at yet gets its pills now, not at the next ten minutes. Not awaited: a slow gh must not hold up git.
                     // A folder already asked for waits for that round to end, so a slow one is not queued behind itself every 30 s.
+                    // So does a line on a branch the last read did not ask about where it stands (#428): a switch to develop, say. Once per folder
+                    // and branch, so a read that fails is not made again every 30 s; the regular rounds ask about it all the same.
+                    var unasked = found.Where(l => HasRepository(l) && l is { Path: { } p, Branch: { } b } && _gitHub.ForFolder(p) is { } a && !a.Covers(b))
+                        .Select(l => (Path: l.Path!, Branch: l.Branch!)).Where(l => !BranchAsked(l.Path, l.Branch)).ToList();
                     var round = new object();
-                    var unknown = AskGitHubOf(paths.Where(p => !_gitHub.Knows(p)), round);
+                    var unknown = AskGitHubOf(paths.Where(p => !_gitHub.Knows(p)).Concat(unasked.Select(l => l.Path)).Distinct(StringComparer.OrdinalIgnoreCase), round);
+                    lock (_gitHubAsked)
+                    {
+                        foreach (var (path, branch) in unasked.Where(l => unknown.Contains(l.Path, StringComparer.OrdinalIgnoreCase)))
+                        {
+                            _branchAsked[path] = branch;
+                        }
+                    }
+
                     if (unknown.Count > 0)
                     {
                         _ = RefreshGitHubAsync(unknown, round);
@@ -1050,6 +1066,15 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             }
         }
     });
+
+    /// <summary>GitHub was read for <paramref name="folder"/> on <paramref name="branch"/> outside the regular rounds already (#428).</summary>
+    private bool BranchAsked(string folder, string branch)
+    {
+        lock (_gitHubAsked)
+        {
+            return _branchAsked.TryGetValue(folder, out var asked) && asked == branch;
+        }
+    }
 
     /// <summary>True the first time a folder is asked for; again only after the round that was asked to read it has ended, whatever it came to.</summary>
     private List<string> AskGitHubOf(IEnumerable<string> folders, object round)

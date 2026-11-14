@@ -247,16 +247,37 @@ public partial class GitHubListViewModelTests
     }
 
     [Fact]
-    public async Task On_a_base_that_is_not_the_default_branch_the_strip_offers_merge_alone()
+    public async Task On_a_base_that_is_not_the_default_branch_merge_and_pull_pulls_that_branch()
     {
+        // Pull requests that merge into develop, with the workspace on develop (#428): the merge alone would leave it behind.
+        _git.Current = "develop";
         var model = await OpenForMerge("develop", into: "develop");
 
         model.OpenMergeCommand.Execute(Row(model));
 
         var strip = model.MergeStrip.ShouldNotBeNull();
-        strip.OffersPull.ShouldBeFalse("the Yard pulls the default branch only");
-        strip.MergeText.ShouldBe("Merge");
-        strip.CheckoutLine.ShouldBe("This workspace stays on develop.");
+        strip.OffersPull.ShouldBeTrue();
+        strip.MergeText.ShouldBe("Merge only");
+        strip.CheckoutLine.ShouldBe("This workspace is on develop. Merge and pull brings it up to date.");
+
+        model.MergeAndPullCommand.Execute(null);
+
+        await Eventually(() => !model.IsBusy && model.ActionMessage is not null);
+        _merge.Runs.ShouldHaveSingleItem();
+        _git.Ran.ShouldContain(r => r.Contains("origin/develop", StringComparison.Ordinal), "develop is pulled");
+        _git.Ran.ShouldNotContain(r => r.Contains("main", StringComparison.Ordinal), "main is neither switched to nor pulled");
+    }
+
+    [Fact]
+    public async Task On_the_pull_requests_branch_with_another_base_the_strip_still_offers_merge_alone()
+    {
+        // Only the default branch is switched to from a pull request's branch (#408); #428 changed the workspace already on the base.
+        var model = await OpenForMerge("b", into: "develop");
+
+        model.OpenMergeCommand.Execute(Row(model));
+
+        model.MergeStrip.ShouldNotBeNull().OffersPull.ShouldBeFalse();
+        model.MergeStrip.CheckoutLine.ShouldBe("It merges into develop, not main. This workspace stays on b.");
     }
 
     [Fact]

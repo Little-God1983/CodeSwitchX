@@ -1,3 +1,4 @@
+using CodeSwitchX.Core.Workspaces;
 using Microsoft.Extensions.Logging;
 
 namespace CodeSwitchX.Core.GitHub;
@@ -18,7 +19,9 @@ public readonly record struct GitHubRoundResult(int Repositories, int Unread);
 /// per folder or repository: a Warning carries counts, the kind and the first failure's exception types and stacks, never a message or a name, and a folder path appears only in a Debug line.
 /// </summary>
 /// <param name="hostOfAlias">What <c>ssh -G</c> makes of an ssh host name in a remote such as <c>git@github-work:owner/repo</c> (null: no alias is looked up).</param>
-public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, CancellationToken, Task<OriginLookup>> originOf, ILogger<GitHubActivity> logger, Func<string, CancellationToken, Task<string?>>? hostOfAlias = null)
+/// <param name="branchOf">The branch a folder is on, read from its HEAD without starting git (#428); null when it cannot tell. <see cref="GitInspector.ReadBranch"/> by default.</param>
+public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, CancellationToken, Task<OriginLookup>> originOf, ILogger<GitHubActivity> logger, Func<string, CancellationToken, Task<string?>>? hostOfAlias = null,
+    Func<string, string?>? branchOf = null)
 {
     private const int MostReadsAtOnce = 4;
 
@@ -97,7 +100,7 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
             var accounts = repos.Count == 0 ? [] : await AccountsAsync(ct).ConfigureAwait(false);
             // Each result is stored as it arrives, so a slow repository does not hold back the others; the event waits for the round.
             // No answer from gh (null) makes no reads, so the last results stay; no logins at all (empty) is read as it is.
-            var reads = accounts is null ? [] : await Task.WhenAll(repos.Select(g => ReadAsync(g.Key, accounts, g.First().Folder, ct))).ConfigureAwait(false);
+            var reads = accounts is null ? [] : await Task.WhenAll(repos.Select(g => ReadAsync(g.Key, accounts, g.First().Folder, BranchesOf(g.Select(p => p.Folder)), ct))).ConfigureAwait(false);
             foreach (var failure in reads.Select(r => r.Failure).OfType<Fail>().GroupBy(f => f.Kind))
             {
                 logger.LogWarning("GitHub round: {Failed} of {Total} repositories could not be read: {Failure}", failure.Count(), reads.Length, failure.First().Detail);
@@ -265,13 +268,30 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
         }
     }
 
+    /// <summary>
+    /// The branches <paramref name="folders"/> are on now (#428): where each stands on GitHub is read with the repository, so a line on a branch
+    /// other than the default one is compared with it. A folder that cannot tell (reftable, a share gone) adds none.
+    /// </summary>
+    private List<string> BranchesOf(IEnumerable<string> folders) =>
+        folders.Select(folder =>
+        {
+            try
+            {
+                return (branchOf ?? GitInspector.ReadBranch)(folder);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return null;
+            }
+        }).OfType<string>().Where(b => b.Length > 0 && b != ".invalid").Distinct(StringComparer.Ordinal).ToList();
+
     /// <summary>Reads the repository and stores what came. <c>Changed</c> is true when that differs from the last result; <c>Failure</c> names the kind of failure when nothing was read (the last result stays), for the round to count.</summary>
-    private async Task<(bool Changed, Fail? Failure)> ReadAsync(GitHubRepo repo, IReadOnlyList<string> accounts, string folder, CancellationToken ct)
+    private async Task<(bool Changed, Fail? Failure)> ReadAsync(GitHubRepo repo, IReadOnlyList<string> accounts, string folder, IReadOnlyList<string> branches, CancellationToken ct)
     {
         await _reads.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var read = await reader.ReadAsync(repo, accounts, ct).ConfigureAwait(false);
+            var read = await reader.ReadAsync(repo, accounts, ct, branches).ConfigureAwait(false);
             if (read.NobodySeesIt)
             {
                 lock (_gate)

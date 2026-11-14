@@ -26,6 +26,27 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
 
     private static readonly string Query = QueryTemplate.Replace("PREVIEW", RepoActivity.PreviewCount.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal);
 
+    /// <summary>The most branches besides the default one a read asks where they stand (#428): the repository's folders are on a few.</summary>
+    internal const int MostBranches = 10;
+
+    /// <summary>
+    /// <see cref="Query"/> with where each of <paramref name="branches"/> stands (#428), each under a name of its own (<c>branch0</c>, ...) and
+    /// passed as a variable: an error on one nulls that one alone.
+    /// </summary>
+    internal static string QueryFor(int branches)
+    {
+        if (branches == 0)
+        {
+            return Query;
+        }
+
+        var variables = string.Concat(Enumerable.Range(0, branches).Select(i => $",$b{i}:String!"));
+        var refs = string.Concat(Enumerable.Range(0, branches).Select(i => $"branch{i}:ref(qualifiedName:$b{i}){{target{{oid}}}} "));
+        return Query
+            .Replace("query($owner:String!,$name:String!)", $"query($owner:String!,$name:String!{variables})", StringComparison.Ordinal)
+            .Replace("repository(owner:$owner,name:$name){", $"repository(owner:$owner,name:$name){{{refs}", StringComparison.Ordinal);
+    }
+
     private const string AppPrefix = "app/";
 
     private const string NotFoundType = "NOT_FOUND";
@@ -36,8 +57,10 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
     /// Counts and the newest items, read as the best of <paramref name="accounts"/>. Nothing read is <see cref="RepoRead.NotFound"/>
     /// only when every account said so; an account that failed might be the one that can see it, and no accounts said nothing.
     /// </summary>
-    public async Task<RepoRead> ReadAsync(GitHubRepo repo, IReadOnlyList<string> accounts, CancellationToken ct)
+    /// <param name="branches">Branches besides the default one to read where they stand (#428), the first <see cref="MostBranches"/> of them.</param>
+    public async Task<RepoRead> ReadAsync(GitHubRepo repo, IReadOnlyList<string> accounts, CancellationToken ct, IReadOnlyList<string>? branches = null)
     {
+        branches = branches is null ? [] : [.. branches.Distinct(StringComparer.Ordinal).Take(MostBranches)];
         var candidates = accounts.Order(StringComparer.OrdinalIgnoreCase).ToList();
         var everyoneSaysNotFound = candidates.Count > 0;
 
@@ -45,7 +68,7 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
         var owner = candidates.FirstOrDefault(a => a.Equals(repo.Owner, StringComparison.OrdinalIgnoreCase));
         if (owner is not null)
         {
-            var own = await ReadAsAsync(repo, owner, ct).ConfigureAwait(false);
+            var own = await ReadAsAsync(repo, owner, branches, ct).ConfigureAwait(false);
             if (own.Activity is not null)
             {
                 return new RepoRead(own.Activity);
@@ -58,7 +81,7 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
         AccountRead? best = null;
         foreach (var account in candidates)
         {
-            var read = await ReadAsAsync(repo, account, ct).ConfigureAwait(false);
+            var read = await ReadAsAsync(repo, account, branches, ct).ConfigureAwait(false);
             everyoneSaysNotFound &= read.NotFound;
             // Strictly greater: on a tie the first login alphabetically stays.
             if (read.Activity is not null && (best is null || read.Rank > best.Rank))
@@ -118,11 +141,12 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
     /// <summary>One account's read: what it found, or nothing, and whether that nothing is GitHub's own "not found".</summary>
     private sealed record AccountRead(RepoActivity? Activity = null, int Rank = 0, bool NotFound = false);
 
-    private async Task<AccountRead> ReadAsAsync(GitHubRepo repo, string account, CancellationToken ct)
+    private async Task<AccountRead> ReadAsAsync(GitHubRepo repo, string account, IReadOnlyList<string> branches, CancellationToken ct)
     {
         var answer = await gh.AnswerAsAsync(account,
         [
-            "api", "graphql", "-f", $"query={Query}", "-f", $"owner={repo.Owner}", "-f", $"name={repo.Name}",
+            "api", "graphql", "-f", $"query={QueryFor(branches.Count)}", "-f", $"owner={repo.Owner}", "-f", $"name={repo.Name}",
+            .. branches.SelectMany((branch, i) => new[] { "-f", $"b{i}=refs/heads/{branch}" }),
         ], ct).ConfigureAwait(false);
 
         // A cancelled run gives nothing, which is neither "cannot see it" nor a reason to start the other accounts.
@@ -155,7 +179,7 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
             var defaultBranch = node.TryGetProperty("defaultBranchRef", out var d) && d.ValueKind == JsonValueKind.Object
                 && d.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString() : null;
             var activity = new RepoActivity(repo, account, issueCount, pullRequestCount, newestIssues, newestPullRequests, defaultBranch,
-                defaultBranch is null ? null : HeadOf(d));
+                defaultBranch is null ? null : HeadOf(d), BranchHeadsOf(doc.RootElement, node, branches));
             var permission = node.TryGetProperty("viewerPermission", out var p) ? p.GetString() : null;
             return new AccountRead(activity, Array.IndexOf(PermissionOrder, permission));
         }
@@ -185,6 +209,52 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
         return new GitHubHead(sha, commits);
     }
 
+    /// <summary>
+    /// Where each of <paramref name="branches"/> stands (#428), as asked for by <see cref="QueryFor"/>: its commit, or null where GitHub has
+    /// no such branch. One whose answer came with an error, or not at all, is left out, so it is not taken for a branch GitHub has not got.
+    /// </summary>
+    private static Dictionary<string, GitHubHead?>? BranchHeadsOf(JsonElement root, JsonElement repository, IReadOnlyList<string> branches)
+    {
+        if (branches.Count == 0)
+        {
+            return null;
+        }
+
+        var failed = root.TryGetProperty("errors", out var errors) && errors.ValueKind == JsonValueKind.Array
+            ? errors.EnumerateArray().Select(FieldOf).OfType<string>().ToHashSet(StringComparer.Ordinal)
+            : [];
+        var heads = new Dictionary<string, GitHubHead?>(StringComparer.Ordinal);
+        for (var i = 0; i < branches.Count; i++)
+        {
+            var field = $"branch{i}";
+            if (failed.Contains(field) || !repository.TryGetProperty(field, out var branch))
+            {
+                continue;
+            }
+
+            if (branch.ValueKind == JsonValueKind.Null)
+            {
+                heads[branches[i]] = null;
+            }
+            else if (branch.ValueKind == JsonValueKind.Object && branch.TryGetProperty("target", out var target) && target.ValueKind == JsonValueKind.Object
+                && target.TryGetProperty("oid", out var oid) && oid.ValueKind == JsonValueKind.String && oid.GetString() is { Length: > 0 } sha)
+            {
+                heads[branches[i]] = new GitHubHead(sha, null);
+            }
+        }
+
+        return heads;
+    }
+
+    /// <summary>The field of the repository an error is about (<c>branch0</c>, <c>defaultBranchRef</c>); null for one about something else.</summary>
+    private static string? FieldOf(JsonElement error) =>
+        error.ValueKind == JsonValueKind.Object && error.TryGetProperty("path", out var path) && path.ValueKind == JsonValueKind.Array
+        && path.GetArrayLength() > 1 && path[0].ValueEquals("repository") && path[1].ValueKind == JsonValueKind.String ? path[1].GetString() : null;
+
+    /// <summary>A field <see cref="QueryFor"/> names after a branch: <c>branch0</c>, <c>branch1</c>, ...</summary>
+    private static bool IsBranchField(string? field) =>
+        field is { Length: > 6 } && field.StartsWith("branch", StringComparison.Ordinal) && field[6..].All(char.IsAsciiDigit);
+
     /// <summary>The items of a preview, odd ones left out; null when the read failed (see <see cref="Split"/>).</summary>
     private static IReadOnlyList<GitHubItem>? Newest(JsonElement kind, bool isPullRequest) =>
         Split(kind.GetProperty("nodes").EnumerateArray().Select(n => ParseItem(n, graphql: true, isPullRequest)))?.Items;
@@ -202,9 +272,9 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
 
     /// <summary>
     /// What <c>gh api graphql</c> printed before exiting with an error, when every error is about the default branch's count of commits
-    /// (#429), which rides in the one request for the pills under a name of its own, so its commit comes all the same. The counts and the
-    /// lists are read, and the line's "behind" goes without a count. An answer without the commit is no read: it would wipe a "behind"
-    /// known from the last one.
+    /// (#429), which rides in the one request for the pills under a name of its own, so its commit comes all the same, or about where another
+    /// branch stands (#428). The counts and the lists are read, and the line's "behind" goes without a count, or without a comparison for that
+    /// branch. An answer without the default branch's commit is no read: it would wipe a "behind" known from the last one.
     /// Null for any other answer.
     /// </summary>
     internal static string? OnlyTheCountFailed(string? printed)
@@ -224,7 +294,7 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
                 && branch.TryGetProperty("target", out var target) && target.ValueKind == JsonValueKind.Object
                 && target.TryGetProperty("oid", out var oid) && oid.ValueKind == JsonValueKind.String
                 && root.TryGetProperty("errors", out var errors) && errors.ValueKind == JsonValueKind.Array && errors.GetArrayLength() > 0
-                && errors.EnumerateArray().All(OnTheCount)
+                && errors.EnumerateArray().All(Tolerated)
                 ? printed
                 : null;
         }
@@ -233,10 +303,11 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
             return null;
         }
 
-        static bool OnTheCount(JsonElement error) =>
-            error.ValueKind == JsonValueKind.Object && error.TryGetProperty("path", out var path) && path.ValueKind == JsonValueKind.Array
-            && path.GetArrayLength() > 2
-            && path[0].ValueEquals("repository") && path[1].ValueEquals("defaultBranchRef") && path[2].ValueEquals("commits");
+        static bool Tolerated(JsonElement error) =>
+            IsBranchField(FieldOf(error))
+            || (error.ValueKind == JsonValueKind.Object && error.TryGetProperty("path", out var path) && path.ValueKind == JsonValueKind.Array
+                && path.GetArrayLength() > 2
+                && path[0].ValueEquals("repository") && path[1].ValueEquals("defaultBranchRef") && path[2].ValueEquals("commits"));
     }
 
     /// <summary>

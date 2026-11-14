@@ -39,11 +39,11 @@ public sealed record GitLine(string? Folder, string? Branch, int? DirtyCount, st
     public string ToolTipText => Path is null ? Text : $"{Text}\n{Path}";
 
     /// <summary>
-    /// The commit this line is compared with (#426): where GitHub's default branch stands, for a line that is on that branch and knows
-    /// its own commit; null for any other line, which is never behind.
+    /// The commit this line is compared with (#426): where its branch stands on GitHub, the default one (#426) or another (#428), for a line
+    /// that knows its own commit; null for any other line, and for a branch GitHub has not got or was not asked about, which is never behind.
     /// </summary>
     internal static GitHubHead? ComparedHead(GitLine line, RepoActivity? activity) =>
-        line is { IsRepository: true, Path: not null, Branch: { } branch, Head: not null } && activity is { DefaultHead: { } head } && activity.DefaultBranch == branch ? head : null;
+        line is { IsRepository: true, Path: not null, Branch: { } branch, Head: not null } ? activity?.HeadOf(branch) : null;
 
     /// <summary>
     /// <see cref="Behind"/> was worked out against another commit than GitHub has for the line now, or not at all: git must be asked
@@ -95,7 +95,9 @@ public sealed record GitLine(string? Folder, string? Branch, int? DirtyCount, st
 
     /// <summary>The behind pill's tooltip: what it means and where the pull is. The same words in Raven's chat header, where the line is no button.</summary>
     public string? BehindToolTip => Behind is null ? null
-        : $"GitHub's {BranchText} has {CommitsText(Behind.Commits)} this checkout lacks. In the Yard, click the line and press Pull {BranchText}.";
+        : $"GitHub's {BranchText} has {CommitsText(Behind.Commits)} this checkout lacks. "
+            // The panel's Pull goes to the default branch (#407); another one is pulled where it is checked out (#428).
+            + (GitHub is { DefaultBranch: { } main } && Branch != main ? $"Pull {BranchText} to bring it up to date." : $"In the Yard, click the line and press Pull {BranchText}.");
 
     /// <summary>Both pills in words, for Raven: "clean", "3 changed", "12 behind", "3 changed, 12 behind"; null when neither says anything.</summary>
     public string? GitStateText => (GitStateLabel, BehindLabel) switch
