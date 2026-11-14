@@ -173,15 +173,15 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     /// <summary>The checkout's folder, for the Yard to keep <see cref="Branch"/> up to date; null when the panel has none.</summary>
     public string? CheckoutPath => _checkout?.Path;
 
-    /// <summary>Files with uncommitted changes in the checkout as last read (#429); null when git could not tell. A pull stops at them.</summary>
+    /// <summary>Changed files git tracks in the checkout as last read (#429); null when git could not tell. A pull stops at them.</summary>
     private int? _changedFiles;
 
     /// <summary>The line was read again: the button names what a press does now, not what it did when the panel opened.</summary>
-    /// <param name="changedFiles">The line's files with uncommitted changes; null when git could not tell.</param>
-    public void FollowBranch(string? branch, int? changedFiles = null)
+    /// <param name="changedFiles">The line's changed files git tracks; null when git could not tell.</param>
+    public void FollowBranch(string? branch, int? changedFiles)
     {
-        // An open strip worked out its choices from the branch the checkout was on (review of #408), and whether it could pull (#429).
-        if (branch != Branch || (changedFiles is > 0) != (_changedFiles is > 0))
+        // An open strip worked out its choices and its words from the branch the checkout was on (review of #408) and its changed files (#429).
+        if (branch != Branch || changedFiles != _changedFiles)
         {
             MergeStrip = null;
         }
@@ -249,7 +249,8 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
         var onBase = main is not null && into == main && Branch == main;
         var pullable = onBase || (onBranch && main is not null && into == main);
         var busy = pullable && _checkout.ChatIsWorking();
-        // A pull stops at uncommitted changes, and would leave the branch behind after promising otherwise (#429): said here, before the merge.
+        // A pull stops at changes to tracked files, and would leave the branch behind after promising otherwise (#429): said here, before the
+        // merge. Untracked files go along with the switch, as the pull lets them.
         var changed = pullable && !busy && _changedFiles is > 0 ? (_changedFiles == 1 ? "1 changed file" : $"{_changedFiles} changed files") : null;
         var stays = Branch is { } branch ? $"This workspace stays on {branch}." : "This workspace stays as it is.";
         var line = onBase ? (busy ? "A chat is working here, so the pull is left out."

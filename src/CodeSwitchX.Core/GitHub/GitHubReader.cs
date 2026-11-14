@@ -127,7 +127,7 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
 
         // A cancelled run gives nothing, which is neither "cannot see it" nor a reason to start the other accounts.
         ct.ThrowIfCancellationRequested();
-        if ((answer.Output ?? OnlyTheHeadFailed(answer.FailureOutput)) is not { } output)
+        if ((answer.Output ?? OnlyTheCountFailed(answer.FailureOutput)) is not { } output)
         {
             return new AccountRead(NotFound: IsNotFound(answer.FailureOutput));
         }
@@ -198,11 +198,12 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
     }
 
     /// <summary>
-    /// What <c>gh api graphql</c> printed before exiting with an error, when every error is about where the default branch stands (#429):
-    /// its commit or its count of commits, which ride in the one request for the pills. The counts and the lists are read all the same, and
-    /// the tiles then say nothing about being behind, as for an answer without them. Null for any other answer.
+    /// What <c>gh api graphql</c> printed before exiting with an error, when every error is about the default branch's count of commits
+    /// (#429), which rides in the one request for the pills, and its commit came all the same. The counts and the lists are read, and the
+    /// line's "behind" goes without a count. An answer without the commit is no read: it would wipe a "behind" known from the last one.
+    /// Null for any other answer.
     /// </summary>
-    internal static string? OnlyTheHeadFailed(string? printed)
+    internal static string? OnlyTheCountFailed(string? printed)
     {
         if (printed is null)
         {
@@ -215,8 +216,11 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
             var root = doc.RootElement;
             return root.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Object
                 && data.TryGetProperty("repository", out var repository) && repository.ValueKind == JsonValueKind.Object
+                && repository.TryGetProperty("defaultBranchRef", out var branch) && branch.ValueKind == JsonValueKind.Object
+                && branch.TryGetProperty("target", out var target) && target.ValueKind == JsonValueKind.Object
+                && target.TryGetProperty("oid", out var oid) && oid.ValueKind == JsonValueKind.String
                 && root.TryGetProperty("errors", out var errors) && errors.ValueKind == JsonValueKind.Array && errors.GetArrayLength() > 0
-                && errors.EnumerateArray().All(UnderTheHead)
+                && errors.EnumerateArray().All(OnTheCount)
                 ? printed
                 : null;
         }
@@ -225,10 +229,10 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
             return null;
         }
 
-        static bool UnderTheHead(JsonElement error) =>
+        static bool OnTheCount(JsonElement error) =>
             error.ValueKind == JsonValueKind.Object && error.TryGetProperty("path", out var path) && path.ValueKind == JsonValueKind.Array
-            && path.GetArrayLength() > 2
-            && path[0].ValueEquals("repository") && path[1].ValueEquals("defaultBranchRef") && path[2].ValueEquals("target");
+            && path.GetArrayLength() > 3
+            && path[0].ValueEquals("repository") && path[1].ValueEquals("defaultBranchRef") && path[2].ValueEquals("target") && path[3].ValueEquals("history");
     }
 
     /// <summary>

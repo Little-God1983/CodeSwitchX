@@ -309,9 +309,9 @@ public partial class GitHubListViewModelTests
         var model = await OpenForMerge("b");
         model.OpenMergeCommand.Execute(Row(model));
 
-        model.FollowBranch("b");
+        model.FollowBranch("b", 0);
         model.MergeStrip.ShouldNotBeNull("the same branch keeps it");
-        model.FollowBranch("feature/y");
+        model.FollowBranch("feature/y", 0);
 
         model.MergeStrip.ShouldBeNull("its choices were worked out from the branch the checkout left");
     }

@@ -63,7 +63,7 @@ public class GitInspectorTests : IDisposable
 
         var info = await inspector.InspectAsync(_root, CancellationToken.None);
 
-        info.ShouldBe(new GitInfo(true, "main", 2, Path.Combine(_root, ".git"), Here, _root), "the git directory tells folders of one checkout apart from another repository");
+        info.ShouldBe(new GitInfo(true, "main", 2, Path.Combine(_root, ".git"), Here, _root, TrackedChanges: 1), "the git directory tells folders of one checkout apart from another repository");
         asked.ShouldBe(["status --porcelain=v2 --branch --no-ahead-behind --untracked-files=normal"], "the commit comes with the status, at no process of its own");
     }
 
@@ -261,6 +261,22 @@ public class GitInspectorTests : IDisposable
         Directory.CreateDirectory(sub);
 
         GitInspector.ReadBranch(sub).ShouldBe("main");
+    }
+
+    [Fact]
+    public async Task Tracked_changes_leave_untracked_and_ignored_files_out()
+    {
+        // What a pull stops at (#429): it lets untracked files go along with the switch.
+        Directory.CreateDirectory(Path.Combine(_root, ".git"));
+        File.WriteAllText(Path.Combine(_root, ".git", "HEAD"), "ref: refs/heads/main\n");
+        var inspector = new GitInspector((_, args, _) => Task.FromResult<string?>(args.Contains("status")
+            ? "# branch.oid (initial)\n1 .M N... 100644 100644 100644 92cd 92cd a.cs\n2 R. N... 100644 100644 100644 1 2 R100 b.cs\tc.cs\n? new.cs\n! bin/x.dll\n"
+            : null));
+
+        var info = await inspector.InspectAsync(_root, CancellationToken.None);
+
+        info.DirtyCount.ShouldBe(4, "the pill counts what git status lists, as before");
+        info.TrackedChanges.ShouldBe(2);
     }
 
     [Fact]

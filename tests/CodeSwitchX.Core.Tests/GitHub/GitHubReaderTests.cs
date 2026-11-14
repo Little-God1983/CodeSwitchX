@@ -84,6 +84,16 @@ public class GitHubReaderTests
     }
 
     [Fact]
+    public async Task An_answer_without_the_commit_still_fails_the_read()
+    {
+        // GraphQL nulls the commit when its count fails at a non-null field: no read, so the last one's "behind" stands (#429).
+        var gh = Fake(["acme"], new() { ["acme"] = null });
+        gh.Printed["acme"] = CountFailed.Replace("""{"oid":"7d6783b6e4ca65062d1ab6cdfe82e5b5f29e0728","history":null}""", "null", StringComparison.Ordinal);
+
+        (await Read(gh)).ShouldBeNull();
+    }
+
+    [Fact]
     public async Task An_error_anywhere_else_still_fails_the_read()
     {
         var gh = Fake(["acme"], new() { ["acme"] = null });

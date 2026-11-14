@@ -8,7 +8,7 @@ namespace CodeSwitchX.UI.Yard;
 /// <param name="ChatIsWorking">Whether a chat is working, or waiting mid-turn, on any tile that shows the checkout, read at the press. By tile, not by chat folder: it errs on the careful side.</param>
 /// <param name="Jobs">The Yard's jobs, which outlive the panel.</param>
 /// <param name="GitDir">The checkout's git directory; null when git could not tell, and the folder stands in for it.</param>
-/// <param name="ChangedFiles">Files with uncommitted changes when the panel opened (#429; the Yard keeps the panel's up to date); null when git could not tell.</param>
+/// <param name="ChangedFiles">Changed files git tracks when the panel opened (#429; the Yard keeps the panel's up to date); null when git could not tell.</param>
 public sealed record PanelCheckout(string Path, string? Branch, Func<bool> ChatIsWorking, YardGitJobs Jobs, string? GitDir = null, int? ChangedFiles = null)
 {
     /// <summary>

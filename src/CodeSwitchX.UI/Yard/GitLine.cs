@@ -20,8 +20,9 @@ namespace CodeSwitchX.UI.Yard;
 /// <param name="Head">The commit the checkout is at, the full hash (#426); null when git could not tell.</param>
 /// <param name="BehindAgainst">The commit of GitHub's default branch that <paramref name="Behind"/> was worked out against; null when the line was not compared. One that differs from what <paramref name="GitHub"/> has now says <paramref name="Behind"/> is out of date.</param>
 /// <param name="Behind">The line is on its repository's default branch and lacks commits GitHub has there (#426), as of the last read of GitHub; null when it is not behind, on another branch, or nothing is known.</param>
+/// <param name="TrackedChanges">Of <paramref name="DirtyCount"/>, the files git tracks: what a pull stops at (#429). Null when git could not tell.</param>
 public sealed record GitLine(string? Folder, string? Branch, int? DirtyCount, string? Path = null, GitHubPill? Issues = null, GitHubPill? PullRequests = null, bool IsRepository = false, RepoActivity? GitHub = null, string? GitDir = null,
-    StableBuildRepo? StableBuild = null, string? Head = null, GitBehind? Behind = null, string? BehindAgainst = null)
+    StableBuildRepo? StableBuild = null, string? Head = null, GitBehind? Behind = null, string? BehindAgainst = null, int? TrackedChanges = null)
 {
     /// <summary>Before the first git round: "no git" and no pill.</summary>
     public static readonly GitLine Unknown = new(null, null, null);
