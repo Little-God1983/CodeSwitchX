@@ -29,6 +29,8 @@ public partial class YardGitHubTests
             : args.StartsWith("rev-list --count HEAD..", StringComparison.Ordinal) ? $"{behind}\n"
             : args.StartsWith("rev-list --count ", StringComparison.Ordinal) && args.EndsWith("..HEAD", StringComparison.Ordinal) ? $"{ahead}\n"
             : args.StartsWith("log -g ", StringComparison.Ordinal) ? reflog
+            // GitHub's commit first, then the ones under it.
+            : args.StartsWith("rev-list HEAD..", StringComparison.Ordinal) ? string.Concat(Enumerable.Range(0, behind).Select(i => (i == 0 ? args[(args.IndexOf("..", StringComparison.Ordinal) + 2)..] : $"{i:x40}") + "\n"))
             : args.StartsWith("rev-parse --is-shallow-repository", StringComparison.Ordinal) ? "false\n"
             : string.Empty;
     };
@@ -235,7 +237,7 @@ public partial class YardGitHubTests
         // A rebase or an amend on develop leaves GitHub's old commit here (review of #428): no pull brings anything, so nothing is behind.
         _gh.DefaultHead = new string('a', 40);
         _gh.Branches["develop"] = OnGitHub;
-        GitIsAt(Here, behind: 4, ahead: 5, reflog: $"{Here}\n{OnGitHub}\n");
+        GitIsAt(Here, behind: 1, ahead: 5, reflog: $"{Here}\n{OnGitHub}\n");
         var app = Add("App", Repo("app"));
         File.WriteAllText(Path.Combine(app.RootPath, ".git", "HEAD"), "ref: refs/heads/develop\n");
         var yard = Yard(true, app);

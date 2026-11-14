@@ -1058,9 +1058,10 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
                 return (line with { Behind = before.Behind, BehindAgainst = onGitHub.Sha }, onGitHub.Sha);
             }
 
-            // A branch other than the default one is rewritten as a matter of course (#428): only a fast-forward away is behind there.
-            var fastForwardOnly = line.Branch != activity?.DefaultBranch;
-            var answer = await _git.BehindAsync(path, line.Head, onGitHub.Sha, onGitHub.Commits, fastForwardOnly, ct).ConfigureAwait(false);
+            // A branch other than the default one is rewritten as a matter of course (#428): where it went apart from GitHub, only commits
+            // it never held are behind (#435).
+            var ownBranch = line.Branch != activity?.DefaultBranch ? line.Branch : null;
+            var answer = await _git.BehindAsync(path, line.Head, onGitHub.Sha, onGitHub.Commits, ownBranch, ct).ConfigureAwait(false);
             return (line.WithBehind(answer, before, onGitHub.Sha), onGitHub.Sha);
         })).ConfigureAwait(false);
     }

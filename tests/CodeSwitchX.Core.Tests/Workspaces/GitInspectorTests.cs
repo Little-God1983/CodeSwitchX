@@ -289,6 +289,53 @@ public class GitInspectorTests : IDisposable
         GitInspector.TrackedChangesIn(status.Split('\n').Select(l => l.Trim('\r'))).ShouldBe(tracked);
     }
 
+    private const string Own = "3333333333333333333333333333333333333333";
+    private const string Pushed = "4444444444444444444444444444444444444444";
+
+    /// <summary>A checkout on develop that went apart from GitHub: one commit of its own, GitHub's two (<paramref name="lacking"/>) fetched here.</summary>
+    private static GitInspector WentApart(string? reflog, string lacking, List<string>? asked = null) => new((_, args, _) =>
+    {
+        asked?.Add(args);
+        return Task.FromResult<string?>(args.StartsWith("rev-list --no-walk", StringComparison.Ordinal) ? OnGitHub + "\n"
+            : args == $"rev-list --count HEAD..{OnGitHub}" ? "2\n"
+            : args == $"rev-list --count {OnGitHub}..HEAD" ? "1\n"
+            : args.StartsWith("log -g ", StringComparison.Ordinal) ? reflog
+            : args == $"rev-list HEAD..{OnGitHub}" ? lacking
+            : args.StartsWith("rev-parse --is-shallow-repository", StringComparison.Ordinal) ? "false\n"
+            : null);
+    });
+
+    [Fact]
+    public async Task On_another_branch_commits_pushed_from_elsewhere_beside_work_of_its_own_are_behind()
+    {
+        var asked = new List<string>();
+        var answer = await WentApart($"{Here}\r\n", $"{OnGitHub}\n{Pushed}\n", asked).BehindAsync(_root, Here, OnGitHub, null, "develop", CancellationToken.None);
+
+        answer.ShouldBe(BehindAnswer.Of(new GitBehind(2)));
+        asked.ShouldContain("log -g --format=%H -n 1000 refs/heads/develop", "the branch's own reflog, not HEAD's");
+    }
+
+    [Fact]
+    public async Task On_another_branch_commits_it_once_held_are_rewritten_here_not_behind()
+    {
+        // A rebase or an amend (#435): GitHub's commits were this branch's own; only the one pushed from elsewhere is behind.
+        (await WentApart($"{Here}\n{OnGitHub}\n", $"{OnGitHub}\n", null).BehindAsync(_root, Here, OnGitHub, null, "develop", CancellationToken.None))
+            .ShouldBe(BehindAnswer.NotBehind);
+        (await WentApart($"{Here}\n{Own}\n", $"{OnGitHub}\n{Own}\n", null).BehindAsync(_root, Here, OnGitHub, null, "develop", CancellationToken.None))
+            .ShouldBe(BehindAnswer.Of(new GitBehind(1)), "the rewritten one is not counted");
+    }
+
+    [Theory]
+    [InlineData(null, "develop")]
+    [InlineData("", "develop")]
+    [InlineData("x", "we\"ird")]
+    public async Task Where_the_branchs_own_commits_cannot_be_told_nothing_is_said(string? reflog, string branch)
+    {
+        // No answer, an empty reflog (logging off, expired), or a name not to put on git's command line.
+        (await WentApart(reflog, $"{OnGitHub}\n", null).BehindAsync(_root, Here, OnGitHub, null, branch, CancellationToken.None))
+            .ShouldBe(BehindAnswer.Unknown);
+    }
+
     [Fact]
     public async Task Inspect_treats_a_subfolder_of_a_repository_as_a_repository()
     {

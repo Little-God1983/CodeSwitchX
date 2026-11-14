@@ -27,17 +27,6 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
     private static readonly string Query = QueryTemplate.Replace("PREVIEW", RepoActivity.PreviewCount.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal);
 
     /// <summary>
-    /// The most branches one request asks where they stand (#428): the read of the pills takes the first ones, and requests of their own
-    /// the rest (#435), so a repository whose folders are on many branches has every line compared.
-    /// </summary>
-    internal const int MostBranches = 10;
-
-    /// <summary>Where branches stand and nothing else (#435): the branches past the first <see cref="MostBranches"/>, as <c>branch0</c>, ...</summary>
-    internal static string BranchesQueryFor(int branches) =>
-        "query($owner:String!,$name:String!" + string.Concat(Enumerable.Range(0, branches).Select(i => $",$b{i}:String!"))
-        + "){repository(owner:$owner,name:$name){" + string.Concat(Enumerable.Range(0, branches).Select(i => $"branch{i}:ref(qualifiedName:$b{i}){{target{{oid}}}} ")) + "}}";
-
-    /// <summary>
     /// <see cref="Query"/> with where each of <paramref name="branches"/> stands (#428), each under a name of its own (<c>branch0</c>, ...) and
     /// passed as a variable: an error on one nulls that one alone.
     /// </summary>
@@ -68,59 +57,13 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
     public Task<RepoRead> ReadAsync(GitHubRepo repo, IReadOnlyList<string> accounts, CancellationToken ct) => ReadAsync(repo, accounts, null, ct);
 
     /// <inheritdoc cref="ReadAsync(GitHubRepo, IReadOnlyList{string}, CancellationToken)"/>
-    /// <param name="branches">Branches besides the default one to read where they stand (#428), each once, as many as there are (#435).</param>
+    /// <param name="branches">
+    /// Branches besides the default one to read where they stand (#428), each once, all in the one request (#435): a repository's folders are
+    /// on a few, and each costs GitHub one ref lookup.
+    /// </param>
     public async Task<RepoRead> ReadAsync(GitHubRepo repo, IReadOnlyList<string> accounts, IReadOnlyList<string>? branches, CancellationToken ct)
     {
-        var read = await ReadFirstAsync(repo, accounts, branches is null ? [] : [.. branches.Take(MostBranches)], ct).ConfigureAwait(false);
-        return branches is { Count: > MostBranches } && read.Activity is { } activity
-            ? new RepoRead(await WithMoreBranchesAsync(activity, branches.Skip(MostBranches).ToList(), ct).ConfigureAwait(false))
-            : read;
-    }
-
-    /// <summary>
-    /// <paramref name="activity"/> with where <paramref name="more"/> stand, read as the account that read it, <see cref="MostBranches"/>
-    /// at a time (#435). A request that fails leaves its branches out, as an error on one branch does: not taken for branches GitHub has not got.
-    /// </summary>
-    private async Task<RepoActivity> WithMoreBranchesAsync(RepoActivity activity, IReadOnlyList<string> more, CancellationToken ct)
-    {
-        var heads = new Dictionary<string, GitHubHead?>(activity.BranchHeads ?? new Dictionary<string, GitHubHead?>(), StringComparer.Ordinal);
-        foreach (var chunk in more.Chunk(MostBranches))
-        {
-            var answer = await gh.AnswerAsAsync(activity.Account,
-            [
-                "api", "graphql", "-f", $"query={BranchesQueryFor(chunk.Length)}", "-f", $"owner={activity.Repo.Owner}", "-f", $"name={activity.Repo.Name}",
-                .. chunk.SelectMany((branch, i) => new[] { "-f", $"b{i}=refs/heads/{branch}" }),
-            ], ct).ConfigureAwait(false);
-            ct.ThrowIfCancellationRequested();
-            if ((answer.Output ?? answer.FailureOutput) is not { } output)
-            {
-                continue;
-            }
-
-            try
-            {
-                using var doc = JsonDocument.Parse(output);
-                if (doc.RootElement.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Object
-                    && data.TryGetProperty("repository", out var repository) && repository.ValueKind == JsonValueKind.Object
-                    && BranchHeadsOf(doc.RootElement, repository, chunk, activity.DefaultBranch) is { } found)
-                {
-                    foreach (var (branch, head) in found)
-                    {
-                        heads[branch] = head;
-                    }
-                }
-            }
-            catch (JsonException)
-            {
-                logger?.LogDebug("Where more branches stand came in a format not expected; they are left out");
-            }
-        }
-
-        return activity with { BranchHeads = heads };
-    }
-
-    private async Task<RepoRead> ReadFirstAsync(GitHubRepo repo, IReadOnlyList<string> accounts, IReadOnlyList<string> branches, CancellationToken ct)
-    {
+        branches ??= [];
         var candidates = accounts.Order(StringComparer.OrdinalIgnoreCase).ToList();
         var everyoneSaysNotFound = candidates.Count > 0;
 

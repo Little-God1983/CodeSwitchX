@@ -119,7 +119,7 @@ public class GitHubReaderTests
     }
 
     [Fact]
-    public async Task Branches_past_the_first_ten_are_read_in_requests_of_their_own()
+    public async Task Every_branch_asked_for_is_read_in_the_one_request()
     {
         // A repository whose folders are on many branches has every line compared (#435).
         var branches = Enumerable.Range(0, 13).Select(i => $"b{i:00}").ToList();
@@ -137,7 +137,7 @@ public class GitHubReaderTests
         var heads = read.Activity.ShouldNotBeNull().BranchHeads.ShouldNotBeNull();
         heads.Keys.Order().ShouldBe(branches);
         heads["b12"].ShouldBe(new GitHubHead("b12", null));
-        gh.Commands.Count.ShouldBe(2, "the read of the pills with ten, one more request for the other three");
+        gh.Commands.Count.ShouldBe(1, "no cut: a repository's folders are on a few branches, each one ref lookup");
     }
 
     [Fact]
