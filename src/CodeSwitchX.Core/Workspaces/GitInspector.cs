@@ -142,10 +142,15 @@ public sealed class GitInspector
     /// <param name="head">The checkout's commit, as <see cref="GitInfo.Head"/> has it.</param>
     /// <param name="commitsOnGitHub">How many commits GitHub's branch holds in all; null when it did not say.</param>
     /// <param name="fastForwardOnly">
-    /// Behind only where the checkout holds nothing GitHub's commit lacks (#428): on a branch other than the default one, a rebase or an amend
-    /// leaves GitHub's old commit here, and counting it would make up commits to pull that no pull brings.
+    /// On a branch other than the default one (#428), where a rebase or an amend leaves GitHub's old commit here: a checkout that went apart
+    /// from GitHub is behind only when GitHub's commit was never its own (#435), and counting the rewritten commits would make up commits to
+    /// pull that no pull brings.
     /// </param>
-    public async Task<BehindAnswer> BehindAsync(string root, string? head, string onGitHub, int? commitsOnGitHub, CancellationToken ct, bool fastForwardOnly = false)
+    public Task<BehindAnswer> BehindAsync(string root, string? head, string onGitHub, int? commitsOnGitHub, CancellationToken ct) =>
+        BehindAsync(root, head, onGitHub, commitsOnGitHub, fastForwardOnly: false, ct);
+
+    /// <inheritdoc cref="BehindAsync(string, string?, string, int?, CancellationToken)"/>
+    public async Task<BehindAnswer> BehindAsync(string root, string? head, string onGitHub, int? commitsOnGitHub, bool fastForwardOnly, CancellationToken ct)
     {
         // What GitHub sent goes on git's command line only as a full hash.
         if (!IsFullHash(head) || !IsFullHash(onGitHub))
@@ -180,8 +185,17 @@ public sealed class GitInspector
                         case null:
                             return BehindAnswer.Unknown;
                         case > 0:
-                            // The two went apart: rewritten here, or work of its own. Nothing a pull brings.
-                            return BehindAnswer.NotBehind;
+                            // The two went apart (#435). GitHub's commit was once this checkout's own: rewritten here, a rebase or an
+                            // amend, and nothing a pull brings. Otherwise commits came to GitHub beside the checkout's own: behind.
+                            switch (await WasCheckedOutAsync(root, onGitHub, ct).ConfigureAwait(false))
+                            {
+                                case null:
+                                    return BehindAnswer.Unknown;
+                                case true:
+                                    return BehindAnswer.NotBehind;
+                            }
+
+                            break;
                     }
 
                     return BehindAnswer.Of(new GitBehind(await IsCompleteAsync(root, ct).ConfigureAwait(false) ? missing : null));
@@ -203,6 +217,18 @@ public sealed class GitInspector
 
         return BehindAnswer.Of(new GitBehind(total - local));
     }
+
+    /// <summary>The most entries of HEAD's reflog looked through for a commit (#435): enough for weeks of work, a quick read all the same.</summary>
+    private const int ReflogDepth = 1000;
+
+    /// <summary>
+    /// <paramref name="commit"/> was this checkout's HEAD once, as its reflog keeps it (#435): it was made, pulled or checked out here. A commit
+    /// fetched and never checked out was not. Null when git gave no answer.
+    /// </summary>
+    private async Task<bool?> WasCheckedOutAsync(string root, string commit, CancellationToken ct) =>
+        await _runGit(root, $"log -g --format=%H -n {ReflogDepth} HEAD", ct).ConfigureAwait(false) is { } reflog
+            ? reflog.Split('\n').Any(l => l.Trim().Equals(commit, StringComparison.OrdinalIgnoreCase))
+            : null;
 
     /// <summary>Git says the clone holds its whole history: not a shallow one. No answer is not a yes.</summary>
     private async Task<bool> IsCompleteAsync(string root, CancellationToken ct) =>

@@ -79,7 +79,7 @@ public class GitHubReaderTests
             gh.Printed["acme"] = answer.Insert(answer.Length - 1, "," + printed);
         }
 
-        var read = await new GitHubReader(gh).ReadAsync(Repo, gh.Accounts, CancellationToken.None, ["develop", "gone"]);
+        var read = await new GitHubReader(gh).ReadAsync(Repo, gh.Accounts, ["develop", "gone"], CancellationToken.None);
         return (read.Activity, gh);
     }
 
@@ -116,6 +116,28 @@ public class GitHubReaderTests
         var heads = activity.ShouldNotBeNull().BranchHeads.ShouldNotBeNull();
         heads.Keys.ShouldBe(new[] { "develop" }, "a failed answer is not \"GitHub has no such branch\"");
         activity.Covers("gone").ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Branches_past_the_first_ten_are_read_in_requests_of_their_own()
+    {
+        // A repository whose folders are on many branches has every line compared (#435).
+        var branches = Enumerable.Range(0, 13).Select(i => $"b{i:00}").ToList();
+        var gh = new FakeGh(["acme"], (_, arguments) =>
+        {
+            var asked = arguments.Where(a => a.Contains("=refs/heads/", StringComparison.Ordinal)).ToList();
+            var fields = string.Concat(asked.Select((a, i) => $"\"branch{i}\":{{\"target\":{{\"oid\":\"{a[(a.IndexOf("=refs/heads/", StringComparison.Ordinal) + 12)..]}\"}}}},"));
+            return arguments.Any(a => a.Contains("issues(", StringComparison.Ordinal))
+                ? Graphql("ADMIN").Replace("{\"viewerPermission\"", "{" + fields + "\"viewerPermission\"", StringComparison.Ordinal)
+                : "{\"data\":{\"repository\":{" + fields.TrimEnd(',') + "}}}";
+        });
+
+        var read = await new GitHubReader(gh).ReadAsync(Repo, gh.Accounts, branches, CancellationToken.None);
+
+        var heads = read.Activity.ShouldNotBeNull().BranchHeads.ShouldNotBeNull();
+        heads.Keys.Order().ShouldBe(branches);
+        heads["b12"].ShouldBe(new GitHubHead("b12", null));
+        gh.Commands.Count.ShouldBe(2, "the read of the pills with ten, one more request for the other three");
     }
 
     [Fact]
