@@ -289,6 +289,65 @@ public class GitInspectorTests : IDisposable
         GitInspector.TrackedChangesIn(status.Split('\n').Select(l => l.Trim('\r'))).ShouldBe(tracked);
     }
 
+    private const string Own = "3333333333333333333333333333333333333333";
+
+    /// <summary>A checkout on develop that went apart from GitHub: one commit of its own, GitHub's two; <paramref name="news"/> of them never the branch's own.</summary>
+    private static GitInspector WentApart(string? reflog, int news, List<string>? asked = null) => new((_, args, _) =>
+    {
+        asked?.Add(args);
+        return Task.FromResult<string?>(args.StartsWith("rev-list --no-walk", StringComparison.Ordinal) ? OnGitHub + "\n"
+            : args == $"rev-list --left-right --count HEAD...{OnGitHub}" ? "1\t2\n"
+            : args.StartsWith("log -g ", StringComparison.Ordinal) ? reflog
+            : args.StartsWith($"rev-list --count --ignore-missing {OnGitHub} --not HEAD ", StringComparison.Ordinal) ? $"{news}\n"
+            : args.StartsWith("rev-parse --is-shallow-repository", StringComparison.Ordinal) ? "false\n"
+            : null);
+    });
+
+    [Fact]
+    public async Task On_another_branch_commits_never_its_own_are_behind_by_the_branchs_own_reflog()
+    {
+        var asked = new List<string>();
+        var answer = await WentApart($"{Here}\tcommit: mine\r\n{Own}\tcommit (amend): mine\n", 1, asked).BehindAsync(_root, Here, OnGitHub, null, "fix/#12-größe", CancellationToken.None);
+
+        answer.ShouldBe(BehindAnswer.Of(new GitBehind(1, WentApart: true)));
+        asked.ShouldContain("log -g --format=%H%x09%gs -n 1000 \"refs/heads/fix/#12-größe\" --", "the branch's own reflog, quoted, not HEAD's");
+        asked.ShouldContain($"rev-list --count --ignore-missing {OnGitHub} --not HEAD {Here} {Own}", "under its former tips is the branch's own too");
+    }
+
+    [Fact]
+    public async Task A_forward_move_a_pull_took_back_is_no_commit_the_branch_held()
+    {
+        // GitPuller moves the branch to GitHub's commit and back when git refuses the switch (review of #435).
+        var asked = new List<string>();
+        var reflog = $"{Here}\tcommit: mine\n{Own}\t{GitPuller.TakenBackMessage}\n{OnGitHub}\t{GitPuller.ForwardMessage}\n{Own}\tbranch: Created from main\n";
+
+        await WentApart(reflog, 3, asked).BehindAsync(_root, Here, OnGitHub, null, "develop", CancellationToken.None);
+
+        asked.ShouldContain($"rev-list --count --ignore-missing {OnGitHub} --not HEAD {Here} {Own}");
+    }
+
+    [Theory]
+    [InlineData(null, "develop", "unknown")]
+    [InlineData("", "develop", "not behind")]
+    [InlineData("x", "we\"ird", "not behind")]
+    public async Task Where_the_branchs_own_commits_cannot_be_told_it_is_not_called_behind(string? reflog, string branch, string said)
+    {
+        // No answer from git is unknown; an empty reflog (logging off, expired) or a quote in the name says nothing, as before #435.
+        (await WentApart(reflog, 2, null).BehindAsync(_root, Here, OnGitHub, null, branch, CancellationToken.None))
+            .ShouldBe(said == "unknown" ? BehindAnswer.Unknown : BehindAnswer.NotBehind);
+    }
+
+    [Fact]
+    public async Task On_another_branch_only_behind_is_a_count_without_its_reflog()
+    {
+        var inspector = new GitInspector((_, args, _) => Task.FromResult<string?>(args.StartsWith("rev-list --no-walk", StringComparison.Ordinal) ? OnGitHub + "\n"
+            : args.StartsWith("rev-list --left-right", StringComparison.Ordinal) ? "0\t3\n"
+            : args.StartsWith("rev-parse --is-shallow-repository", StringComparison.Ordinal) ? "false\n"
+            : null));
+
+        (await inspector.BehindAsync(_root, Here, OnGitHub, null, "develop", CancellationToken.None)).ShouldBe(BehindAnswer.Of(new GitBehind(3)), "nothing of its own: a pull brings it");
+    }
+
     [Fact]
     public async Task Inspect_treats_a_subfolder_of_a_repository_as_a_repository()
     {

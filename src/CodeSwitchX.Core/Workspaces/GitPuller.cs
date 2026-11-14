@@ -15,6 +15,12 @@ public sealed record PullOutcome(bool Succeeded, string Text);
 /// </summary>
 public sealed class GitPuller
 {
+    /// <summary>The reflog entry of the branch moved forward before the switch; <see cref="TakenBackMessage"/> follows it when git refuses the switch (#435).</summary>
+    internal const string ForwardMessage = "CodeSwitchX: fast-forward";
+
+    /// <summary>The reflog entry of the branch moved back after git refused the switch: the branch never held the commit (#435).</summary>
+    internal const string TakenBackMessage = "CodeSwitchX: switch refused";
+
     /// <summary>For the reads: status, rev-parse, rev-list.</summary>
     internal static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(30);
 
@@ -145,7 +151,7 @@ public sealed class GitPuller
                     return new PullOutcome(false, $"{branch} is checked out in another worktree.");
                 }
 
-                var move = await _run(checkout, ["update-ref", "-m", "CodeSwitchX: fast-forward", local, remote, before], ReadTimeout, ct).ConfigureAwait(false);
+                var move = await _run(checkout, ["update-ref", "-m", ForwardMessage, local, remote, before], ReadTimeout, ct).ConfigureAwait(false);
                 if (move.Output is null)
                 {
                     return Failed(move, $"git couldn't bring {branch} up to date.");
@@ -160,7 +166,7 @@ public sealed class GitPuller
                 // The branch goes back where it was: "Pull stopped" means nothing moved, and the next pull counts its new commits (review of #407).
                 if (before is { Length: > 0 })
                 {
-                    await _run(checkout, ["update-ref", "-m", "CodeSwitchX: switch refused", local, before, remote], ReadTimeout, ct).ConfigureAwait(false);
+                    await _run(checkout, ["update-ref", "-m", TakenBackMessage, local, before, remote], ReadTimeout, ct).ConfigureAwait(false);
                 }
 
                 return Failed(change, $"git couldn't switch to {branch}.");

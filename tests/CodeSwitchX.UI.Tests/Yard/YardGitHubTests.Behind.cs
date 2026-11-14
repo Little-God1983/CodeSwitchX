@@ -16,7 +16,8 @@ public partial class YardGitHubTests
     /// Git with the checkout at <paramref name="head"/>, a clean tree, GitHub's commit fetched and <paramref name="behind"/> commits short of it,
     /// holding <paramref name="ahead"/> commits of its own that GitHub's lacks.
     /// </summary>
-    private void GitIsAt(string head, int behind = 0, int ahead = 0) => _gitRunner = args =>
+    /// <param name="reflog">What the branch's own reflog holds, one commit a line (#435); GitHub's commit among them makes every commit under it the branch's own.</param>
+    private void GitIsAt(string head, int behind = 0, int ahead = 0, string reflog = "") => _gitRunner = args =>
     {
         lock (_gitRan)
         {
@@ -27,6 +28,10 @@ public partial class YardGitHubTests
             : args.StartsWith("rev-list --no-walk", StringComparison.Ordinal) ? args[(args.LastIndexOf(' ') + 1)..] + "\n"
             : args.StartsWith("rev-list --count HEAD..", StringComparison.Ordinal) ? $"{behind}\n"
             : args.StartsWith("rev-list --count ", StringComparison.Ordinal) && args.EndsWith("..HEAD", StringComparison.Ordinal) ? $"{ahead}\n"
+            : args.StartsWith("rev-list --left-right --count HEAD...", StringComparison.Ordinal) ? $"{ahead}\t{behind}\n"
+            : args.StartsWith("rev-list --count ", StringComparison.Ordinal) && args.Contains(" --not HEAD ", StringComparison.Ordinal)
+                ? (reflog.Contains(args.Split(' ')[3], StringComparison.Ordinal) ? "0\n" : $"{behind}\n")
+            : args.StartsWith("log -g ", StringComparison.Ordinal) ? reflog
             : args.StartsWith("rev-parse --is-shallow-repository", StringComparison.Ordinal) ? "false\n"
             : string.Empty;
     };
@@ -233,7 +238,7 @@ public partial class YardGitHubTests
         // A rebase or an amend on develop leaves GitHub's old commit here (review of #428): no pull brings anything, so nothing is behind.
         _gh.DefaultHead = new string('a', 40);
         _gh.Branches["develop"] = OnGitHub;
-        GitIsAt(Here, behind: 4, ahead: 5);
+        GitIsAt(Here, behind: 1, ahead: 5, reflog: $"{Here}\n{OnGitHub}\n");
         var app = Add("App", Repo("app"));
         File.WriteAllText(Path.Combine(app.RootPath, ".git", "HEAD"), "ref: refs/heads/develop\n");
         var yard = Yard(true, app);
@@ -243,6 +248,25 @@ public partial class YardGitHubTests
         await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].BehindAgainst == OnGitHub);
         yard.FindTile(app.Id)!.GitLines[0].Behind.ShouldBeNull();
         yard.FindTile(app.Id)!.GitLines[0].GitStateLabel.ShouldBe("clean");
+    }
+
+    [Fact]
+    public async Task A_branch_with_work_of_its_own_and_new_commits_on_GitHub_is_behind()
+    {
+        // A commit here not pushed yet, and three pushed to develop from elsewhere, fetched and never checked out here (#435).
+        _gh.DefaultHead = new string('a', 40);
+        _gh.Branches["develop"] = OnGitHub;
+        GitIsAt(Here, behind: 3, ahead: 1, reflog: $"{Here}\n");
+        var app = Add("App", Repo("app"));
+        File.WriteAllText(Path.Combine(app.RootPath, ".git", "HEAD"), "ref: refs/heads/develop\n");
+        var yard = Yard(true, app);
+
+        await yard.InitializeAsync(CancellationToken.None);
+
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Behind is not null);
+        var line = yard.FindTile(app.Id)!.GitLines[0];
+        line.BehindLabel.ShouldBe("3 behind");
+        line.BehindToolTip.ShouldBe("GitHub's develop has 3 commits this checkout lacks. It has commits of its own too: pull develop with a merge or a rebase.");
     }
 
     [Fact]

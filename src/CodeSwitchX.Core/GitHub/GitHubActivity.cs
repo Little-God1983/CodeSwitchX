@@ -306,8 +306,18 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
         {
             var main = _results.GetValueOrDefault(repo)?.DefaultBranch;
             return read.Select(Key).Concat(FoldersOf(repo)).Select(f => _branchOfFolder.GetValueOrDefault(f)).OfType<string>()
-                .Where(b => b != main).Distinct(StringComparer.Ordinal).Take(GitHubReader.MostBranches).ToList();
+                .Where(b => b != main).Distinct(StringComparer.Ordinal).Take(GitHubReader.MostBranches).Where(FitsTheCommandLine()).ToList();
         }
+    }
+
+    /// <summary>
+    /// Branches while their names fit gh's command line with room to spare (#435): each goes on it twice, as a variable and in the query.
+    /// Windows takes some 32,000 characters; the rest of the read takes about 2,000.
+    /// </summary>
+    private static Func<string, bool> FitsTheCommandLine()
+    {
+        var used = 0;
+        return branch => (used += (branch.Length * 2) + 60) <= 20_000;
     }
 
     /// <summary>The folders known to be in <paramref name="repo"/>; under <see cref="_gate"/>.</summary>
@@ -346,7 +356,7 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
         await _reads.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var read = await reader.ReadAsync(repo, accounts, ct, branches).ConfigureAwait(false);
+            var read = await reader.ReadAsync(repo, accounts, branches, ct).ConfigureAwait(false);
             if (read.NobodySeesIt)
             {
                 lock (_gate)

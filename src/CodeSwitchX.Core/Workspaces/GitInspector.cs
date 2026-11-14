@@ -14,7 +14,11 @@ public sealed record GitInfo(bool IsRepository, string? Branch, int? DirtyCount,
 
 /// <summary>A checkout's branch lacks commits its branch on GitHub has (#426).</summary>
 /// <param name="Commits">How many; null when only "behind" can be told (a shallow clone, commits of its own, no count from GitHub).</param>
-public sealed record GitBehind(int? Commits);
+/// <param name="WentApart">
+/// The checkout has commits of its own beside the ones it lacks (#435), on a branch other than the default one: a pull with a merge or a
+/// rebase brings them, a fast-forward cannot.
+/// </param>
+public sealed record GitBehind(int? Commits, bool WentApart = false);
 
 /// <summary>What <see cref="GitInspector.BehindAsync"/> found (#426).</summary>
 /// <param name="Known">Git answered. Without an answer nothing is known: neither "behind" nor "not behind" may be made of it.</param>
@@ -141,11 +145,16 @@ public sealed class GitInspector
     /// </summary>
     /// <param name="head">The checkout's commit, as <see cref="GitInfo.Head"/> has it.</param>
     /// <param name="commitsOnGitHub">How many commits GitHub's branch holds in all; null when it did not say.</param>
-    /// <param name="fastForwardOnly">
-    /// Behind only where the checkout holds nothing GitHub's commit lacks (#428): on a branch other than the default one, a rebase or an amend
-    /// leaves GitHub's old commit here, and counting it would make up commits to pull that no pull brings.
+    public Task<BehindAnswer> BehindAsync(string root, string? head, string onGitHub, int? commitsOnGitHub, CancellationToken ct) =>
+        BehindAsync(root, head, onGitHub, commitsOnGitHub, ownBranch: null, ct);
+
+    /// <inheritdoc cref="BehindAsync(string, string?, string, int?, CancellationToken)"/>
+    /// <param name="ownBranch">
+    /// The checkout's branch where it is not the default one (#428), and is rewritten as a matter of course: a rebase or an amend leaves
+    /// GitHub's old commits here. Where the checkout went apart from GitHub, only GitHub's commits this branch never held (by its reflog)
+    /// are behind (#435), and none when that cannot be told. Null on the default branch.
     /// </param>
-    public async Task<BehindAnswer> BehindAsync(string root, string? head, string onGitHub, int? commitsOnGitHub, CancellationToken ct, bool fastForwardOnly = false)
+    public async Task<BehindAnswer> BehindAsync(string root, string? head, string onGitHub, int? commitsOnGitHub, string? ownBranch, CancellationToken ct)
     {
         // What GitHub sent goes on git's command line only as a full hash.
         if (!IsFullHash(head) || !IsFullHash(onGitHub))
@@ -168,23 +177,17 @@ public sealed class GitInspector
 
         if (here.Length > 0)
         {
+            if (ownBranch is not null)
+            {
+                return await BehindOnItsOwnBranchAsync(root, onGitHub, ownBranch, ct).ConfigureAwait(false);
+            }
+
             switch (Count(await _runGit(root, $"rev-list --count HEAD..{onGitHub}", ct).ConfigureAwait(false)))
             {
                 case null:
                     return BehindAnswer.Unknown;
                 case 0:
                     return BehindAnswer.NotBehind;
-                case var missing when fastForwardOnly:
-                    switch (Count(await _runGit(root, $"rev-list --count {onGitHub}..HEAD", ct).ConfigureAwait(false)))
-                    {
-                        case null:
-                            return BehindAnswer.Unknown;
-                        case > 0:
-                            // The two went apart: rewritten here, or work of its own. Nothing a pull brings.
-                            return BehindAnswer.NotBehind;
-                    }
-
-                    return BehindAnswer.Of(new GitBehind(await IsCompleteAsync(root, ct).ConfigureAwait(false) ? missing : null));
                 case var missing:
                     // A shallow clone's history is cut off, and git counts only up to the cut: behind, by a count nobody knows.
                     return BehindAnswer.Of(new GitBehind(await IsCompleteAsync(root, ct).ConfigureAwait(false) ? missing : null));
@@ -202,6 +205,90 @@ public sealed class GitInspector
         }
 
         return BehindAnswer.Of(new GitBehind(total - local));
+    }
+
+    /// <summary>The most of a branch's former tips its own commits are worked out from (#435): its newest ones, a short command line all the same.</summary>
+    private const int MostTips = 200;
+
+    /// <summary>The most entries of a branch's reflog read for them (#435): a long-lived branch's whole reflog could outlast git's time.</summary>
+    private const int ReflogDepth = 1000;
+
+    /// <summary>
+    /// How far a checkout on a branch other than the default one lacks GitHub's <paramref name="onGitHub"/> (#428, #435), GitHub's commit
+    /// being here. One walk counts both sides. Where the two went apart, GitHub's commits the branch once held, as a tip or under one, were
+    /// rewritten here (a rebase, an amend) and no pull brings them: only the others, pushed from elsewhere, are behind. Where that cannot be
+    /// told (no reflog, a name git's command line cannot carry), nothing is: not behind, as before #435.
+    /// </summary>
+    private async Task<BehindAnswer> BehindOnItsOwnBranchAsync(string root, string onGitHub, string branch, CancellationToken ct)
+    {
+        var sides = (await _runGit(root, $"rev-list --left-right --count HEAD...{onGitHub}", ct).ConfigureAwait(false))
+            ?.Split(['\t', ' ', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+        if (sides is not [var left, var right] || Count(left) is not { } ahead || Count(right) is not { } behind)
+        {
+            return BehindAnswer.Unknown;
+        }
+
+        if (behind == 0)
+        {
+            return BehindAnswer.NotBehind;
+        }
+
+        var lacking = behind;
+        if (ahead > 0)
+        {
+            if (await FormerTipsAsync(root, branch, ct).ConfigureAwait(false) is not { } tips)
+            {
+                return BehindAnswer.Unknown;
+            }
+
+            if (tips.Count == 0)
+            {
+                return BehindAnswer.NotBehind;
+            }
+
+            // A tip whose commit is gone (a partial clone, a prune) is passed over rather than failing the count.
+            if (Count(await _runGit(root, $"rev-list --count --ignore-missing {onGitHub} --not HEAD {string.Join(' ', tips)}", ct).ConfigureAwait(false)) is not { } news)
+            {
+                return BehindAnswer.Unknown;
+            }
+
+            if (news == 0)
+            {
+                return BehindAnswer.NotBehind;
+            }
+
+            lacking = news;
+        }
+
+        // A shallow clone's history is cut off, and git counts only up to the cut: behind, by a count nobody knows.
+        return BehindAnswer.Of(new GitBehind(await IsCompleteAsync(root, ct).ConfigureAwait(false) ? lacking : null, WentApart: ahead > 0));
+    }
+
+    /// <summary>
+    /// The commits <paramref name="branch"/> pointed at here, newest first, as its own reflog keeps them (#435): made, amended, rebased,
+    /// pulled or created on it. A commit only looked at on another branch, or fetched, is not among them, nor under them. Empty where the
+    /// reflog is (logging off, expired) or the name has a quote, which git allows and the command line cannot carry; null when git gave no
+    /// answer. A tip rewritten away is kept as long as git keeps its entry: 30 days by default (gc.reflogExpireUnreachable), after which its
+    /// commits, should GitHub still have them, count as behind.
+    /// </summary>
+    private async Task<List<string>?> FormerTipsAsync(string root, string branch, CancellationToken ct)
+    {
+        if (branch.Contains('"', StringComparison.Ordinal))
+        {
+            return [];
+        }
+
+        // Newest first, a bounded read; "--" so a file of the same name is no question. The move a pull of CodeSwitchX made and took back when
+        // git refused the switch (GitPuller) is no commit the branch held.
+        var reflog = await _runGit(root, $"log -g --format=%H%x09%gs -n {ReflogDepth} \"refs/heads/{branch}\" --", ct).ConfigureAwait(false);
+        if (reflog is null)
+        {
+            return null;
+        }
+
+        var entries = reflog.Split('\n').Select(l => l.TrimEnd('\r').Split('\t', 2)).Where(e => IsFullHash(e[0].Trim())).ToList();
+        return [.. entries.Where((e, i) => !(i > 0 && e.Length > 1 && e[1] == GitPuller.ForwardMessage && entries[i - 1] is [_, var newer] && newer == GitPuller.TakenBackMessage))
+            .Select(e => e[0].Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Take(MostTips)];
     }
 
     /// <summary>Git says the clone holds its whole history: not a shallow one. No answer is not a yes.</summary>

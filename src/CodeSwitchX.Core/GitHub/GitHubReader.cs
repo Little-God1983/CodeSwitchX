@@ -26,8 +26,11 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
 
     private static readonly string Query = QueryTemplate.Replace("PREVIEW", RepoActivity.PreviewCount.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal);
 
-    /// <summary>The most branches besides the default one a read asks where they stand (#428): the repository's folders are on a few.</summary>
-    internal const int MostBranches = 10;
+    /// <summary>
+    /// The most branches the one request asks where they stand (#435): far more than a repository's folders are on, and a bound on the
+    /// request's size; GitHubActivity also keeps the names within the command line.
+    /// </summary>
+    internal const int MostBranches = 100;
 
     /// <summary>
     /// <see cref="Query"/> with where each of <paramref name="branches"/> stands (#428), each under a name of its own (<c>branch0</c>, ...) and
@@ -57,8 +60,14 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
     /// Counts and the newest items, read as the best of <paramref name="accounts"/>. Nothing read is <see cref="RepoRead.NotFound"/>
     /// only when every account said so; an account that failed might be the one that can see it, and no accounts said nothing.
     /// </summary>
-    /// <param name="branches">Branches besides the default one to read where they stand (#428), each once; the caller keeps them few (<see cref="MostBranches"/>).</param>
-    public async Task<RepoRead> ReadAsync(GitHubRepo repo, IReadOnlyList<string> accounts, CancellationToken ct, IReadOnlyList<string>? branches = null)
+    public Task<RepoRead> ReadAsync(GitHubRepo repo, IReadOnlyList<string> accounts, CancellationToken ct) => ReadAsync(repo, accounts, null, ct);
+
+    /// <inheritdoc cref="ReadAsync(GitHubRepo, IReadOnlyList{string}, CancellationToken)"/>
+    /// <param name="branches">
+    /// Branches besides the default one to read where they stand (#428), each once, all in the one request (#435): a repository's folders are
+    /// on a few, and each costs GitHub one ref lookup.
+    /// </param>
+    public async Task<RepoRead> ReadAsync(GitHubRepo repo, IReadOnlyList<string> accounts, IReadOnlyList<string>? branches, CancellationToken ct)
     {
         branches ??= [];
         var candidates = accounts.Order(StringComparer.OrdinalIgnoreCase).ToList();
