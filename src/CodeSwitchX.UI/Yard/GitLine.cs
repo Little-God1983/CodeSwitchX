@@ -79,10 +79,11 @@ public sealed record GitLine(string? Folder, string? Branch, int? DirtyCount, st
     public string? GitStateLabel => Label(DirtyCount, Behind is not null || BehindUnknown);
 
     /// <summary>
-    /// The line is to be compared with a commit GitHub has, and is not yet (#429): git gave no answer, or GitHub was read after git. A
+    /// The line is to be compared with a commit GitHub has, and is not yet (#429): git gave no answer, GitHub was read after git, or it moved
+    /// on since git compared the line with the commit before. A
     /// line not on the default branch, or with nothing read on GitHub, has nothing to be compared with, and this is false.
     /// </summary>
-    internal bool BehindUnknown => Behind is null && BehindAgainst is null && ComparedHead(this, GitHub) is not null;
+    internal bool BehindUnknown => Behind is null && ComparedHead(this, GitHub) is { } head && head.Sha != BehindAgainst;
 
     /// <summary>The second pill (#426): "12 behind", or "behind" where the count cannot be told; null when the line is not behind.</summary>
     public string? BehindLabel => Behind switch

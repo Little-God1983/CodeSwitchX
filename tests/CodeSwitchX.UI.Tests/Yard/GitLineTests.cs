@@ -76,6 +76,15 @@ public class GitLineTests
     }
 
     [Fact]
+    public void A_line_compared_with_an_older_commit_than_GitHub_has_now_is_not_called_clean()
+    {
+        // GitHub moved on and git has not answered for the new commit yet (#429): nobody knows whether it is clean.
+        Compared("old").GitStateLabel.ShouldBeNull();
+        Compared(null).GitStateLabel.ShouldBeNull();
+        Compared("new").GitStateLabel.ShouldBe("clean");
+    }
+
+    [Fact]
     public void A_line_that_is_not_compared_is_not_out_of_date()
     {
         Compared(null, branch: "feature/x").BehindIsOutOfDate.ShouldBeFalse("only the default branch is compared");

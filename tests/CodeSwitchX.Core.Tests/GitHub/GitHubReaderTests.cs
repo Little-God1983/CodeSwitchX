@@ -94,6 +94,15 @@ public class GitHubReaderTests
     }
 
     [Fact]
+    public async Task An_error_on_the_counted_field_itself_is_read_as_one_on_the_count()
+    {
+        var gh = Fake(["acme"], new() { ["acme"] = null });
+        gh.Printed["acme"] = CountFailed.Replace("""["repository","defaultBranchRef","commits","history","totalCount"]""", """["repository","defaultBranchRef","commits"]""", StringComparison.Ordinal);
+
+        (await Read(gh)).ShouldNotBeNull().DefaultHead.ShouldBe(new GitHubHead("7d6783b6e4ca65062d1ab6cdfe82e5b5f29e0728", null));
+    }
+
+    [Fact]
     public async Task An_error_anywhere_else_still_fails_the_read()
     {
         var gh = Fake(["acme"], new() { ["acme"] = null });

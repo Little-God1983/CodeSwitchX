@@ -235,8 +235,8 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
 
         static bool OnTheCount(JsonElement error) =>
             error.ValueKind == JsonValueKind.Object && error.TryGetProperty("path", out var path) && path.ValueKind == JsonValueKind.Array
-            && path.GetArrayLength() > 3
-            && path[0].ValueEquals("repository") && path[1].ValueEquals("defaultBranchRef") && path[2].ValueEquals("commits") && path[3].ValueEquals("history");
+            && path.GetArrayLength() > 2
+            && path[0].ValueEquals("repository") && path[1].ValueEquals("defaultBranchRef") && path[2].ValueEquals("commits");
     }
 
     /// <summary>

@@ -754,6 +754,17 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             // A GitHub read that fails leaves what was last read, which the comparison then goes by, as the round does.
             var gitHubRead = _gitHub is not null && line is { IsRepository: true, Path: { } path } ? RefreshGitHubAsync([path]) : Task.FromResult(default(GitHubRoundResult));
             var info = await _git.InspectAsync(scripts.RepoPath, _gitHubStop.Token).ConfigureAwait(false);
+            var read = line with
+            {
+                Branch = info.Branch, DirtyCount = info.DirtyCount, Head = info.Head, IsRepository = info.IsRepository, GitDir = info.GitDir,
+                StableBuild = StableBuildOf(info, [line]), TrackedChanges = info.TrackedChanges, Behind = null, BehindAgainst = null,
+            };
+            // Another branch, changes, no git: refused whatever GitHub has, and said at once rather than after up to 5 s.
+            if (StableBuildCheck.BuildBlock(read) is not null)
+            {
+                return read;
+            }
+
             try
             {
                 // It queues behind a GitHub round that runs, and gh may take its time: the press goes by the last read rather than wait long.
@@ -764,11 +775,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
                 _logger.LogInformation("GitHub did not answer within {Wait} for a build; its last read stands", BuildGitHubWait);
             }
             // With what GitHub has now, as the comparison goes by: the line's own is the one it was shown with.
-            var fresh = WithGitHub(line with
-            {
-                Branch = info.Branch, DirtyCount = info.DirtyCount, Head = info.Head, IsRepository = info.IsRepository, GitDir = info.GitDir,
-                StableBuild = StableBuildOf(info, [line]), TrackedChanges = info.TrackedChanges,
-            });
+            var fresh = WithGitHub(read with { Behind = line.Behind, BehindAgainst = line.BehindAgainst });
             return (await WithBehindAsync([fresh], [line], _gitHubStop.Token).ConfigureAwait(false))[0];
         }
         catch (OperationCanceledException)
@@ -890,12 +897,12 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
                 FollowPanelBranch();
 
                 // GitHub's commit moved while git compared against the one before, or GitHub was read only then (#429): the read of GitHub
-                // saw no line to ask about, as the line was not on the branch yet. Asked again now, not at the next round, up to 30 s on.
+                // saw no line to ask about, as the line was not on the branch yet. This tile is read again now, not at the next round, up to 30 s on.
                 // Only for a line git compared this round, and against another commit than GitHub has now: a line git gave no answer for
                 // was given the commit it has now, so this never asks round after round.
                 if (shown.Select((l, i) => compared[i] && GitLine.ComparedHead(l, l.GitHub)?.Sha != given[i]).Any(again => again) && !_disposed)
                 {
-                    _ = RequestGitRefresh(CancellationToken.None, again: true);
+                    RefreshGitOf(tile);
                 }
             }
         });
