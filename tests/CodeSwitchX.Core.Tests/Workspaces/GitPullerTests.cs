@@ -232,6 +232,24 @@ public class GitPullerTests : IDisposable
     }
 
     [Fact]
+    public async Task The_strips_count_and_the_pulls_refusal_agree_on_one_checkout()
+    {
+        // The strip leaves the pull out by the count the pull stops at (#429, #433): a staged rename with an edit is one file, an untracked
+        // file is none.
+        await Arrange();
+        await Git(Work, "switch", "-q", "main");
+        await PushToMain(1);
+        await Git(Work, "mv", "a.txt", "renamed.txt");
+        await File.WriteAllTextAsync(Path.Combine(Work, "renamed.txt"), "edited", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(Work, "untracked.txt"), "new", TestContext.Current.CancellationToken);
+
+        var info = await new GitInspector().InspectAsync(Work, TestContext.Current.CancellationToken);
+
+        info.TrackedChanges.ShouldBe(1, "the rename with its edit is one file");
+        (await Pull()).ShouldBe(new PullOutcome(false, "1 file has uncommitted changes."));
+    }
+
+    [Fact]
     public async Task An_edit_made_while_the_fetch_ran_refuses_the_switch()
     {
         await Arrange();

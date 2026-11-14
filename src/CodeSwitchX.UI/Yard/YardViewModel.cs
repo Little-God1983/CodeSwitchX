@@ -695,7 +695,34 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     public Task RefreshGitAsync(CancellationToken ct) => RequestGitRefresh(ct, again: true);
 
     /// <summary>A tile's menu opens with Build new version on it (#425): <see cref="ReadGitOfAsync"/>, not waited for.</summary>
-    public void RefreshGitOf(WorkspaceTileViewModel tile) => _ = ReadGitOfAsync(tile);
+    /// <param name="after">
+    /// A read under way is not enough: it may have run git before what the caller knows of (a commit made a moment ago, GitHub moving on), so
+    /// this one starts once it is done (#433). Otherwise a read under way is the one.
+    /// </param>
+    public void RefreshGitOf(WorkspaceTileViewModel tile, bool after = false)
+    {
+        if (after && tile.MenuGitRead is { IsCompleted: false } running)
+        {
+            _ = ReadAfterAsync(running, tile);
+            return;
+        }
+
+        _ = ReadGitOfAsync(tile);
+    }
+
+    /// <summary>Reads the tile's git again once <paramref name="running"/> is done, on the UI thread, which owns the tile.</summary>
+    private async Task ReadAfterAsync(Task running, WorkspaceTileViewModel tile)
+    {
+        // The read handles and logs its own failures.
+        await running.ConfigureAwait(false);
+        _ui.Post(() =>
+        {
+            if (!_disposed)
+            {
+                RefreshGitOf(tile, after: true);
+            }
+        });
+    }
 
     /// <summary>
     /// Reads one tile's git now, beside any round that runs (#425): a tile's menu opens, and its Build entries must not go by lines up to a
@@ -808,16 +835,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
 
         _gitHub!.FollowBranches([(path, BranchOf(line with { Branch = branch }))]);
-        lock (_gitHubAsked)
-        {
-            // The folder's first read of GitHub is under way, started a moment ago for this branch: it is waited for, not made twice (#433).
-            if (_gitHubAsked.GetValueOrDefault(path) is TaskCompletionSource<GitHubRoundResult> first && branch is not null
-                && _branchAsked.GetValueOrDefault(path) is var asked && (asked is null || asked == branch))
-            {
-                return first.Task;
-            }
-        }
-
+        // Its own read even while a round reads the folder (#433): that round may have read GitHub before the press, and a merge made on
+        // github.com in between is what the press must not miss (#429). It queues behind the round, so the two never run at once.
         return RefreshGitHubAsync([path]);
     });
 
@@ -883,8 +902,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
                     var lines = found.Where(l => HasRepository(l) && l.Path is { } p && paths.Contains(p, StringComparer.OrdinalIgnoreCase)).ToList();
                     _gitHub.FollowBranches(lines.Select(l => (l.Path!, BranchOf(l))));
                     var unasked = BranchesToAsk(lines, paths);
-                    // What a Build press during it waits for instead of reading again (#433).
-                    var round = new TaskCompletionSource<GitHubRoundResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    var round = new object();
                     var unknown = AskGitHubOf(paths.Where(p => !_gitHub.Knows(p)).Concat(unasked.Select(l => l.Path)).Distinct(StringComparer.OrdinalIgnoreCase), round);
                     lock (_gitHubAsked)
                     {
@@ -896,8 +914,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
                     if (unknown.Count > 0)
                     {
-                        _ = RefreshGitHubAsync(unknown, round).ContinueWith(t => round.TrySetResult(t.Result), CancellationToken.None,
-                            TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                        _ = RefreshGitHubAsync(unknown, round);
                     }
                 }
             }
@@ -951,7 +968,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
                 // was given the commit it has now, so this never asks round after round.
                 if (shown.Select((l, i) => compared[i] && GitLine.ComparedHead(l, l.GitHub)?.Sha != given[i]).Any(again => again) && !_disposed)
                 {
-                    RefreshGitOf(tile);
+                    // After a read of the tile under way, which may be the very one that found the line out of date (#433).
+                    RefreshGitOf(tile, after: true);
                 }
             }
         });
@@ -1181,16 +1199,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         var key = YardGitJobs.Key(path);
         if (Tiles.FirstOrDefault(t => t.GitLines.Any(l => l.Path is { } p && YardGitJobs.Key(p) == key)) is { } tile)
         {
-            // A read under way (the tile's menu opened a moment ago) may have run git before a commit made since: the strip's read comes
-            // after it, not instead of it (#433).
-            if (tile.MenuGitRead is { IsCompleted: false } running)
-            {
-                _ = running.ContinueWith(_ => _ui.Post(() => RefreshGitOf(tile)), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
-            }
-            else
-            {
-                RefreshGitOf(tile);
-            }
+            // A read under way (the tile's menu opened a moment ago) may have run git before a commit made since (#433).
+            RefreshGitOf(tile, after: true);
         }
     }
 
