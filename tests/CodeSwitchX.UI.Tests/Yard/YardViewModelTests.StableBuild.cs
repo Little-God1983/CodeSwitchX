@@ -94,45 +94,22 @@ public partial class YardViewModelTests
         var tile = yard.FindTile(app.Id)!;
         var (entries, reads) = tile.OpenBuildMenu();
         entries.ShouldBeEmpty();
-        reads.ShouldBeTrue();
-        await tile.MenuGitRead.ShouldNotBeNull();
+        reads.ShouldBeTrue("the menu is followed: the look for scripts may find some");
+        await Task.Delay(200, TestContext.Current.CancellationToken);
+        tile.MenuGitRead.ShouldBeNull("no scripts there: no git for every right-click");
         Directory.CreateDirectory(Path.Combine(app.RootPath, "scripts"));
         File.WriteAllText(Path.Combine(app.RootPath, "scripts", "build.ps1"), "# build");
         File.WriteAllText(Path.Combine(app.RootPath, "scripts", "_common.ps1"), "$script:ShortcutName = 'App.lnk'\n");
 
-        tile.OpenBuildMenu().Entries.ShouldBeEmpty("as of the last read");
-        await tile.MenuGitRead!;
+        tile.OpenBuildMenu().ShouldSatisfyAllConditions(m => m.Entries.ShouldBeEmpty("as of the last read"), m => m.Reads.ShouldBeTrue());
+        for (var i = 0; i < 250 && tile.MenuGitRead is not { IsCompleted: true }; i++)
+        {
+            await Task.Delay(20, TestContext.Current.CancellationToken);
+        }
 
         tile.StableBuildEntries().ShouldHaveSingleItem();
         yard.FindTile(plain.Id)!.OpenBuildMenu().Reads.ShouldBeFalse();
         yard.FindTile(plain.Id)!.MenuGitRead.ShouldBeNull("a tile with no repository has nothing to read");
-    }
-
-    [Fact]
-    public async Task New_pills_leave_what_the_build_entries_come_from_as_it_is()
-    {
-        var root = Repo("app");
-        Directory.CreateDirectory(Path.Combine(root, "scripts"));
-        File.WriteAllText(Path.Combine(root, "scripts", "build.ps1"), "# build");
-        File.WriteAllText(Path.Combine(root, "scripts", "_common.ps1"), "$script:ShortcutName = 'App.lnk'\n");
-        var app = new Workspace { Name = "App", RootPath = root, TrackId = _general.Id };
-        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([app]));
-        var yard = Yard((_, _, _) => Task.FromResult<string?>(string.Empty));
-        await yard.InitializeAsync(CancellationToken.None);
-        await yard.RefreshGitAsync(CancellationToken.None);
-        var tile = yard.FindTile(app.Id)!;
-        var before = tile.StableBuildInputs();
-
-        tile.ShowGit([tile.GitLines[0] with { Issues = null, PullRequests = null, GitHub = null, Path = tile.GitLines[0].Path }]);
-        tile.ShowGit([tile.GitLines[0] with { TrackedChanges = 7 }]);
-        tile.StableBuildInputs().SequenceEqual(before).ShouldBeTrue("nothing the entries come from changed");
-
-        tile.ShowGit([tile.GitLines[0] with { Head = new string('c', 40) }]);
-        tile.StableBuildInputs().SequenceEqual(before).ShouldBeFalse("a build moves the commit as it writes the shortcut");
-        before = tile.StableBuildInputs();
-
-        tile.ShowGit([tile.GitLines[0] with { DirtyCount = 2 }]);
-        tile.StableBuildInputs().SequenceEqual(before).ShouldBeFalse();
     }
 
     [Fact]
@@ -149,7 +126,7 @@ public partial class YardViewModelTests
         var earlier = tile.StartGitRead();
         var later = tile.StartGitRead();
 
-        tile.ShowGit([shown], later, [false]).ShouldNotBeNull();
+        tile.ShowGit([shown], later, [false]).ShouldBeNull("it only carried the line over");
         tile.ShowGit([shown with { DirtyCount = 3 }], earlier, [true]).ShouldBe([true]);
         tile.GitLines[0].DirtyCount.ShouldBe(3);
 
@@ -174,7 +151,7 @@ public partial class YardViewModelTests
         var later = tile.StartGitRead();
 
         tile.ShowGit([stale with { DirtyCount = 3 }], earlier, [true]).ShouldBe([true]);
-        tile.ShowGit([stale], later, [false]).ShouldBe([false]);
+        tile.ShowGit([stale], later, [false]).ShouldBeNull("nothing of it is shown");
 
         tile.GitLines[0].DirtyCount.ShouldBe(3, "the carried line is older than the earlier read's look");
     }

@@ -77,14 +77,18 @@ public partial class YardView : UserControl
         if (reads)
         {
             _buildMenu = (menu, tile);
-            _buildMenuInputs = tile.StableBuildInputs();
             tile.PropertyChanged += OnBuildMenuTileChanged;
             menu.Closed += OnBuildMenuClosed;
+            // A menu that did not open after all (another handler took the right-click) never closes: it is let go of here (#431).
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (_buildMenu is var (followed, _) && ReferenceEquals(followed, menu) && !menu.IsOpen)
+                {
+                    StopFollowingBuildMenu();
+                }
+            }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
         }
     }
-
-    /// <summary>What the open menu's entries were made from (#431).</summary>
-    private IReadOnlyList<StableBuildInput>? _buildMenuInputs;
 
     /// <summary>
     /// The tile of the open menu shows new git lines (#425): its entries are made again. The same headers keep their items, which only
@@ -97,14 +101,8 @@ public partial class YardView : UserControl
             return;
         }
 
-        // New GitHub pills and the like: the entries would come out the same, and making them looks for the shortcuts on disk (#431).
-        var inputs = tile.StableBuildInputs();
-        if (_buildMenuInputs is { } before && before.SequenceEqual(inputs))
-        {
-            return;
-        }
-
-        _buildMenuInputs = inputs;
+        // Made again on every change of the lines, new pills too (#431): a shortcut written meanwhile, by this tile's build or another's,
+        // counts at once, and each entry holds the line as shown. It costs a look for each shortcut in the local Start Menu.
         var wanted = Items(tile.StableBuildEntries()).ToList();
         var shown = menu.Items.OfType<MenuItem>().Where(i => i.Tag == StableBuildItem).ToList();
         if (!wanted.Select(w => Header(w.Header)).SequenceEqual(shown.Select(i => i.Header as string)))
@@ -129,7 +127,6 @@ public partial class YardView : UserControl
             tile.PropertyChanged -= OnBuildMenuTileChanged;
             menu.Closed -= OnBuildMenuClosed;
             _buildMenu = null;
-            _buildMenuInputs = null;
         }
     }
 

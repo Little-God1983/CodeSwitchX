@@ -138,55 +138,57 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     internal bool[]? ShowGit(IReadOnlyList<GitLine> lines, long read, IReadOnlyList<bool>? looked = null)
     {
         var applied = new bool[lines.Count];
-        var current = GitLines;
-        List<GitLine> next;
-        if (read >= _gitReadShown)
+        var newer = read >= _gitReadShown;
+        // The shown line of each folder, by its key, worked out once.
+        var shownAt = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < GitLines.Count; i++)
         {
-            // The read's own lines, in its order; a line it only carried over gives way to what is shown for that folder, which is at least
-            // as new (#431): an earlier read may have looked at the folder since this one started.
-            _gitReadShown = read;
-            next = [.. lines.Select((line, i) =>
+            if (GitLines[i].Path is { } p)
             {
-                var key = line.Path is { } p ? YardGitJobs.Key(p) : null;
-                if (looked is not null && !looked[i] && key is not null && current.FirstOrDefault(l => l.Path is { } q && YardGitJobs.Key(q) == key) is { } kept)
-                {
-                    return kept;
-                }
-
-                applied[i] = true;
-                if (key is not null && (looked is null || looked[i]))
-                {
-                    _gitReadOfFolder[key] = read;
-                }
-
-                return line;
-            })];
+                shownAt.TryAdd(YardGitJobs.Key(p), i);
+            }
         }
-        else
+
+        // A newer read: its own lines, in its order, where a line it only carried over gives way to what is shown for that folder, which is
+        // at least as new (an earlier read may have looked since this one started). An older read: only its looks at folders no later read
+        // looked at take their place (#431).
+        var next = newer ? new List<GitLine>(lines) : [.. GitLines];
+        for (var i = 0; i < lines.Count; i++)
         {
-            // An older read: only its looks at folders a later read did not look at take their place (#431).
-            next = [.. current];
-            for (var i = 0; i < lines.Count; i++)
+            var key = lines[i].Path is { } path ? YardGitJobs.Key(path) : null;
+            var shown = key is not null && shownAt.TryGetValue(key, out var at) ? at : -1;
+            var didLook = looked is null || looked[i];
+            if (newer)
             {
-                if ((looked is not null && !looked[i]) || lines[i].Path is not { } path)
+                if (!didLook && shown >= 0)
                 {
+                    next[i] = GitLines[shown];
                     continue;
                 }
 
-                var key = YardGitJobs.Key(path);
-                var at = next.FindIndex(l => l.Path is { } p && YardGitJobs.Key(p) == key);
-                if (at >= 0 && _gitReadOfFolder.GetValueOrDefault(key) < read)
+                applied[i] = true;
+                if (key is not null && didLook)
                 {
-                    next[at] = lines[i];
                     _gitReadOfFolder[key] = read;
-                    applied[i] = true;
                 }
             }
-
-            if (!applied.Any(a => a))
+            else if (didLook && shown >= 0 && _gitReadOfFolder.GetValueOrDefault(key!) < read)
             {
-                return null;
+                next[shown] = lines[i];
+                _gitReadOfFolder[key!] = read;
+                applied[i] = true;
             }
+        }
+
+        if (newer)
+        {
+            _gitReadShown = read;
+        }
+
+        if (!applied.Any(a => a))
+        {
+            // Nothing of this read is shown; a newer one that carried every line over leaves the lines as they are.
+            return null;
         }
 
         // Only the folders shown: one that comes back starts afresh.
@@ -530,27 +532,49 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     /// (#431). One git status of this tile, off the UI thread, joined by a read under way. The menu follows <see cref="GitLines"/> while it
     /// is open.
     /// </summary>
-    /// <returns>The entries, and whether git is read for the menu, which then follows the read.</returns>
+    /// <returns>The entries, and whether git may be read for the menu, which then follows it.</returns>
     public (IReadOnlyList<StableBuildEntry> Entries, bool Reads) OpenBuildMenu()
     {
         var entries = StableBuildEntries();
-        // A tile not read yet shows the unknown line, and may well be a repository (#431).
-        var reads = GitLines.Any(l => l.IsRepository || ReferenceEquals(l, GitLine.Unknown));
-        if (reads)
+        // A tile with entries, or not read yet (the unknown line, which may well be a repository), is read at once (#431).
+        if (entries.Count > 0 || GitLines.Any(l => ReferenceEquals(l, GitLine.Unknown)))
         {
             _owner.RefreshGitOf(this);
+            return (entries, true);
         }
 
-        return (entries, reads);
+        // A repository without entries is read only where the scripts are there now, added a moment ago: one look for a file per
+        // repository, off the UI thread (a share gone offline blocks a look for about 20 s), not git for every folder of every right-click.
+        var places = GitLines.Where(l => l.IsRepository).SelectMany(ScriptPlaces).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (places.Count == 0)
+        {
+            return (entries, false);
+        }
+
+        _ = Task.Run(() =>
+        {
+            if (places.Any(p => System.IO.File.Exists(System.IO.Path.Combine(p, "scripts", "build.ps1"))))
+            {
+                _owner.Post(() => _owner.RefreshGitOf(this));
+            }
+        });
+        return (entries, true);
     }
 
-    /// <summary>
-    /// What the Build / Run entries are made from (#431): per repository with the scripts, the scripts, the names and what the precheck reads,
-    /// and the commit, which a build moves when it writes the shortcut. New GitHub pills and the like leave it as it is, and an open menu is
-    /// then not made again.
-    /// </summary>
-    internal IReadOnlyList<StableBuildInput> StableBuildInputs() =>
-        [.. GitLines.Where(l => l.StableBuild is not null).Select(l => new StableBuildInput(l.StableBuild!, l.Folder, l.Branch, l.DirtyCount, l.Behind, l.Head))];
+    /// <summary>Where a repository line's stable-build scripts would be: its folder, and the top of its checkout where git's folder tells it.</summary>
+    private static IEnumerable<string> ScriptPlaces(GitLine line)
+    {
+        if (line.Path is { } path)
+        {
+            yield return path;
+        }
+
+        if (line.GitDir is { } gitDir && System.IO.Path.GetFileName(System.IO.Path.TrimEndingDirectorySeparator(gitDir)).Equals(".git", StringComparison.OrdinalIgnoreCase)
+            && System.IO.Path.GetDirectoryName(System.IO.Path.TrimEndingDirectorySeparator(gitDir)) is { } top)
+        {
+            yield return top;
+        }
+    }
 
     /// <summary>The read of this tile's git a menu started, while it runs: a menu opened again, or Build pressed, waits for it (#425). UI thread.</summary>
     internal Task<IReadOnlyList<GitLine>?>? MenuGitRead { get; set; }

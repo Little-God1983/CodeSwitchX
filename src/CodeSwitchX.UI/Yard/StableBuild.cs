@@ -6,7 +6,6 @@ using CodeSwitchX.Core.Paths;
 using CodeSwitchX.UI.Infrastructure;
 using CommunityToolkit.Mvvm.Input;
 using Path = System.IO.Path;
-using GitBehind = CodeSwitchX.Core.Workspaces.GitBehind;
 
 namespace CodeSwitchX.UI.Yard;
 
@@ -394,6 +393,3 @@ public sealed partial class StableBuildEntry
         }
     }
 }
-
-/// <summary>What a tile's Build / Run entries are made from (#431): an open menu is made again only when this changes.</summary>
-internal sealed record StableBuildInput(StableBuildRepo Scripts, string? Folder, string? Branch, int? DirtyCount, GitBehind? Behind, string? Head);

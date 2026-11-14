@@ -694,6 +694,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// </summary>
     public Task RefreshGitAsync(CancellationToken ct) => RequestGitRefresh(ct, again: true);
 
+    /// <summary>Runs <paramref name="action"/> on the UI thread, which owns the tiles (#431).</summary>
+    internal void Post(Action action) => _ui.Post(action);
+
     /// <summary>
     /// <see cref="ReadGitOfAsync"/>, not waited for: a tile's menu opens with Build new version on it (#425), the merge strip opens (#429),
     /// a round's line found out of date (#429).
