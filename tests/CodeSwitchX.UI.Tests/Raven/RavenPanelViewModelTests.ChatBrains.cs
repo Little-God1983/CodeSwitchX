@@ -1,9 +1,8 @@
 using CodeSwitchX.Conductor;
-using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Core.Messaging;
+using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Core.Yard;
 using CodeSwitchX.UI.Raven;
-using CodeSwitchX.Voice.Dictation;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace CodeSwitchX.UI.Tests.Raven;
@@ -435,7 +434,7 @@ public sealed partial class RavenPanelViewModelTests
         vm.IsMuted = true;
         vm.SelectedChat = vm.YardChat;
         _brain.Gate = new TaskCompletionSource(); // chat 0's brain answers words said aloud, and is still at it
-        Transcribes(Task.FromResult(new DictationResult("What's waiting?", TimeSpan.FromSeconds(1))));
+        Transcribes(Task.FromResult(Transcript("What's waiting?", TimeSpan.FromSeconds(1))));
         vm.PressMic(TalkInput.MicButton);
         await WithinAsync(vm.PendingStart);
         Speak();

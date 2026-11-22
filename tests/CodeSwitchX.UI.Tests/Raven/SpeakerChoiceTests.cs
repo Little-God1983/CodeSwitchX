@@ -1,5 +1,5 @@
 using CodeSwitchX.UI.Raven;
-using CodeSwitchX.Voice.Audio;
+using LittleGod.Speech.Speaking;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using NSubstitute;

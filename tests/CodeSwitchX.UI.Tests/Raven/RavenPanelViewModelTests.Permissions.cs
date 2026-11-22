@@ -3,7 +3,7 @@ using CodeSwitchX.Core.Messaging;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Raven;
-using CodeSwitchX.Voice.Dictation;
+using LittleGod.Speech.Whisper;
 
 namespace CodeSwitchX.UI.Tests.Raven;
 
@@ -229,7 +229,7 @@ public sealed partial class RavenPanelViewModelTests
     public async Task In_Open_mic_a_bare_yes_allows_in_the_follow_up_after_the_read_back_and_later_only_with_the_name(int past, string said,
         bool allows)
     {
-        Transcribes(Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        Transcribes(Task.FromResult(Transcript(said, TimeSpan.FromSeconds(1))));
         var (vm, asks) = await QuestionsVmAsync(openMic: true);
         vm.MicMode = MicMode.OpenMic;
         await WithinAsync(vm.PendingOpenMic);
@@ -332,7 +332,7 @@ public sealed partial class RavenPanelViewModelTests
         var (vm, asks) = await QuestionsVmAsync();
         var held = asks.HoldAsync(Permitting(), CancellationToken.None);
         await PermissionCards(vm).Single().Naming;
-        var transcribed = new TaskCompletionSource<DictationResult>();
+        var transcribed = new TaskCompletionSource<WhisperTranscript>();
         Transcribes(transcribed.Task);
 
         // "Okay." is said to something else, and still being transcribed when the brain proposes the allow.
@@ -343,7 +343,7 @@ public sealed partial class RavenPanelViewModelTests
         _time.Advance(TimeSpan.FromSeconds(1));
         var proposal = asks.Propose("p1", ContentAutomatorX);
         await Until(() => asks.IsHeard(proposal));
-        transcribed.SetResult(new DictationResult("Okay.", TimeSpan.FromSeconds(2)));
+        transcribed.SetResult(Transcript("Okay.", TimeSpan.FromSeconds(2)));
         await WithinAsync(released);
         await WithinAsync(vm.PendingAnswers);
 
@@ -551,7 +551,7 @@ public sealed partial class RavenPanelViewModelTests
     public async Task Muting_during_the_read_back_opens_the_follow_up_as_one_written_muted_does()
     {
         // #246: a bare yes right after the read-back worked when it was written muted, not when the mute cut it off.
-        Transcribes(Task.FromResult(new DictationResult("Yes.", TimeSpan.FromSeconds(1))));
+        Transcribes(Task.FromResult(Transcript("Yes.", TimeSpan.FromSeconds(1))));
         var (vm, asks) = await QuestionsVmAsync(openMic: true);
         vm.MicMode = MicMode.OpenMic;
         await WithinAsync(vm.PendingOpenMic);

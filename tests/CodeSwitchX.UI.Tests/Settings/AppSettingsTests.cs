@@ -6,8 +6,9 @@ using CodeSwitchX.UI.Raven;
 using CodeSwitchX.UI.Settings;
 using CodeSwitchX.UI.Shell;
 using CodeSwitchX.UI.Voice;
-using CodeSwitchX.Voice.Audio;
-using CodeSwitchX.Voice.Dictation;
+using LittleGod.Speech.Listening;
+using LittleGod.Speech.Speaking;
+using LittleGod.Speech.Whisper;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Shouldly;
@@ -435,7 +436,7 @@ public sealed class AppSettingsTests
 
         _h.Shell.Settings.RavenWhisperModel.ShouldBe(model);
         set.Value.ShouldBe(ModelLamp.RowNameOf(model));
-        set.Values!.ShouldBe(Enum.GetValues<WhisperModel>().Select(ModelLamp.RowNameOf));
+        set.Values!.ShouldBe(SettingsViewModel.OfferedWhisperModels.Select(ModelLamp.RowNameOf)); // the four offered (#328)
     }
 
     /// <summary>#295: the most chats on a tile is set by voice to a count the page offers; the tiles follow at once.</summary>
@@ -533,7 +534,7 @@ public sealed class AppSettingsTests
     {
         await _h.Shell.InitializeAsync(CancellationToken.None);
         await _settings.SetAsync("voice engine", "Qwen3-TTS", Ct);
-        var kokoro = CodeSwitchX.Voice.Speech.SpeechSettings.KokoroVoices[1];
+        var kokoro = CodeSwitchX.Voice.Speech.SpeechSettings.VoicesOf(CodeSwitchX.Voice.Speech.SpeechEngine.Kokoro)[1];
 
         await _settings.SetAsync("voice", kokoro.Name, Ct);
 
@@ -581,7 +582,7 @@ public sealed class AppSettingsTests
 
         var list = await _settings.ListAsync(Ct);
 
-        list.Single(s => s.Name == "voice").Values.ShouldBe(CodeSwitchX.Voice.Speech.SpeechSettings.KokoroVoices.Select(v => v.Name));
+        list.Single(s => s.Name == "voice").Values.ShouldBe(CodeSwitchX.Voice.Speech.SpeechSettings.VoicesOf(CodeSwitchX.Voice.Speech.SpeechEngine.Kokoro).Select(v => v.Name));
         list.Single(s => s.Name == "microphone").Values!.ShouldContain("Desk mic");
     }
 

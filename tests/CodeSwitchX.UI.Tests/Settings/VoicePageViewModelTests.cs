@@ -1,8 +1,10 @@
 using CodeSwitchX.UI.Settings;
 using CodeSwitchX.UI.Voice;
 using CodeSwitchX.Voice;
-using CodeSwitchX.Voice.Dictation;
 using CodeSwitchX.Voice.Speech;
+using LittleGod.Speech;
+using LittleGod.Speech.Speaking;
+using LittleGod.Speech.Whisper;
 using NSubstitute;
 
 namespace CodeSwitchX.UI.Tests.Settings;
@@ -13,7 +15,7 @@ public sealed class VoicePageViewModelTests
 
     private async Task<VoicePageViewModel> OpenAsync()
     {
-        _shell.Dictation.Status.Returns(new DictationStatus(DictationState.Asleep, WhisperModel.LargeV3Turbo));
+        _shell.Dictation.Status.Returns(new WhisperStatus(WhisperState.Asleep, WhisperModel.LargeV3Turbo));
         await _shell.Shell.Settings.LoadAsync(CancellationToken.None);
         _shell.VoiceStatus.Start();
         return _shell.Shell.Settings.VoicePage;
@@ -266,9 +268,9 @@ internal sealed class FakeVoiceSamples : IVoiceSamples
 {
     public List<(SpeechEngine, string)> Played { get; } = [];
 
-    public async Task PlayAsync(SpeechEngine engine, string voice, CancellationToken ct)
+    public async Task PlayAsync(VoiceCatalog voices, string voice, CancellationToken ct)
     {
-        Played.Add((engine, voice));
+        Played.Add((voices == SpeechSettings.CatalogOf(SpeechEngine.Kokoro) ? SpeechEngine.Kokoro : SpeechEngine.Qwen, voice));
         try
         {
             await Task.Delay(Timeout.Infinite, ct);

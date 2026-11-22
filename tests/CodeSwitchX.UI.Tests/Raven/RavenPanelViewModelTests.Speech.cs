@@ -1,7 +1,7 @@
 using System.ComponentModel;
 using CodeSwitchX.Conductor;
 using CodeSwitchX.UI.Raven;
-using CodeSwitchX.Voice.Speech;
+using LittleGod.Speech;
 
 namespace CodeSwitchX.UI.Tests.Raven;
 
@@ -227,7 +227,7 @@ public sealed partial class RavenPanelViewModelTests
         _speech.Report(new TextToSpeechStatus(TextToSpeechState.Installing, "downloading PyTorch (2.5 GB)"));
         Lines(vm).ShouldBe([(RavenLogKind.Note, "Installing Raven's voice: downloading PyTorch (2.5 GB)…")]);
 
-        _speech.Report(new TextToSpeechStatus(TextToSpeechState.Installing, "downloading the model", new global::CodeSwitchX.Voice.ByteProgress(142_000_000, 330_000_000)));
+        _speech.Report(new TextToSpeechStatus(TextToSpeechState.Installing, "downloading the model", new ByteProgress(142_000_000, 330_000_000)));
         Lines(vm).ShouldBe([(RavenLogKind.Note, $"Installing Raven's voice: downloading the model ({142:N0} of {330:N0} MB)…")]);
 
         _speech.Report(new TextToSpeechStatus(TextToSpeechState.Loading, "downloading the model"));

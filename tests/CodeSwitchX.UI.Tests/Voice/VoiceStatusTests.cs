@@ -1,23 +1,28 @@
 using CodeSwitchX.UI.Voice;
 using CodeSwitchX.Voice;
-using CodeSwitchX.Voice.Dictation;
 using CodeSwitchX.Voice.Speech;
+using LittleGod.Speech;
+using LittleGod.Speech.Sidecar;
+using LittleGod.Speech.Whisper;
 using NSubstitute;
 
 namespace CodeSwitchX.UI.Tests.Voice;
 
 public sealed class VoiceStatusTests
 {
-    private readonly SpeechSettings _settings = new();
     private readonly FakeEngineVoice _kokoro = new(SpeechEngine.Kokoro);
     private readonly FakeEngineVoice _qwen = new(SpeechEngine.Qwen);
-    private readonly IDictationService _dictation = Substitute.For<IDictationService>();
+    private readonly SpeechEngines _engines;
+    private readonly SpeechSettings _settings;
+    private readonly IWhisperTranscriber _dictation = Substitute.For<IWhisperTranscriber>();
     private readonly VoiceStatusViewModel _vm;
 
     public VoiceStatusTests()
     {
-        _dictation.Status.Returns(new DictationStatus(DictationState.Asleep, WhisperModel.LargeV3Turbo));
-        _vm = new VoiceStatusViewModel(new SpeechEngines(_settings, [_kokoro, _qwen]), _settings, _dictation, new ImmediateDispatcher());
+        _dictation.Status.Returns(new WhisperStatus(WhisperState.Asleep, WhisperModel.LargeV3Turbo));
+        _engines = new SpeechEngines([_kokoro, _qwen]);
+        _settings = new SpeechSettings(_engines);
+        _vm = new VoiceStatusViewModel(_engines, _settings, _dictation, new ImmediateDispatcher());
     }
 
     [Theory]
@@ -36,14 +41,14 @@ public sealed class VoiceStatusTests
     }
 
     [Theory]
-    [InlineData(DictationState.NotDownloaded, ModelDot.Red, "not downloaded")]
-    [InlineData(DictationState.Asleep, ModelDot.Grey, "asleep")]
-    [InlineData(DictationState.Loading, ModelDot.Yellow, "loading")]
-    [InlineData(DictationState.Ready, ModelDot.Green, "ready")]
-    [InlineData(DictationState.Failed, ModelDot.Red, "failed")]
-    public void Speech_to_text_shows_the_same_colours(DictationState state, ModelDot dot, string text)
+    [InlineData(WhisperState.NotDownloaded, ModelDot.Red, "not downloaded")]
+    [InlineData(WhisperState.Asleep, ModelDot.Grey, "asleep")]
+    [InlineData(WhisperState.Loading, ModelDot.Yellow, "loading")]
+    [InlineData(WhisperState.Ready, ModelDot.Green, "ready")]
+    [InlineData(WhisperState.Failed, ModelDot.Red, "failed")]
+    public void Speech_to_text_shows_the_same_colours(WhisperState state, ModelDot dot, string text)
     {
-        var lamp = ModelLamp.Of(new DictationStatus(state, WhisperModel.BaseEnglish));
+        var lamp = ModelLamp.Of(new WhisperStatus(state, WhisperModel.BaseEnglish));
 
         (lamp.Dot, lamp.Text).ShouldBe((dot, text));
     }
@@ -56,7 +61,7 @@ public sealed class VoiceStatusTests
 
         lamp.Progress.ShouldNotBeNull().ShouldBe(142.0 / 330, 0.001);
         lamp.Detail.ShouldBe($"Installing Kokoro: downloading the model ({142:N0} of {330:N0} MB)");
-        ModelLamp.Of(new DictationStatus(DictationState.Downloading, WhisperModel.LargeV3Turbo, Bytes: new ByteProgress(812_000_000, 1_624_000_000)))
+        ModelLamp.Of(new WhisperStatus(WhisperState.Downloading, WhisperModel.LargeV3Turbo, Bytes: new ByteProgress(812_000_000, 1_624_000_000)))
             .Text.ShouldBe($"downloading {0.5:P0}");
     }
 
@@ -81,10 +86,10 @@ public sealed class VoiceStatusTests
     public async Task Speech_to_text_is_read_at_the_start_and_follows_the_service()
     {
         _vm.Start();
-        await Until(() => _vm.Listening.Dot == ModelDot.Grey && _vm.ListeningState == DictationState.Asleep);
+        await Until(() => _vm.Listening.Dot == ModelDot.Grey && _vm.ListeningState == WhisperState.Asleep);
         _vm.ListeningName.ShouldBe("speech to text · Whisper Large v3 Turbo");
 
-        _dictation.StatusChanged += Raise.Event<EventHandler<DictationStatus>>(_dictation, new DictationStatus(DictationState.Ready, WhisperModel.TinyEnglish));
+        _dictation.StatusChanged += Raise.Event<EventHandler<WhisperStatus>>(_dictation, new WhisperStatus(WhisperState.Ready, WhisperModel.TinyEnglish));
 
         (_vm.Listening.Dot, _vm.ListeningName).ShouldBe((ModelDot.Green, "speech to text · Whisper Tiny"));
     }
@@ -103,33 +108,36 @@ public sealed class VoiceStatusTests
     public async Task The_status_read_at_the_start_does_not_undo_a_newer_one()
     {
         var dictation = new RacingDictation();
-        var vm = new VoiceStatusViewModel(new SpeechEngines(_settings, [_kokoro, _qwen]), _settings, dictation, new ImmediateDispatcher());
+        var vm = new VoiceStatusViewModel(_engines, _settings, dictation, new ImmediateDispatcher());
 
         vm.Start();
 
         await Until(() => vm.ListeningState is not null);
         await Task.Delay(50, TestContext.Current.CancellationToken);
-        vm.ListeningState.ShouldBe(DictationState.Ready, "the warm-up told Ready while the start read Loading");
+        vm.ListeningState.ShouldBe(WhisperState.Ready, "the warm-up told Ready while the start read Loading");
     }
 
     /// <summary>Tells Ready while its status is read, and gives the Loading it read before.</summary>
-    private sealed class RacingDictation : IDictationService
+    private sealed class RacingDictation : IWhisperTranscriber
     {
-        public event EventHandler<DictationStatus>? StatusChanged;
+        public event EventHandler<WhisperStatus>? StatusChanged;
 
-        public DictationStatus Status
+        public WhisperStatus Status
         {
             get
             {
-                StatusChanged?.Invoke(this, new DictationStatus(DictationState.Ready, WhisperModel.LargeV3Turbo));
-                return new DictationStatus(DictationState.Loading, WhisperModel.LargeV3Turbo);
+                StatusChanged?.Invoke(this, new WhisperStatus(WhisperState.Ready, WhisperModel.LargeV3Turbo));
+                return new WhisperStatus(WhisperState.Loading, WhisperModel.LargeV3Turbo);
             }
         }
 
-        public Task<DictationResult> TranscribeAsync(ReadOnlyMemory<float> samples, DictationVocabulary vocabulary, CancellationToken ct) =>
+        public Task<WhisperTranscript> TranscribeAsync(ReadOnlyMemory<float> samples, WhisperRequest? request = null, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
-        public Task WarmUpAsync(CancellationToken ct) => Task.CompletedTask;
+        public Task<WhisperTranscript> TranscribeAsync(Stream wave, WhisperRequest? request = null, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task WarmUpAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
     private static async Task Until(Func<bool> condition)
     {

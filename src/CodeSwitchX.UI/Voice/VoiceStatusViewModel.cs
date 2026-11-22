@@ -1,7 +1,9 @@
 using CodeSwitchX.UI.Infrastructure;
-using CodeSwitchX.Voice.Dictation;
 using CodeSwitchX.Voice.Speech;
 using CommunityToolkit.Mvvm.ComponentModel;
+using LittleGod.Speech;
+using LittleGod.Speech.Sidecar;
+using LittleGod.Speech.Whisper;
 
 namespace CodeSwitchX.UI.Voice;
 
@@ -13,7 +15,7 @@ public sealed partial class VoiceStatusViewModel : ObservableObject
 {
     private readonly SpeechEngines _engines;
     private readonly SpeechSettings _settings;
-    private readonly IDictationService _dictation;
+    private readonly IWhisperTranscriber _dictation;
     private readonly IUiDispatcher _ui;
 
     /// <summary>Counts the statuses the dictation service told: the one read at the start is dropped if a newer came meanwhile.</summary>
@@ -28,9 +30,9 @@ public sealed partial class VoiceStatusViewModel : ObservableObject
     [ObservableProperty] private string _listeningName;
 
     /// <summary>Where the speech-to-text model stands, for what Settings offers (a Download button).</summary>
-    [ObservableProperty] private DictationState? _listeningState;
+    [ObservableProperty] private WhisperState? _listeningState;
 
-    public VoiceStatusViewModel(SpeechEngines engines, SpeechSettings settings, IDictationService dictation, IUiDispatcher ui)
+    public VoiceStatusViewModel(SpeechEngines engines, SpeechSettings settings, IWhisperTranscriber dictation, IUiDispatcher ui)
     {
         _engines = engines;
         _settings = settings;
@@ -72,14 +74,14 @@ public sealed partial class VoiceStatusViewModel : ObservableObject
 
     private void ShowSpeech()
     {
-        Kokoro = ModelLamp.Of(_engines.StatusOf(SpeechEngine.Kokoro), SpeechEngine.Kokoro);
-        Qwen = ModelLamp.Of(_engines.StatusOf(SpeechEngine.Qwen), SpeechEngine.Qwen);
+        Kokoro = ModelLamp.Of(_engines.StatusOf(SpeechSettings.KeyOf(SpeechEngine.Kokoro)), SpeechEngine.Kokoro);
+        Qwen = ModelLamp.Of(_engines.StatusOf(SpeechSettings.KeyOf(SpeechEngine.Qwen)), SpeechEngine.Qwen);
         var engine = _settings.Engine;
         Speech = engine is { } picked ? LampOf(picked) : ModelLamp.Of(SpeechEngines.NoEngine, null);
         SpeechName = engine is { } named ? $"voice · {ModelLamp.NameOf(named)}" : "voice";
     }
 
-    private void ShowListening(DictationStatus status)
+    private void ShowListening(WhisperStatus status)
     {
         Listening = ModelLamp.Of(status);
         ListeningState = status.State;

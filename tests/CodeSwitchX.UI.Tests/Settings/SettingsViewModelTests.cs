@@ -1,4 +1,3 @@
-using CodeSwitchX.UI.Tests.Raven;
 using System.Text.Json.Nodes;
 using CodeSwitchX.Conductor;
 using CodeSwitchX.Core;
@@ -7,13 +6,18 @@ using CodeSwitchX.Core.Yard;
 using CodeSwitchX.Data;
 using CodeSwitchX.Ingest.Hooks;
 using CodeSwitchX.UI.Settings;
+using CodeSwitchX.UI.Tests.Raven;
 using CodeSwitchX.UI.Tests.Voice;
 using CodeSwitchX.UI.Voice;
 using CodeSwitchX.UI.Yard;
 using CodeSwitchX.Voice;
-using CodeSwitchX.Voice.Dictation;
 using CodeSwitchX.Voice.Audio;
 using CodeSwitchX.Voice.Speech;
+using LittleGod.Speech;
+using LittleGod.Speech.Listening;
+using LittleGod.Speech.Sidecar;
+using LittleGod.Speech.Speaking;
+using LittleGod.Speech.Whisper;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 
@@ -27,11 +31,12 @@ public class SettingsViewModelTests : IDisposable
     private readonly PersistenceWriterOptions _writerOptions = new();
     private readonly BrainSettings _brain = new();
     private readonly ChatSettings _chats = new();
-    private readonly SpeechSettings _speech = new();
     private readonly FakeEngineVoice _kokoro = new(SpeechEngine.Kokoro);
     private readonly FakeEngineVoice _qwen = new(SpeechEngine.Qwen);
+    private readonly SpeechEngines _engines;
+    private readonly SpeechSettings _speech;
     private readonly IWhisperModelStore _whisper = Substitute.For<IWhisperModelStore>();
-    private readonly IDictationService _dictation = Substitute.For<IDictationService>();
+    private readonly IWhisperTranscriber _dictation = Substitute.For<IWhisperTranscriber>();
     private readonly VoiceStatusViewModel _voice;
     private readonly AudioLevels _levels = new();
     private readonly FakeSounds _sounds = new();
@@ -47,7 +52,9 @@ public class SettingsViewModelTests : IDisposable
         _picks = new SoundPicks(_library);
         _store.GetAsync<long?>(SettingKeys.FiveHourBudgetTokens, Arg.Any<CancellationToken>()).Returns(Task.FromResult<long?>(5_000_000));
         _store.GetAsync<string>(SettingKeys.RelayExecutable, Arg.Any<CancellationToken>()).Returns(Task.FromResult<string?>(null));
-        var engines = new SpeechEngines(_speech, [_kokoro, _qwen]);
+        _engines = new SpeechEngines([_kokoro, _qwen]);
+        _speech = new SpeechSettings(_engines);
+        var engines = _engines;
         _voice = new VoiceStatusViewModel(engines, _speech, _dictation, new ImmediateDispatcher());
         _vm = new SettingsViewModel(new ClaudeHookInstaller(_claude, NullLogger<ClaudeHookInstaller>.Instance), _store, _writerOptions, _brain, _chats,
             _speech, engines, _whisper, _voice, _paths, _claude, new FakeVoiceSamples(), new ImmediateDispatcher(), NullLogger<SettingsViewModel>.Instance,
@@ -655,7 +662,7 @@ public class SettingsViewModelTests : IDisposable
         var catalog = new CodeSwitchX.Hosting.Browsers.BrowserCatalog(Substitute.For<CodeSwitchX.Hosting.Browsers.IBrowserSource>());
         var browsers = new CodeSwitchX.UI.GitHub.GitHubBrowsers(catalog, _store, _ => true, NullLogger<CodeSwitchX.UI.GitHub.GitHubBrowsers>.Instance);
         var page = new GitHubPageViewModel(gh, browsers, catalog);
-        var engines = new SpeechEngines(_speech, [_kokoro, _qwen]);
+        var engines = _engines;
         var vm = new SettingsViewModel(new ClaudeHookInstaller(_claude, NullLogger<ClaudeHookInstaller>.Instance), _store, _writerOptions, _brain, _chats,
             _speech, engines, _whisper, _voice, _paths, _claude, new FakeVoiceSamples(), new ImmediateDispatcher(), NullLogger<SettingsViewModel>.Instance,
             sounds: _sounds, levels: _levels, picks: _picks, library: _library, soundFiles: _files, gitHub: page);
@@ -1111,7 +1118,7 @@ public class SettingsViewModelTests : IDisposable
         _whisper.IsPresentOf(WhisperModel.LargeV3Turbo).Returns(true);
         _whisper.Downloads.Returns([]);
         await _vm.LoadAsync(CancellationToken.None);
-        _dictation.StatusChanged += Raise.Event<EventHandler<DictationStatus>>(_dictation, new DictationStatus(DictationState.Ready, WhisperModel.LargeV3Turbo));
+        _dictation.StatusChanged += Raise.Event<EventHandler<WhisperStatus>>(_dictation, new WhisperStatus(WhisperState.Ready, WhisperModel.LargeV3Turbo));
         var tiny = _vm.WhisperRows.Single(r => r.Model == WhisperModel.TinyEnglish);
         var turbo = _vm.WhisperRows.Single(r => r.Model == WhisperModel.LargeV3Turbo);
 

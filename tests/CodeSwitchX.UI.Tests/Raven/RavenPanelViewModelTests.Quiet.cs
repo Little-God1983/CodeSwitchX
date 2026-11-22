@@ -1,7 +1,6 @@
 using CodeSwitchX.Conductor;
 using CodeSwitchX.Core.Yard;
 using CodeSwitchX.UI.Raven;
-using CodeSwitchX.Voice.Dictation;
 using NSubstitute;
 
 namespace CodeSwitchX.UI.Tests.Raven;
@@ -12,7 +11,7 @@ public sealed partial class RavenPanelViewModelTests
     /// <summary>The user says <paramref name="words"/> with a press of the mic, and the turn is transcribed and answered.</summary>
     private async Task SayAloudAsync(RavenPanelViewModel vm, string words, bool waitForAnswer = true)
     {
-        Transcribes(Task.FromResult(new DictationResult(words, TimeSpan.FromSeconds(1))));
+        Transcribes(Task.FromResult(Transcript(words, TimeSpan.FromSeconds(1))));
         vm.PressMic(TalkInput.MicButton);
         await WithinAsync(vm.PendingStart);
         Speak();
@@ -72,7 +71,7 @@ public sealed partial class RavenPanelViewModelTests
         vm.IsMuted = true;
         _brain.BeforeSent = new TaskCompletionSource(); // neither has gone to the brain yet: they go as one
 
-        Transcribes(Task.FromResult(new DictationResult("What's waiting", TimeSpan.FromSeconds(1))));
+        Transcribes(Task.FromResult(Transcript("What's waiting", TimeSpan.FromSeconds(1))));
         vm.PressMic(TalkInput.MicButton);
         await WithinAsync(vm.PendingStart);
         Speak();
@@ -166,7 +165,7 @@ public sealed partial class RavenPanelViewModelTests
     [Fact]
     public async Task A_card_asked_for_aloud_is_not_read_once_Raven_is_muted()
     {
-        Transcribes(Task.FromResult(new DictationResult("Raven, next question.", TimeSpan.FromSeconds(1))));
+        Transcribes(Task.FromResult(Transcript("Raven, next question.", TimeSpan.FromSeconds(1))));
         var (vm, asks) = await NextQuestionVmAsync(openMic: true);
         vm.MicMode = MicMode.OpenMic;
         await WithinAsync(vm.PendingOpenMic);
@@ -224,7 +223,7 @@ public sealed partial class RavenPanelViewModelTests
         _brain.PauseAfter = 2; // at the card: what comes before it is said (#290)
         var vm = await NewVmAsync();
         vm.IsOpen = false;
-        Transcribes(Task.FromResult(new DictationResult("How many chats run?", TimeSpan.FromSeconds(1))));
+        Transcribes(Task.FromResult(Transcript("How many chats run?", TimeSpan.FromSeconds(1))));
         vm.PressMic(TalkInput.MicButton);
         await WithinAsync(vm.PendingStart);
         Speak();

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using LittleGod.Speech.Speaking;
 using Microsoft.Extensions.Logging;
 using NAudio.Wave;
 
@@ -18,107 +19,29 @@ public interface IChatSounds
 }
 
 /// <summary>
-/// The sounds of the pool (<see cref="SoundLibrary"/>), each play opening the output chosen, or the default device of the moment,
-/// off the caller's thread (opening a waking device can take a while) and closing it when done.
+/// The sounds of the pool (<see cref="SoundLibrary"/>), played through the package's <see cref="IClipPlayer"/> (#328): one
+/// device per play, opened off the caller's thread and closed when done, stopped past the sound's length and a margin.
 /// </summary>
-public sealed class ChatSounds(IAudioOutput output, AudioLevels levels, TimeProvider time, ILogger<ChatSounds> logger, SoundLibrary? library = null)
+public sealed class ChatSounds(IClipPlayer clips, AudioLevels levels, ILogger<ChatSounds> logger, SoundLibrary? library = null)
     : IChatSounds
 {
     private readonly SoundLibrary _library = library ?? new SoundLibrary(null);
 
-    /// <summary>
-    /// How much longer than the sound a play may take, for a waking device to open: past it the play is stopped, so a device
-    /// that never says it stopped does not hold the floor, and Raven's speech after it, for good.
-    /// </summary>
-    public static readonly TimeSpan PlayMargin = TimeSpan.FromSeconds(5);
-
     public TimeSpan LengthOf(string soundId) => _library.LengthOf(soundId);
 
-    public async Task PlayAsync(string soundId, CancellationToken ct)
-    {
-        using var capped = new CancellationTokenSource(LengthOf(soundId) + PlayMargin, time);
-        using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct, capped.Token);
-        await PlayUntilAsync(soundId, stop.Token).ConfigureAwait(false);
-    }
-
-    private async Task PlayUntilAsync(string soundId, CancellationToken ct)
+    public Task PlayAsync(string soundId, CancellationToken ct)
     {
         if (!_library.Has(soundId))
         {
             logger.LogWarning("No sound {Sound} to play", soundId);
-            return;
+            return Task.CompletedTask;
         }
 
-        if (levels.Sounds <= 0f)
+        return clips.PlayAsync(() =>
         {
-            // Nothing would be heard: no device is woken for it, but the sound takes its time, as if it played.
-            try
-            {
-                await Task.Delay(LengthOf(soundId), time, ct).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                // Stopped before its end.
-            }
-
-            return;
-        }
-
-        if (ct.IsCancellationRequested)
-        {
-            return; // stopped before it began: no device is woken for it
-        }
-
-        IWavePlayer? player = null;
-        try
-        {
-            var ended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            var opening = Task.Run(() =>
-            {
-                var (pcm, format) = _library.Load(soundId);
-                return output.Open(new RawSourceWaveStream(pcm, 0, pcm.Length, format), () => levels.Sounds, 120);
-            }, CancellationToken.None);
-            try
-            {
-                // A headset waking can hold the open for seconds: a stop does not wait for it, and the device is let go once open.
-                player = await opening.WaitAsync(ct).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                _ = opening.ContinueWith(t =>
-                {
-                    if (t.IsCompletedSuccessfully)
-                    {
-                        AudioOutput.DisposeQuietly(t.Result);
-                    }
-                    else
-                    {
-                        logger.LogInformation(t.Exception?.GetBaseException(), "A sound stopped while its device opened; the open failed");
-                    }
-                }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
-                return;
-            }
-
-            if (ct.IsCancellationRequested)
-            {
-                return; // stopped just as the device opened: closed unheard
-            }
-
-            player.PlaybackStopped += (_, _) => ended.TrySetResult();
-            player.Play();
-            await using (ct.Register(() => ended.TrySetResult()))
-            {
-                await ended.Task.ConfigureAwait(false);
-            }
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Playing the sound {Sound} failed", soundId);
-        }
-        finally
-        {
-            AudioOutput.DisposeQuietly(player); // stops it too, off the caller's thread
-        }
+            var (pcm, format) = _library.Load(soundId);
+            return new RawSourceWaveStream(pcm, 0, pcm.Length, format);
+        }, () => levels.Sounds, ct);
     }
 }
 

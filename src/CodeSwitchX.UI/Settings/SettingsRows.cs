@@ -1,7 +1,7 @@
 using CodeSwitchX.UI.Voice;
-using CodeSwitchX.Voice.Dictation;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using LittleGod.Speech.Whisper;
 
 namespace CodeSwitchX.UI.Settings;
 

@@ -5,6 +5,9 @@ using CodeSwitchX.UI.Voice;
 using CodeSwitchX.Voice.Speech;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using LittleGod.Speech;
+using LittleGod.Speech.Sidecar;
+using LittleGod.Speech.Speaking;
 using Microsoft.Extensions.Logging;
 
 namespace CodeSwitchX.UI.Settings;
@@ -172,7 +175,7 @@ public sealed partial class VoicePageViewModel : ObservableObject, IDisposable
             card.IsSelected = card == SelectedCard;
             if (card.Engine is { } engine)
             {
-                card.Show(_engines.StatusOf(engine), Status.LampOf(engine));
+                card.Show(_engines.StatusOf(SpeechSettings.KeyOf(engine)), Status.LampOf(engine));
             }
         }
     }
@@ -199,7 +202,7 @@ public sealed partial class VoicePageViewModel : ObservableObject, IDisposable
             SelectedCard = card;
         }
 
-        _engines.Install(engine);
+        _engines.Install(SpeechSettings.KeyOf(engine));
         ShowCards(); // an engine ready already tells nothing more
     }
 
@@ -208,7 +211,7 @@ public sealed partial class VoicePageViewModel : ObservableObject, IDisposable
     {
         if (card.Engine is { } engine)
         {
-            _engines.Cancel(engine);
+            _engines.Cancel(SpeechSettings.KeyOf(engine));
             ShowCards();
         }
     }
@@ -247,7 +250,7 @@ public sealed partial class VoicePageViewModel : ObservableObject, IDisposable
         row.IsPlaying = true;
         try
         {
-            await _samples.PlayAsync(engine, row.Voice.Id, playing.Token);
+            await _samples.PlayAsync(SpeechSettings.CatalogOf(engine), row.Voice.Id, playing.Token);
         }
         catch (Exception ex)
         {

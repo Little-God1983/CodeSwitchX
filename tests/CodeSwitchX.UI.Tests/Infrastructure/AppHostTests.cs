@@ -5,6 +5,7 @@ using CodeSwitchX.Ingest.Transcripts;
 using CodeSwitchX.Telemetry;
 using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Settings;
+using LittleGod.Speech.Speaking;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
@@ -74,7 +75,7 @@ public class AppHostTests
         settings.RavenSoundVolume = 0;
         await settings.FlushSavesAsync(TestContext.Current.CancellationToken);
 
-        var levels = host.Services.GetRequiredService<CodeSwitchX.Voice.Audio.AudioLevels>();
+        var levels = host.Services.GetRequiredService<AudioLevels>();
         (levels.Voice, levels.Sounds).ShouldBe((0.25f, 0f));
     }
 

@@ -4,9 +4,10 @@ using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Raven;
 using CodeSwitchX.Voice.Audio;
-using CodeSwitchX.Voice.Dictation;
-using CodeSwitchX.Voice.Listening;
-using CodeSwitchX.Voice.Speech;
+using LittleGod.Speech;
+using LittleGod.Speech.Listening;
+using LittleGod.Speech.Speaking;
+using LittleGod.Speech.Whisper;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 
@@ -133,7 +134,7 @@ public sealed partial class RavenPanelViewModelTests
     [InlineData("Chat three.")]
     public async Task An_Open_mic_turn_without_Ravens_name_is_dropped_unnoted(string said)
     {
-        Transcribes(Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        Transcribes(Task.FromResult(Transcript(said, TimeSpan.FromSeconds(1))));
         var vm = await InOpenMicAsync();
         var before = vm.Log.Count;
         var chat = vm.CurrentChat;
@@ -151,8 +152,8 @@ public sealed partial class RavenPanelViewModelTests
     public async Task Soon_after_Ravens_answer_a_turn_needs_no_name_and_later_it_does()
     {
         var said = "Raven, what's waiting on me?";
-        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
-            .Returns(_ => Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(Transcript(said, TimeSpan.FromSeconds(1))));
         _brain.Answer = _ => [new BrainText("One chat waits.")];
         var vm = await InOpenMicAsync();
 
@@ -182,8 +183,8 @@ public sealed partial class RavenPanelViewModelTests
     public async Task While_Raven_thinks_a_turn_needs_the_name()
     {
         var said = "Raven, what's waiting on me?";
-        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
-            .Returns(_ => Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(Transcript(said, TimeSpan.FromSeconds(1))));
         _brain.Gate = new TaskCompletionSource();
         _brain.Answer = _ => [new BrainText("One chat waits.")];
         var vm = await InOpenMicAsync();
@@ -208,8 +209,8 @@ public sealed partial class RavenPanelViewModelTests
     public async Task Ravens_name_alone_asks_nothing_and_the_next_words_need_no_name()
     {
         var said = "Hey Raven.";
-        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
-            .Returns(_ => Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(Transcript(said, TimeSpan.FromSeconds(1))));
         var vm = await InOpenMicAsync();
         var before = vm.Log.Count;
 
@@ -228,8 +229,8 @@ public sealed partial class RavenPanelViewModelTests
     public async Task Ravens_name_as_a_short_turn_lets_the_next_words_through()
     {
         var said = "Raven.";
-        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
-            .Returns(_ => Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(Transcript(said, TimeSpan.FromSeconds(1))));
         var vm = await InOpenMicAsync();
 
         _openMic.SayShort();
@@ -248,8 +249,8 @@ public sealed partial class RavenPanelViewModelTests
     [InlineData("Yes.", false, false)]
     public async Task A_short_word_in_the_follow_up_counts_only_as_a_yes(string said, bool inFollowUp, bool asked)
     {
-        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new DictationResult("Raven, hello.", TimeSpan.FromSeconds(1))), Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Transcript("Raven, hello.", TimeSpan.FromSeconds(1))), Task.FromResult(Transcript(said, TimeSpan.FromSeconds(1))));
         var vm = await InOpenMicAsync();
         await AnsweredAMomentAgoAsync(vm);
         if (!inFollowUp)
@@ -272,8 +273,8 @@ public sealed partial class RavenPanelViewModelTests
     public async Task A_turn_begun_soon_after_one_with_Ravens_name_is_the_rest_of_it(double after, bool asked)
     {
         var said = "Raven, check chat three.";
-        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
-            .Returns(_ => Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(Transcript(said, TimeSpan.FromSeconds(1))));
         _brain.Gate = new TaskCompletionSource(); // Raven thinks about the first half meanwhile
         var vm = await InOpenMicAsync();
         await TurnAsync(vm, answered: false);
@@ -300,8 +301,8 @@ public sealed partial class RavenPanelViewModelTests
         var player = new HoldingPlayer();
         using var voice = _speech.NewVoice(player);
         var said = "Raven, what time is it?";
-        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
-            .Returns(_ => Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(Transcript(said, TimeSpan.FromSeconds(1))));
         _brain.Answer = _ => [new BrainText("It's three.")];
         var vm = await InOpenMicAsync(voice);
         await TurnAsync(vm);
@@ -320,8 +321,8 @@ public sealed partial class RavenPanelViewModelTests
     public async Task Whispers_noise_right_after_a_question_is_not_asked()
     {
         var said = "Raven, what's waiting on me?";
-        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
-            .Returns(_ => Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(Transcript(said, TimeSpan.FromSeconds(1))));
         _brain.Gate = new TaskCompletionSource();
         var vm = await InOpenMicAsync();
         await TurnAsync(vm, answered: false);
@@ -342,8 +343,8 @@ public sealed partial class RavenPanelViewModelTests
     public async Task A_cough_right_after_a_question_leaves_its_answer_written()
     {
         var said = "Raven, what's waiting on me?";
-        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
-            .Returns(_ => Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(Transcript(said, TimeSpan.FromSeconds(1))));
         _brain.Gate = new TaskCompletionSource();
         _brain.Answer = _ => [new BrainText("One chat waits.")];
         var vm = await InOpenMicAsync();
@@ -365,8 +366,8 @@ public sealed partial class RavenPanelViewModelTests
     public async Task The_words_after_Ravens_name_alone_have_their_rest_after_a_pause_too()
     {
         var said = "Raven.";
-        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
-            .Returns(_ => Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(Transcript(said, TimeSpan.FromSeconds(1))));
         _brain.Gate = new TaskCompletionSource();
         var vm = await InOpenMicAsync();
         await TurnAsync(vm, answered: false);
@@ -388,8 +389,8 @@ public sealed partial class RavenPanelViewModelTests
     public async Task Only_a_turn_with_Ravens_name_opens_the_window_for_the_rest()
     {
         var said = "Raven, check chat three.";
-        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
-            .Returns(_ => Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(Transcript(said, TimeSpan.FromSeconds(1))));
         _brain.Gate = new TaskCompletionSource();
         var vm = await InOpenMicAsync();
         await TurnAsync(vm, answered: false);
@@ -410,9 +411,9 @@ public sealed partial class RavenPanelViewModelTests
     [Fact]
     public async Task The_words_after_Ravens_name_alone_need_no_name_though_they_began_before_it_was_transcribed()
     {
-        var name = new TaskCompletionSource<DictationResult>();
-        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
-            .Returns(name.Task, Task.FromResult(new DictationResult("What's waiting on me?", TimeSpan.FromSeconds(1))));
+        var name = new TaskCompletionSource<WhisperTranscript>();
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>())
+            .Returns(name.Task, Task.FromResult(Transcript("What's waiting on me?", TimeSpan.FromSeconds(1))));
         var vm = await InOpenMicAsync();
 
         _openMic.Speak();
@@ -420,7 +421,7 @@ public sealed partial class RavenPanelViewModelTests
         _time.Advance(TimeSpan.FromSeconds(1));
         _openMic.Speak();
         _openMic.EndTurn();
-        name.SetResult(new DictationResult("Raven.", TimeSpan.FromSeconds(1)));
+        name.SetResult(Transcript("Raven.", TimeSpan.FromSeconds(1)));
         await WithinAsync(vm.PendingTranscriptions);
         await WithinAsync(vm.PendingAnswers);
 
@@ -445,8 +446,8 @@ public sealed partial class RavenPanelViewModelTests
     [Fact]
     public async Task Ravens_name_alone_plays_its_sound_at_once_even_muted()
     {
-        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
-            .Returns(_ => Task.FromResult(new DictationResult("Raven?", TimeSpan.FromSeconds(1))));
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(Transcript("Raven?", TimeSpan.FromSeconds(1))));
         var vm = await InOpenMicAsync();
         vm.IsMuted = true;
 
@@ -458,8 +459,8 @@ public sealed partial class RavenPanelViewModelTests
     [Fact]
     public async Task Ravens_name_with_its_sound_picked_none_plays_nothing()
     {
-        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
-            .Returns(_ => Task.FromResult(new DictationResult("Raven?", TimeSpan.FromSeconds(1))));
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(Transcript("Raven?", TimeSpan.FromSeconds(1))));
         _picks.Set(SoundSlot.HearsName, null);
         var vm = await InOpenMicAsync();
 
@@ -473,8 +474,8 @@ public sealed partial class RavenPanelViewModelTests
     public async Task Ravens_name_alone_while_it_thinks_leaves_the_answer_to_be_said()
     {
         var said = "Raven, what's waiting on me?";
-        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
-            .Returns(_ => Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(Transcript(said, TimeSpan.FromSeconds(1))));
         _brain.Gate = new TaskCompletionSource();
         _brain.Answer = _ => [new BrainText("One chat waits.")];
         var vm = await InOpenMicAsync();
@@ -494,7 +495,7 @@ public sealed partial class RavenPanelViewModelTests
     [Fact]
     public async Task Talk_around_the_room_while_Raven_thinks_leaves_it_thinking()
     {
-        var transcript = new TaskCompletionSource<DictationResult>();
+        var transcript = new TaskCompletionSource<WhisperTranscript>();
         Transcribes(transcript.Task);
         _brain.Gate = new TaskCompletionSource();
         var vm = await InOpenMicAsync();
@@ -506,7 +507,7 @@ public sealed partial class RavenPanelViewModelTests
         _openMic.EndTurn(); // being transcribed now
         vm.Caption.ShouldStartWith("Thinking");
 
-        transcript.SetResult(new DictationResult("At least someone's happy I'm home.", TimeSpan.FromSeconds(1)));
+        transcript.SetResult(Transcript("At least someone's happy I'm home.", TimeSpan.FromSeconds(1)));
         _brain.Gate.SetResult();
         await WithinAsync(vm.PendingTranscriptions);
     }
@@ -515,8 +516,8 @@ public sealed partial class RavenPanelViewModelTests
     public async Task With_no_follow_up_every_turn_needs_the_name_but_the_name_alone_still_lets_the_next_through()
     {
         var said = "Raven, what's waiting on me?";
-        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
-            .Returns(_ => Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(Transcript(said, TimeSpan.FromSeconds(1))));
         _brain.Answer = _ => [new BrainText("One chat waits.")];
         var vm = await InOpenMicAsync();
         vm.FollowUpSeconds = 0;
@@ -562,7 +563,7 @@ public sealed partial class RavenPanelViewModelTests
     [Fact]
     public async Task An_empty_transcript_in_Open_mic_is_not_noted_in_the_log()
     {
-        Transcribes(Task.FromResult(new DictationResult("", TimeSpan.FromSeconds(1))));
+        Transcribes(Task.FromResult(Transcript("", TimeSpan.FromSeconds(1))));
         var vm = await InOpenMicAsync();
         var before = vm.Log.Count;
 
@@ -640,7 +641,7 @@ public sealed partial class RavenPanelViewModelTests
 
         vm.State.ShouldBe(RavenState.AttendingPaused);
         vm.Caption.ShouldBe("Open mic paused");
-        await _dictation.DidNotReceive().TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>());
+        await _dictation.DidNotReceive().TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>());
     }
 
     // Review focus 4
@@ -814,8 +815,8 @@ public sealed partial class RavenPanelViewModelTests
     [Fact]
     public async Task A_failed_speech_model_download_in_Open_mic_says_to_speak_again_not_to_press_the_mic()
     {
-        _models.IsPresent.Returns(false);
-        _models.DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>())
+        _models.IsPresentOf(Arg.Any<WhisperModel>()).Returns(false);
+        _models.DownloadAsync(Arg.Any<WhisperModel>(), Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromException(new IOException("disk full")));
         var vm = await InOpenMicAsync();
 
@@ -828,18 +829,17 @@ public sealed partial class RavenPanelViewModelTests
 
     // PR #89 review: Open mic's wording
     [Fact]
-    public async Task A_speech_model_that_will_not_load_in_Open_mic_is_downloaded_again_with_the_next_turn()
+    public async Task A_speech_model_that_will_not_load_in_Open_mic_says_what_Whisper_found()
     {
-        _models.ModelPath.Returns(@"c:\m\ggml.bin");
-        Transcribes(Task.FromException<DictationResult>(
-            new DictationModelLoadException(@"c:\m\ggml.bin", "Vulkan", new InvalidOperationException("out of memory."))));
+        var load = new WhisperModelLoadException(@"c:\m\ggml.bin", "Vulkan", new InvalidOperationException("out of memory."));
+        Transcribes(Task.FromException<WhisperTranscript>(load));
         var vm = await InOpenMicAsync();
 
         _openMic.Speak();
         _openMic.EndTurn();
         await WithinAsync(vm.PendingTranscriptions);
 
-        vm.Log.Last().Text.ShouldBe(@"The speech model could not be loaded: out of memory. Delete c:\m\ggml.bin; it is downloaded again with your next turn.");
+        vm.Log.Last().Text.ShouldBe(load.Message);
     }
 
     // PR #89 review: runs
@@ -859,7 +859,7 @@ public sealed partial class RavenPanelViewModelTests
         vm.State.ShouldBe(RavenState.Attending);
         vm.Log.Count.ShouldBe(before);
         _openMic.Listening.ShouldBe(Desk.Id);
-        await _dictation.DidNotReceive().TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>());
+        await _dictation.DidNotReceive().TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>());
     }
 
     /// <summary>Batches of 50 ms at one level for <paramref name="seconds"/>, as the listener raises them.</summary>
@@ -878,7 +878,7 @@ public sealed partial class RavenPanelViewModelTests
         var player = new HoldingPlayer();
         using var voice = _speech.NewVoice(player);
         _brain.Answer = _ => [new BrainText("You have one chat waiting.")];
-        var transcript = new TaskCompletionSource<DictationResult>();
+        var transcript = new TaskCompletionSource<WhisperTranscript>();
         Transcribes(transcript.Task);
         var vm = await InOpenMicAsync(voice);
         Type(vm, "What's waiting on me?");
@@ -889,7 +889,7 @@ public sealed partial class RavenPanelViewModelTests
         voice.IsSpeaking.ShouldBeTrue();
         vm.State.ShouldBe(RavenState.Speaking);
         _openMic.EndTurn();
-        transcript.SetResult(new DictationResult("Raven, stop.", TimeSpan.FromSeconds(1)));
+        transcript.SetResult(Transcript("Raven, stop.", TimeSpan.FromSeconds(1)));
         await WithinAsync(vm.PendingTranscriptions);
 
         voice.IsSpeaking.ShouldBeFalse();
@@ -904,7 +904,7 @@ public sealed partial class RavenPanelViewModelTests
     public async Task Raven_stop_in_Open_mic_ends_an_answer_on_its_way_and_says_nothing_back()
     {
         _brain.Answer = q => q.Contains("waiting") ? [new BrainText("You have one chat waiting.")] : [new BrainText("Okay, I stopped.")];
-        Transcribes(Task.FromResult(new DictationResult("Raven, stop.", TimeSpan.FromSeconds(1))));
+        Transcribes(Task.FromResult(Transcript("Raven, stop.", TimeSpan.FromSeconds(1))));
         var vm = await InOpenMicAsync();
         _brain.Gate = new TaskCompletionSource(); // the answer is on its way
         Type(vm, "What's waiting on me?");
@@ -930,8 +930,8 @@ public sealed partial class RavenPanelViewModelTests
     public async Task A_lone_stop_in_the_follow_up_is_taken_and_goes_to_no_brain()
     {
         _brain.Answer = _ => [new BrainText("Hi.")];
-        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new DictationResult("Raven, hello.", TimeSpan.FromSeconds(1))), Task.FromResult(new DictationResult("Stop.", TimeSpan.FromSeconds(1))));
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Transcript("Raven, hello.", TimeSpan.FromSeconds(1))), Task.FromResult(Transcript("Stop.", TimeSpan.FromSeconds(1))));
         var vm = await InOpenMicAsync();
         await AnsweredAMomentAgoAsync(vm);
 
@@ -948,7 +948,7 @@ public sealed partial class RavenPanelViewModelTests
     public async Task Raven_stop_chat_two_still_goes_to_the_brain()
     {
         _brain.Answer = _ => [new BrainText("Stopping chat 2.")];
-        Transcribes(Task.FromResult(new DictationResult("Raven, stop chat 2.", TimeSpan.FromSeconds(1))));
+        Transcribes(Task.FromResult(Transcript("Raven, stop chat 2.", TimeSpan.FromSeconds(1))));
         var vm = await InOpenMicAsync();
 
         _openMic.Speak();
@@ -966,7 +966,7 @@ public sealed partial class RavenPanelViewModelTests
         var player = new HoldingPlayer();
         using var voice = _speech.NewVoice(player);
         _brain.Answer = _ => [new BrainText("You have one chat waiting.")];
-        Transcribes(Task.FromResult(new DictationResult("At least someone's happy I'm home.", TimeSpan.FromSeconds(1))));
+        Transcribes(Task.FromResult(Transcript("At least someone's happy I'm home.", TimeSpan.FromSeconds(1))));
         var vm = await InOpenMicAsync(voice);
         Type(vm, "What's waiting on me?");
         await Until(() => vm.State == RavenState.Speaking);
@@ -983,7 +983,7 @@ public sealed partial class RavenPanelViewModelTests
     [Fact]
     public async Task After_Ravens_name_alone_news_waits_for_the_words()
     {
-        Transcribes(Task.FromResult(new DictationResult("Raven.", TimeSpan.FromSeconds(1))));
+        Transcribes(Task.FromResult(Transcript("Raven.", TimeSpan.FromSeconds(1))));
         _teller.Answer = _ => [new BrainText("ContentAutomatorX is done.")];
         _yard.Show("a", "ContentAutomatorX", "Fix the upload retry");
         var news = new ChatNews(_bus, _yard, _time, _ => "All done.");
@@ -1011,9 +1011,9 @@ public sealed partial class RavenPanelViewModelTests
     [InlineData("At least someone's happy I'm home.", false, true)]
     public async Task Ravens_name_in_Open_mic_stops_a_digest_being_told_and_other_talk_does_not(string said, bool stops, bool inFollowUp)
     {
-        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
-            .Returns(inFollowUp ? Task.FromResult(new DictationResult("Raven, hello.", TimeSpan.FromSeconds(1))) : Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))),
-                Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>())
+            .Returns(inFollowUp ? Task.FromResult(Transcript("Raven, hello.", TimeSpan.FromSeconds(1))) : Task.FromResult(Transcript(said, TimeSpan.FromSeconds(1))),
+                Task.FromResult(Transcript(said, TimeSpan.FromSeconds(1))));
         _teller.Gate = new TaskCompletionSource(); // the teller is still at it when the user talks
         _teller.Answer = _ => [new BrainText("ContentAutomatorX is done.")];
         _yard.Show("a", "ContentAutomatorX", "Fix the upload retry");
@@ -1087,7 +1087,7 @@ public sealed partial class RavenPanelViewModelTests
 
         vm.State.ShouldBe(RavenState.Attending);
         vm.Log.Count.ShouldBe(before);
-        await _dictation.DidNotReceive().TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>());
+        await _dictation.DidNotReceive().TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>());
     }
 
     // Fourth review of #89: some 20 batches a second are posted without a closure
@@ -1330,9 +1330,9 @@ public sealed partial class RavenPanelViewModelTests
     [Fact]
     public async Task An_answer_that_arrives_while_the_user_is_talking_in_Open_mic_is_only_written()
     {
-        var transcript = new TaskCompletionSource<DictationResult>();
-        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new DictationResult("Raven, hello.", TimeSpan.FromSeconds(1))), transcript.Task);
+        var transcript = new TaskCompletionSource<WhisperTranscript>();
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Transcript("Raven, hello.", TimeSpan.FromSeconds(1))), transcript.Task);
         _brain.Answer = q => q.Contains("Hello") ? [new BrainText("Hi.")] : [new BrainText("You have one chat waiting.")];
         var vm = await InOpenMicAsync();
         await AnsweredAMomentAgoAsync(vm);
@@ -1340,7 +1340,7 @@ public sealed partial class RavenPanelViewModelTests
         _openMic.EndTurn(); // the first question is still being transcribed
 
         _openMic.Speak(); // the user's next turn has started, in the follow-up: theirs
-        transcript.SetResult(new DictationResult("Raven, what's waiting on me?", TimeSpan.FromSeconds(1)));
+        transcript.SetResult(Transcript("Raven, what's waiting on me?", TimeSpan.FromSeconds(1)));
         await WithinAsync(vm.PendingTranscriptions);
         await WithinAsync(vm.PendingAnswers);
         await Task.Delay(100, TestContext.Current.CancellationToken);
@@ -1354,10 +1354,20 @@ public sealed partial class RavenPanelViewModelTests
     private sealed class HoldingPlayer : ISpeechPlayer
     {
         private int _stops;
+        private long _queued;
 
         public int Stops => Volatile.Read(ref _stops);
 
         public TimeSpan Remaining => TimeSpan.FromSeconds(30);
+
+        public bool IsOpening => false;
+
+        public TimeSpan Latency => TimeSpan.Zero;
+
+        public TimeSpan Queued => TimeSpan.FromTicks(Volatile.Read(ref _queued));
+
+        /// <summary>Nothing of it has played yet.</summary>
+        public TimeSpan Position => TimeSpan.Zero;
 
         public event EventHandler<float>? LevelChanged
         {
@@ -1365,11 +1375,19 @@ public sealed partial class RavenPanelViewModelTests
             remove { }
         }
 
-        public void Enqueue(SpeechChunk chunk, Func<bool>? hushed = null)
+        public event EventHandler<DroppedAudio>? Dropped
         {
+            add { }
+            remove { }
         }
 
-        public void Stop() => Interlocked.Increment(ref _stops);
+        public void Enqueue(SpeechChunk chunk, Func<bool>? hushed = null) => Interlocked.Add(ref _queued, chunk.Duration.Ticks);
+
+        public void Stop()
+        {
+            Interlocked.Increment(ref _stops);
+            Interlocked.Exchange(ref _queued, 0);
+        }
 
         public void Dispose()
         {

@@ -5,9 +5,9 @@ using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Raven;
 using CodeSwitchX.UI.Shell;
 using CodeSwitchX.UI.Voice;
-using CodeSwitchX.Voice.Audio;
-using CodeSwitchX.Voice.Dictation;
 using CodeSwitchX.Voice.Speech;
+using LittleGod.Speech;
+using LittleGod.Speech.Whisper;
 
 namespace CodeSwitchX.UI.Settings;
 
@@ -259,7 +259,7 @@ public sealed class AppSettings : IAppSettings
 
     /// <summary>The Whisper models by the names their Listening rows show (#141): one added later is listed too.</summary>
     private static readonly IReadOnlyList<(WhisperModel Model, string Name)> WhisperNames =
-        [.. Enum.GetValues<WhisperModel>().Select(m => (m, ModelLamp.RowNameOf(m)))];
+        [.. SettingsViewModel.OfferedWhisperModels.Select(m => (m, ModelLamp.RowNameOf(m)))];
 
     /// <summary>The engines by the names the Voice page shows, as stored, and None.</summary>
     private static readonly IReadOnlyList<(string Stored, string Name)> EngineNames =
@@ -583,8 +583,8 @@ public sealed class AppSettings : IAppSettings
 
     private IReadOnlyList<SpeechVoice>? CurrentVoices() => S.RavenVoiceEngine switch
     {
-        nameof(SpeechEngine.Kokoro) => SpeechSettings.KokoroVoices,
-        nameof(SpeechEngine.Qwen) => SpeechSettings.QwenVoices,
+        nameof(SpeechEngine.Kokoro) => SpeechSettings.VoicesOf(SpeechEngine.Kokoro),
+        nameof(SpeechEngine.Qwen) => SpeechSettings.VoicesOf(SpeechEngine.Qwen),
         _ => null,
     };
 

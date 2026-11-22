@@ -5,7 +5,7 @@ using CodeSwitchX.Hosting.Win32;
 using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Raven;
 using CodeSwitchX.UI.Shell;
-using CodeSwitchX.Voice.Audio;
+using LittleGod.Speech.Listening;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 

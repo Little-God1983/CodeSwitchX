@@ -7,11 +7,13 @@ using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Core.Yard;
 using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.Voice.Audio;
-using CodeSwitchX.Voice.Dictation;
-using CodeSwitchX.Voice.Listening;
 using CodeSwitchX.Voice.Speech;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using LittleGod.Speech;
+using LittleGod.Speech.Listening;
+using LittleGod.Speech.Speaking;
+using LittleGod.Speech.Whisper;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -56,7 +58,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     private readonly IMicrophoneCatalog _catalog;
     private readonly IMicrophoneRecorder _recorder;
-    private readonly IDictationService _dictation;
+    private readonly IWhisperTranscriber _dictation;
     private readonly IWhisperModelStore _models;
     private readonly IDictationVocabularyProvider _vocabulary;
     /// <summary>The Yard's brain; every chat's when there are no <see cref="_brains"/>.</summary>
@@ -64,7 +66,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>Each chat's own brain (#123): what is said in a chat is only in its conversation.</summary>
     private readonly IChatBrains? _brains;
-    private readonly ReplyVoice _voice;
+    private readonly IReplyVoice _voice;
     private readonly ITextToSpeech _tts;
     private readonly IUiDispatcher _dispatcher;
     private readonly TimeProvider _time;
@@ -230,7 +232,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>A digest is being put together or told (UI thread): it holds the floor, but is no question.</summary>
     private bool _telling;
 
-    /// <summary>Raven is saying something (UI thread, as <see cref="ReplyVoice.SpeakingChanged"/> posts it).</summary>
+    /// <summary>Raven is saying something (UI thread, as <see cref="IReplyVoice.SpeakingChanged"/> posts it).</summary>
     private bool _speaking;
 
     /// <summary>When Raven's last answer was heard to its end, or written: the follow-up runs from here (#217).</summary>
@@ -274,7 +276,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>The note that follows the voice's install and first load, while it stands.</summary>
     private RavenLogEntry? _voiceNote;
 
-    private readonly IOpenMic? _openMic;
+    private readonly IOpenMicListener? _openMic;
 
     /// <summary>The listener's run Open mic listens with; null while its microphone is not open (UI thread). Events of
     /// any other run are old news.</summary>
@@ -286,7 +288,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>The user is talking in Open mic: a turn begun in the follow-up (#217) is under way, so it is theirs.</summary>
     private bool _openSpeech;
 
-    /// <summary>Open mic hears a turn: <see cref="IOpenMic.SpeechStarted"/> came, the turn has not ended. Whether it is for
+    /// <summary>Open mic hears a turn: <see cref="IOpenMicListener.SpeechStarted"/> came, the turn has not ended. Whether it is for
     /// Raven is known from its start (<see cref="_openSpeech"/>) or once it is transcribed (its name).</summary>
     private bool _openHeard;
 
@@ -359,10 +361,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <param name="asks">What chats ask, held while the user answers it here; null shows no questions.</param>
     /// <param name="yard">Names the chat that asks, as the Yard shows it.</param>
-    public RavenPanelViewModel(IMicrophoneCatalog catalog, IMicrophoneRecorder recorder, IDictationService dictation,
-        IWhisperModelStore models, IDictationVocabularyProvider vocabulary, IConductorBrain brain, ReplyVoice voice, ITextToSpeech speech,
+    public RavenPanelViewModel(IMicrophoneCatalog catalog, IMicrophoneRecorder recorder, IWhisperTranscriber dictation,
+        IWhisperModelStore models, IDictationVocabularyProvider vocabulary, IConductorBrain brain, IReplyVoice voice, ITextToSpeech speech,
         IUiDispatcher dispatcher, TimeProvider time, ILogger<RavenPanelViewModel> logger, ChatNews? news = null,
-        [FromKeyedServices(TellerKey)] IConductorBrain? teller = null, IOpenMic? openMic = null, ChatAsks? asks = null, IYardDirectory? yard = null,
+        [FromKeyedServices(TellerKey)] IConductorBrain? teller = null, IOpenMicListener? openMic = null, ChatAsks? asks = null, IYardDirectory? yard = null,
         IChatBrains? brains = null, [FromKeyedServices(SummarizerKey)] IConductorBrain? summarizer = null, IChatSounds? sounds = null, SoundPicks? picks = null,
         SpeakerChoice? speakers = null, UnaskedTurns? unasked = null, ChatSoundCues? cues = null)
     {
@@ -421,7 +423,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _voice.SpeakingChanged += (_, speaking) => _dispatcher.Post(() => OnSpeakingChanged(speaking));
         _voice.BusyEnded += (_, _) => _dispatcher.Post(UpdateState); // what held the floor was never heard (#292)
         _voice.LevelChanged += (_, level) => _dispatcher.Post(() => OnSpeechLevel(level));
-        _voice.Unspoken += (_, why) => _dispatcher.Post(() => AddEntry(RavenLogKind.Note, why));
+        _voice.Unspoken += (_, why) => _dispatcher.Post(() => AddEntry(RavenLogKind.Note, RavenWordsFor(why)));
         _tts.StatusChanged += (_, status) => _dispatcher.Post(() => OnVoiceStatus(status));
         _news = news;
         _teller = teller;
@@ -739,7 +741,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         var previous = SelectedMicrophone;
         var preferred = PreferredMicrophone;
         var trialPicked = TrialMicrophone;
-        MicrophoneChoiceResult choice;
+        DeviceChoice<MicrophoneDevice> choice;
         MicrophoneDevice? trial = null;
         // A list-bound ComboBox writes null into the selection while the list is cleared; that is no pick.
         _refreshing = true;
@@ -751,9 +753,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 Microphones.Add(device);
             }
 
-            choice = MicrophoneChoice.Resolve(devices, preferred, windowsDefault);
+            choice = DeviceChoice.Resolve(devices, preferred, windowsDefault);
             if (trialPicked is not null
-                && MicrophoneChoice.Resolve(devices, trialPicked, windowsDefault) is { Outcome: MicrophoneChoiceOutcome.Stored or MicrophoneChoiceOutcome.Relocated } tried)
+                && DeviceChoice.Resolve(devices, trialPicked, windowsDefault) is { Outcome: DeviceChoiceOutcome.Stored or DeviceChoiceOutcome.Relocated } tried)
             {
                 trial = tried.Device;
             }
@@ -777,7 +779,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         if (trialPicked is not null && trial is null)
         {
             // The microphone being tried went: the default is heard again, and the trial is over.
-            _fellBack = choice.Outcome == MicrophoneChoiceOutcome.FellBackToDefault;
+            _fellBack = choice.Outcome == DeviceChoiceOutcome.FellBackToDefault;
             AddEntry(RavenLogKind.Note, choice.Device is null
                 ? $"{trialPicked.Name} is gone. No microphone is connected."
                 : $"{trialPicked.Name} is gone. Using {choice.Device.Name}.");
@@ -800,7 +802,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _fellBack = true;
             AddEntry(RavenLogKind.Note, $"{previous!.Name} is gone. No microphone is connected.");
         }
-        else if (choice.Outcome == MicrophoneChoiceOutcome.FellBackToDefault)
+        else if (choice.Outcome == DeviceChoiceOutcome.FellBackToDefault)
         {
             _fellBack = true;
             AddEntry(RavenLogKind.Note, $"{preferred.Name} is gone. Using {choice.Device.Name}.");
@@ -1113,11 +1115,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     }
 
     /// <summary>Starts the listener once the start before it is done, unless this request is stale by then. The wait
-    /// resumes on the UI thread; only the start itself runs on the thread pool.</summary>
+    /// resumes on the UI thread; the listener opens the models and the device on the thread pool.</summary>
     private async Task<OpenMicRun?> StartListenerAsync(Task previous, long request, string deviceId)
     {
         await previous;
-        return request == _openMicRequest ? await Task.Run(() => _openMic!.Start(deviceId)) : null;
+        return request == _openMicRequest ? await _openMic!.StartAsync(deviceId) : null;
     }
 
     /// <summary>What a fallback does, said with its warning: the stored choice is still Open mic, so the next launch tries it
@@ -1175,18 +1177,18 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
     }
 
-    /// <summary>Stops <paramref name="run"/> on the thread pool, if it is still the listener's current run; never faults, a failed stop is logged.</summary>
-    private Task StopListenerAsync(OpenMicRun run) => Task.Run(() =>
+    /// <summary>Stops <paramref name="run"/> off the UI thread, if it is still the listener's current run; never faults, a failed stop is logged.</summary>
+    private async Task StopListenerAsync(OpenMicRun run)
     {
         try
         {
-            _openMic!.Stop(run);
+            await _openMic!.StopAsync(run);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Stopping Open mic failed");
         }
-    });
+    }
 
     private void PauseOpenMic()
     {
@@ -1285,7 +1287,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _warmUpTimer?.Dispose();
         _warmUpTimer = _time.CreateTimer(_ =>
         {
-            if (_models.IsPresent)
+            if (_models.IsPresentOf(_models.Model))
             {
                 WarmUpInBackground();
             }
@@ -1917,13 +1919,29 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 return;
             }
 
-            if (!_models.IsPresent && !await DownloadModelAsync(number, quiet))
+            if (!_models.IsPresentOf(_models.Model) && !await DownloadModelAsync(number, quiet))
             {
                 return;
             }
 
-            var words = await vocabulary;
-            var result = await _dictation.TranscribeAsync(clip.Samples16k, words, CancellationToken.None);
+            var request = new WhisperRequest { Vocabulary = await vocabulary };
+            WhisperTranscript result;
+            try
+            {
+                result = await _dictation.TranscribeAsync(clip.Samples16k, request, CancellationToken.None);
+            }
+            catch (WhisperModelMissingException ex)
+            {
+                // The file would not load and was not the model's: Whisper removed it (#328, the package's #55). Downloaded
+                // again, the same clip goes through, as one that found no model on disk does.
+                _logger.LogWarning(ex, "The speech model was gone when the clip came to it");
+                if (!await DownloadModelAsync(number, quiet))
+                {
+                    return;
+                }
+
+                result = await _dictation.TranscribeAsync(clip.Samples16k, request, CancellationToken.None);
+            }
             var text = result.Text.Trim();
             if (text.Length == 0 && quiet)
             {
@@ -1975,14 +1993,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 }
             }
         }
-        catch (DictationModelLoadException ex)
+        catch (WhisperModelLoadException ex)
         {
-            // A damaged download fails here on every press, and nothing else ever replaces the file: say which to delete.
+            // The file is on disk and would not load. Whisper read it after the failure, and its message says what it found
+            // (#328, the package's #55): the file whole, so the card or a smaller model, not a download; or no verdict.
             _logger.LogWarning(ex, "The speech model could not be loaded");
-            var reason = (ex.InnerException?.Message ?? ex.Message).TrimEnd().TrimEnd('.');
-            AddEntry(RavenLogKind.Warning, chat: chat, text:
-                quiet ? $"The speech model could not be loaded: {reason}. Delete {_models.ModelPath}; it is downloaded again with your next turn."
-                    : $"The speech model could not be loaded: {reason}. Delete {_models.ModelPath} and press the mic to download it again.");
+            AddEntry(RavenLogKind.Warning, ex.Message, chat);
         }
         catch (Exception ex)
         {
@@ -2452,9 +2468,14 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         var asked = new StrongBox<DateTimeOffset>();
         // In the user's next Open mic turn the answer is only written: Raven's voice would talk over the turn and, heard
         // through speakers, end up in it, and the question being spoken replaces the answer anyway. TakeFloor hushed already.
-        var spoken = _voice.Begin(heard => _logger.LogInformation(
-            "Raven's first word {Total:0} ms after the end of the turn, {Answer:0} ms after the question went to the brain",
-            (heard - ended).TotalMilliseconds, (heard - asked.Value).TotalMilliseconds), silent: _openSpeech, evenMuted: question.Aloud);
+        var spoken = _voice.Begin(options: new ReplyOptions
+        {
+            OnFirstAudio = heard => _logger.LogInformation(
+                "Raven's first word {Total:0} ms after the end of the turn, {Answer:0} ms after the question went to the brain",
+                (heard - ended).TotalMilliseconds, (heard - asked.Value).TotalMilliseconds),
+            Silent = _openSpeech,
+            EvenMuted = question.Aloud,
+        });
 
         _conversation = AnswerInTurnAsync(_conversation, question, spoken, asked, floor);
     }
@@ -2552,7 +2573,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     /// <param name="asked">Set to when the question goes to the brain, for the log line on its first word.</param>
     /// <param name="floor">Cancelled when the user takes the floor: the answer is interrupted, and ends with "(interrupted)".</param>
-    private async Task AnswerInTurnAsync(Task previous, Question question, ReplyVoice.SpokenReply spoken, StrongBox<DateTimeOffset> asked,
+    private async Task AnswerInTurnAsync(Task previous, Question question, ISpokenReply spoken, StrongBox<DateTimeOffset> asked,
         CancellationToken floor)
     {
         var whole = new StrongBox<bool>();
@@ -2630,7 +2651,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// The follow-up (#217) runs from when the answer was heard to its end, or at once when it was only written, muted or
     /// cut off: the voice says when.
     /// </summary>
-    private async Task OpenFollowUpOnceHeardAsync(ReplyVoice.SpokenReply spoken)
+    private async Task OpenFollowUpOnceHeardAsync(ISpokenReply spoken)
     {
         await spoken.Played.ConfigureAwait(false);
         await FollowUpFromNowAsync().ConfigureAwait(false);
@@ -2652,7 +2673,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <param name="question">Marked sent once the brain has it; null for a digest.</param>
     /// <param name="chat">Where the reply, its cards and what is said about it go.</param>
     /// <param name="whole">Set when the answer came to its end with no failure: a teller that failed midway said only part (#179).</param>
-    private async Task<bool> StreamAnswerAsync(IConductorBrain brain, string text, ReplyVoice.SpokenReply spoken, CancellationToken floor,
+    private async Task<bool> StreamAnswerAsync(IConductorBrain brain, string text, ISpokenReply spoken, CancellationToken floor,
         RavenChat chat, Question? question = null, StrongBox<bool>? whole = null)
     {
         var failedMidway = false;
@@ -2810,20 +2831,20 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// for the teller; a finished or failed chat's line once its summary has come, in order, the teller's lines going to their
     /// chats by number (#303). Those are spoken together, as a reply is (#290), once the teller is done or the voice's group is
     /// full. A teller that fails or gives too few lines leaves its chats said without a summary. More than a reply speaks
-    /// (<see cref="ReplyVoice.MaximumSentences"/>), the last ones are counted instead ("And 2 more.") and stay unread.
+    /// (<see cref="SpeechSettings.MaximumSentences"/>), the last ones are counted instead ("And 2 more.") and stay unread.
     /// With <paramref name="others"/> waiting, the teller words a remark about them too, said last in a sentence kept for it
     /// (#308); a teller that gives none leaves it unsaid. Never faults.
     /// </summary>
     /// <param name="kind">What it is for, as the teller is told: "Catch-up", "News of the chats".</param>
     /// <returns>Whether any of it was said, and the lines and warnings told one by one; with <c>Whole</c> unless it was stopped; the remark said, if any.</returns>
     private async Task<(bool Said, bool Whole, bool Asked, HashSet<ChatNewsLine> Lines, HashSet<RavenLogEntry> Warnings, string? Remark)> TellLinesAsync(
-        string kind, IReadOnlyList<ChatNewsLine> lines, IReadOnlyList<RavenLogEntry> warnings, ReplyVoice.SpokenReply spoken, CancellationToken floor,
+        string kind, IReadOnlyList<ChatNewsLine> lines, IReadOnlyList<RavenLogEntry> warnings, ISpokenReply spoken, CancellationToken floor,
         RavenChat chat, IReadOnlyList<WaitingChat>? others = null)
     {
         others = _teller is null ? [] : others ?? [];
         var order = Pressing(lines);
         var total = order.Count + warnings.Count;
-        var room = ReplyVoice.MaximumSentences - (others.Count > 0 ? 1 : 0); // the remark's sentence
+        var room = SpeechSettings.MaximumSentences - (others.Count > 0 ? 1 : 0); // the remark's sentence
         var each = total > room ? room - 1 : total;
         var told = order.Take(each).ToList();
         var toldWarnings = warnings.Take(each - told.Count).ToList();
@@ -3005,7 +3026,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         // and leave the chat's own lines unheard with it.
         remark = TextCut.OneLine(remark).Trim();
         var chunker = new SentenceChunker();
-        if (remark.Length > 0 && sentences + chunker.Add(remark + " ").Concat(chunker.Flush()).Count() > ReplyVoice.MaximumSentences)
+        if (remark.Length > 0 && sentences + chunker.Add(remark + " ").Concat(chunker.Flush()).Count() > SpeechSettings.MaximumSentences)
         {
             _logger.LogInformation("Raven's remark on the other waiting chats is left out: it does not fit what a reply speaks");
             remark = "";
@@ -3123,14 +3144,14 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// no voice to say the line, its sound is left to the queue: taken, it would never be heard. A reply that ends without
     /// reaching its first audio (hushed, muted, dropped) gives the sound back to the queue, where it plays on its own if still true.
     /// </summary>
-    private void SoundBefore(ReplyVoice.SpokenReply spoken, IEnumerable<string> sessionIds)
+    private void SoundBefore(ISpokenReply spoken, IEnumerable<string> sessionIds)
     {
         var ids = sessionIds.ToHashSet(StringComparer.Ordinal);
         SoundBefore(spoken, c => ids.Contains(c.SessionId));
     }
 
-    /// <inheritdoc cref="SoundBefore(ReplyVoice.SpokenReply, IEnumerable{string})"/>
-    private void SoundBefore(ReplyVoice.SpokenReply spoken, Func<SoundCue, bool> which)
+    /// <inheritdoc cref="SoundBefore(ISpokenReply, IEnumerable{string})"/>
+    private void SoundBefore(ISpokenReply spoken, Func<SoundCue, bool> which)
     {
         if (!HasVoice || _soundQueue is not { } queue
             || queue.TakeForLine(which).MaxBy(c => c.At) is not { } cue || _sounds is not { } sounds || _picks.For(cue.Slot) is not { } sound)
@@ -3138,12 +3159,24 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return;
         }
 
-        spoken.Prelude = ct => sounds.PlayAsync(sound, ct);
+        // The package's voice takes the sound with the line's first audio, also when the user hushed it a moment before: its
+        // hush cancels on the pool, after the reply is stopped (#328). A sound taken by a stopped reply is not played.
+        var played = new StrongBox<int>();
+        spoken.Prelude = ct =>
+        {
+            if (spoken.IsStopped)
+            {
+                return Task.CompletedTask;
+            }
+
+            Volatile.Write(ref played.Value, 1);
+            return sounds.PlayAsync(sound, ct);
+        };
         _ = spoken.Played.ContinueWith(_ => _dispatcher.Post(() =>
         {
-            if (spoken.Prelude is not null)
+            if (Volatile.Read(ref played.Value) == 0)
             {
-                GiveBack([cue]); // never taken by the voice: nothing of the line was heard
+                GiveBack([cue]); // never played before the line: nothing of the line was heard
             }
         }), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
     }
@@ -3431,7 +3464,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         // Spoken whole, risks and all: only a yes said after it answers it. While the user talks in Open mic it is only
         // written, and is not heard.
-        var spoken = _voice.Begin(silent: _openSpeech, whole: true, evenMuted: aloud);
+        var spoken = _voice.Begin(options: new ReplyOptions { Silent = _openSpeech, Whole = true, EvenMuted = aloud });
         _mutable = _openSpeech ? null : (proposal, spoken.Played);
         AddSaid(line, ChatOfAsk(proposal.Ask), spoken);
         spoken.Add(line);
@@ -3545,7 +3578,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             TakeFloor();
         }
 
-        var spoken = _voice.Begin(silent: _openSpeech, evenMuted: aloud); // the yes said aloud, muted too (#242)
+        var spoken = _voice.Begin(options: new ReplyOptions { Silent = _openSpeech, EvenMuted = aloud }); // the yes said aloud, muted too (#242)
         AddSaid(said, chat, spoken);
         spoken.Add(said);
         spoken.Complete();
@@ -3680,7 +3713,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private async Task TellQuestionsAsync(Task previous, CancellationToken floor)
     {
-        ReplyVoice.SpokenReply? spoken = null;
+        ISpokenReply? spoken = null;
         var asked = false;
         var warmed = false;
         ChatAskCard? card = null;
@@ -3735,7 +3768,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             }
 
             _voice.Expect(evenMuted: askedAloud);
-            spoken = _voice.Begin(evenMuted: askedAloud);
+            spoken = _voice.Begin(options: new ReplyOptions { EvenMuted = askedAloud });
             string line;
             if (PermissionLine.NeedsTeller(card) && _teller is not null)
             {
@@ -3909,7 +3942,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private async Task TellNewsAsync(Task previous, ChatNews news, CancellationToken floor)
     {
-        ReplyVoice.SpokenReply? spoken = null;
+        ISpokenReply? spoken = null;
         var asked = false;
         List<WaitingChat> others = [];
         IReadOnlyList<SoundCue> held = [];
@@ -3950,9 +3983,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _voice.Expect();
             var asking = default(DateTimeOffset);
             _newsChat = CurrentChat; // muted, it stops (#153)
-            spoken = _newsReply = _voice.Begin(heard => _logger.LogInformation(
-                "Raven's news: first word {Total:0} ms after it began ({Take:0} ms reading the board, {Teller:0} ms from the teller's question)",
-                (heard - began).TotalMilliseconds, (taken - began).TotalMilliseconds, (heard - asking).TotalMilliseconds));
+            spoken = _newsReply = _voice.Begin(options: new ReplyOptions
+            {
+                OnFirstAudio = heard => _logger.LogInformation(
+                    "Raven's news: first word {Total:0} ms after it began ({Take:0} ms reading the board, {Teller:0} ms from the teller's question)",
+                    (heard - began).TotalMilliseconds, (taken - began).TotalMilliseconds, (heard - asking).TotalMilliseconds),
+            });
             SoundBefore(spoken, own.Select(l => l.SessionId)); // its sound, straight before its line (#306)
             if (others.Count > 0 && _soundQueue is not null)
             {
@@ -4058,7 +4094,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// Once the reply with the remark is heard to its end, its chats count as mentioned and their sounds taken for it are
     /// dropped (#308); cut off before, the sounds are given back. UI thread at the end.
     /// </summary>
-    private async Task MentionOnceHeardAsync(ReplyVoice.SpokenReply spoken, IReadOnlyList<WaitingChat> mentioned, IReadOnlyList<SoundCue> held)
+    private async Task MentionOnceHeardAsync(ISpokenReply spoken, IReadOnlyList<WaitingChat> mentioned, IReadOnlyList<SoundCue> held)
     {
         var heard = await spoken.HeardWholeAsync().ConfigureAwait(false);
         _dispatcher.Post(() =>
@@ -4607,14 +4643,15 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private async Task<bool> DownloadModelAsync(long number, bool quiet)
     {
         // The size of the model picked in Settings: Tiny is 78 MB, Large v3 Turbo 1.6 GB.
-        var prefix = $"Downloading the speech model ({SizeOf(_models.Model)})… ";
+        var model = _models.Model;
+        var prefix = $"Downloading the speech model ({SizeOf(model)})… ";
         var entry = AddEntry(RavenLogKind.Note, prefix + "0%");
         var progress = new PostedPercent(_dispatcher, percent => entry.Text = $"{prefix}{percent}%");
         _downloading = true;
         UpdateState();
         try
         {
-            await _models.DownloadAsync(progress, CancellationToken.None);
+            await _models.DownloadAsync(model, progress, CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -4755,7 +4792,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// Once <paramref name="spoken"/> is heard to its end, the lines it said of each entry no longer count; a reply cut off
     /// leaves every mark (#179).
     /// </summary>
-    private void ReadOnceHeard(ReplyVoice.SpokenReply spoken, IReadOnlyList<(RavenLogEntry Entry, IReadOnlyList<ChatNewsLine>? Lines)> said)
+    private void ReadOnceHeard(ISpokenReply spoken, IReadOnlyList<(RavenLogEntry Entry, IReadOnlyList<ChatNewsLine>? Lines)> said)
     {
         if (said.Count > 0)
         {
@@ -4771,7 +4808,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// they were seen instead (UI thread). The news an answer told (#243) is read as its answer is: heard, or written in
     /// the open panel (muted and typed, say). Neither (cut off, the panel collapsed), they stay unread, as the answer does.
     /// </summary>
-    private async Task ReadOnceAsync(ReplyVoice.SpokenReply spoken, IReadOnlyList<(RavenLogEntry Entry, IReadOnlyList<ChatNewsLine>? Lines)> lines,
+    private async Task ReadOnceAsync(ISpokenReply spoken, IReadOnlyList<(RavenLogEntry Entry, IReadOnlyList<ChatNewsLine>? Lines)> lines,
         Func<bool>? seen = null)
     {
         if (await spoken.HeardWholeAsync().ConfigureAwait(false))
@@ -4814,7 +4851,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// its end, that line counts. One count a reply, however many lines its cards split it into: its earlier lines were
     /// said before it.
     /// </summary>
-    private readonly Dictionary<ReplyVoice.SpokenReply, RavenLogEntry> _saidUnseen = [];
+    private readonly Dictionary<ISpokenReply, RavenLogEntry> _saidUnseen = [];
 
     /// <summary>
     /// Raven's line in <paramref name="chat"/>, said in <paramref name="spoken"/> unless that is silent or no voice speaks.
@@ -4822,7 +4859,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// at its sentence limit), the line was only read after all, and counts like one only written; unless it was seen
     /// meanwhile, in the open panel.
     /// </summary>
-    private RavenLogEntry AddSaid(string text, RavenChat chat, ReplyVoice.SpokenReply spoken)
+    private RavenLogEntry AddSaid(string text, RavenChat chat, ISpokenReply spoken)
     {
         // Muted, only a reply begun even muted, and not hushed since (muting midway hushes it), says its lines (#242).
         var entry = AddSaid(text, chat, !spoken.IsSilent && TtsReady && (!IsMuted || (spoken.EvenMuted && !spoken.IsStopped)));
@@ -4843,7 +4880,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         return entry;
     }
 
-    private async Task CountUnlessHeardAsync(ReplyVoice.SpokenReply spoken)
+    private async Task CountUnlessHeardAsync(ISpokenReply spoken)
     {
         var heard = await spoken.HeardWholeAsync().ConfigureAwait(false);
         _dispatcher.Post(() =>
@@ -5207,7 +5244,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>The telling of the catch-up being said, and its reply; null when none is (UI thread).</summary>
     private CancellationTokenSource? _catchUpTelling;
 
-    private ReplyVoice.SpokenReply? _catchUpReply;
+    private ISpokenReply? _catchUpReply;
 
     /// <summary>
     /// The catch-up of the chat switched to, from its unread lines only: the news and warnings that came while the user
@@ -5308,7 +5345,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private async Task TellCatchUpAsync(Task previous, RavenChat chat, IReadOnlyList<RavenLogEntry> away, CancellationToken stop)
     {
-        ReplyVoice.SpokenReply? spoken = null;
+        ISpokenReply? spoken = null;
         try
         {
             await previous;
@@ -5537,7 +5574,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private CancellationTokenSource? _newsTelling;
 
     /// <summary>The news last spoken and the chat it was told in: it may still be heard after its telling ended (UI thread).</summary>
-    private ReplyVoice.SpokenReply? _newsReply;
+    private ISpokenReply? _newsReply;
 
     private RavenChat? _newsChat;
 
@@ -5700,7 +5737,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     {
         if (MaySpeak(aloud) && !_openSpeech)
         {
-            var spoken = _voice.Begin(evenMuted: aloud);
+            var spoken = _voice.Begin(options: new ReplyOptions { EvenMuted = aloud });
             spoken.Add(line);
             spoken.Complete();
         }
@@ -6171,6 +6208,16 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         MicrophoneFailureKind.Missing => $"{mic?.Name ?? "The microphone"} is not available any more.",
         MicrophoneFailureKind.AudioServiceDown => "Windows audio is not running. Start the Windows Audio service or restart the PC.",
         _ => $"{mic?.Name ?? "The microphone"} could not be opened. Another app may be using it exclusively.",
+    };
+
+    /// <summary>Why an answer went unspoken, in Raven's words: the voice's own message is the package's, plain (#328).</summary>
+    internal static string RavenWordsFor(UnspokenReply why) => why.Reason switch
+    {
+        UnspokenReason.Hung => "Raven's voice hung and is starting again, so the rest of this answer is not spoken.",
+        UnspokenReason.Installing => "Raven's voice is being installed, so this answer is not spoken.",
+        UnspokenReason.Loading => "Raven's voice is still loading, so this answer is not spoken.",
+        UnspokenReason.Abandoned => "The rest of this answer never came, so it is not spoken.",
+        _ => $"Raven could not speak: {why.Error?.Message ?? why.Message}",
     };
 
     /// <summary>The active microphones and the Windows default, or why they could not be listed; numbered in the order the listings started.</summary>

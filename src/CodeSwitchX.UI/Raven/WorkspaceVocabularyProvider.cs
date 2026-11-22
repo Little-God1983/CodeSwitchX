@@ -2,7 +2,7 @@ using CodeSwitchX.Core.Messaging;
 using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Core.Yard;
-using CodeSwitchX.Voice.Dictation;
+using LittleGod.Speech.Whisper;
 
 namespace CodeSwitchX.UI.Raven;
 
