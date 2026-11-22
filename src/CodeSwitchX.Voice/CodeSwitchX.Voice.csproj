@@ -19,11 +19,6 @@
     <PackageReference Include="LittleGod.Speech.Speaking" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
-    <!-- Whisper's native libraries. The runtime packages copy them by build/ targets only (no buildTransitive), which
-         run for a direct reference alone: through LittleGod.Speech.Whisper the app got no whisper.dll and every clip
-         failed with "Native Library not found" (#328, found on screen). Vulkan is tried first, the CPU one is the fallback. -->
-    <PackageReference Include="Whisper.net.Runtime" />
-    <PackageReference Include="Whisper.net.Runtime.Vulkan" />
     <!-- The app's own sound pool: WAV reading, Media Foundation for an imported MP3, the resampler. -->
     <PackageReference Include="NAudio.Core" />
     <PackageReference Include="NAudio.Wasapi" />

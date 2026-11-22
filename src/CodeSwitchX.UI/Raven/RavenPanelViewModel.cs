@@ -3159,16 +3159,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return;
         }
 
-        // The package's voice takes the sound with the line's first audio, also when the user hushed it a moment before: its
-        // hush cancels on the pool, after the reply is stopped (#328). A sound taken by a stopped reply is not played.
+        // A hushed reply never runs its prelude (LittleGod.Speech 0.12.1), so the flag tells whether the sound was heard.
         var played = new StrongBox<int>();
         spoken.Prelude = ct =>
         {
-            if (spoken.IsStopped)
-            {
-                return Task.CompletedTask;
-            }
-
             Volatile.Write(ref played.Value, 1);
             return sounds.PlayAsync(sound, ct);
         };

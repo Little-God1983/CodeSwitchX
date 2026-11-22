@@ -9,10 +9,10 @@
     <PackageVersion Include="LittleGod.Llm.ClaudeCli" Version="[0.7.1]" />
     <!-- Raven's voice (#328): Whisper, the microphone, the TTS engines and the speakers, from the same local feed. All -->
     <!-- LittleGod.Speech packages share one version; Whisper, Abstractions, Devices and the Sidecar come with these four. -->
-    <PackageVersion Include="LittleGod.Speech.Kokoro" Version="[0.12.0]" />
-    <PackageVersion Include="LittleGod.Speech.Listening" Version="[0.12.0]" />
-    <PackageVersion Include="LittleGod.Speech.QwenTts" Version="[0.12.0]" />
-    <PackageVersion Include="LittleGod.Speech.Speaking" Version="[0.12.0]" />
+    <PackageVersion Include="LittleGod.Speech.Kokoro" Version="[0.12.1]" />
+    <PackageVersion Include="LittleGod.Speech.Listening" Version="[0.12.1]" />
+    <PackageVersion Include="LittleGod.Speech.QwenTts" Version="[0.12.1]" />
+    <PackageVersion Include="LittleGod.Speech.Speaking" Version="[0.12.1]" />
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.12" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.12" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.12" />
@@ -25,9 +25,6 @@
     <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="2.2.0" />
     <PackageVersion Include="NAudio.Core" Version="2.4.0" />
     <PackageVersion Include="NAudio.Wasapi" Version="2.4.0" />
-    <!-- Same version as LittleGod.Speech.Whisper's Whisper.net; referenced directly for the native files (Voice.csproj). -->
-    <PackageVersion Include="Whisper.net.Runtime" Version="1.9.1" />
-    <PackageVersion Include="Whisper.net.Runtime.Vulkan" Version="1.9.1" />
     <PackageVersion Include="Serilog" Version="4.4.0" />
     <PackageVersion Include="Serilog.Extensions.Hosting" Version="10.0.0" />
     <PackageVersion Include="Serilog.Sinks.File" Version="7.0.0" />
