@@ -3,7 +3,6 @@ using System.Diagnostics;
 using System.IO;
 using CodeSwitchX.Conductor;
 using CodeSwitchX.Core;
-using Path = System.IO.Path;
 using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Core.Yard;
 using CodeSwitchX.Data;
@@ -11,11 +10,16 @@ using CodeSwitchX.Ingest.Hooks;
 using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Voice;
 using CodeSwitchX.Voice.Audio;
-using CodeSwitchX.Voice.Dictation;
 using CodeSwitchX.Voice.Speech;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using LittleGod.Speech;
+using LittleGod.Speech.Listening;
+using LittleGod.Speech.Sidecar;
+using LittleGod.Speech.Speaking;
+using LittleGod.Speech.Whisper;
 using Microsoft.Extensions.Logging;
+using Path = System.IO.Path;
 
 namespace CodeSwitchX.UI.Settings;
 
@@ -227,10 +231,10 @@ public sealed partial class SettingsViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(IsQwen), nameof(IsKokoro))]
     private string _ravenVoiceEngine = NoEngine;
 
-    /// <summary>Qwen3-TTS's preset voice: an id of <see cref="SpeechSettings.QwenVoices"/>.</summary>
+    /// <summary>Qwen3-TTS's preset voice: an id of Qwen3-TTS's voices (<see cref="SpeechSettings.VoicesOf"/>).</summary>
     [ObservableProperty] private string _ravenQwenVoice = SpeechSettings.DefaultQwenVoice;
 
-    /// <summary>Kokoro's voice: an id of <see cref="SpeechSettings.KokoroVoices"/>.</summary>
+    /// <summary>Kokoro's voice: an id of Kokoro's voices (<see cref="SpeechSettings.VoicesOf"/>).</summary>
     [ObservableProperty] private string _ravenKokoroVoice = SpeechSettings.DefaultKokoroVoice;
 
     /// <summary>The Qwen3-TTS model Raven speaks with; a change restarts the voice.</summary>
@@ -241,6 +245,13 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     /// <summary>The Whisper model dictation uses; a change frees the one loaded and loads this one.</summary>
     [ObservableProperty] private WhisperModel _ravenWhisperModel = WhisperModel.LargeV3Turbo;
+
+    /// <summary>
+    /// The Whisper models the Listening page offers, and Raven's settings name. The package knows ten (#328); these four
+    /// are the ones the app offered before it, and stay its choice.
+    /// </summary>
+    public static readonly IReadOnlyList<WhisperModel> OfferedWhisperModels =
+        [WhisperModel.TinyEnglish, WhisperModel.BaseEnglish, WhisperModel.SmallEnglish, WhisperModel.LargeV3Turbo];
 
     /// <summary>The page shown.</summary>
     [ObservableProperty]
@@ -290,10 +301,10 @@ public sealed partial class SettingsViewModel : ObservableObject
         Pages = [.. SettingsPageItem.All];
         WhisperRows =
         [
-            new(WhisperModel.TinyEnglish, "English only, the fastest", "78 MB", DownloadWhisperAsync),
-            new(WhisperModel.BaseEnglish, "English only", "148 MB", DownloadWhisperAsync),
-            new(WhisperModel.SmallEnglish, "English only, more accurate", "488 MB", DownloadWhisperAsync),
-            new(WhisperModel.LargeV3Turbo, "Any language, the most accurate", "1.6 GB", DownloadWhisperAsync),
+            new(OfferedWhisperModels[0], "English only, the fastest", "78 MB", DownloadWhisperAsync),
+            new(OfferedWhisperModels[1], "English only", "148 MB", DownloadWhisperAsync),
+            new(OfferedWhisperModels[2], "English only, more accurate", "488 MB", DownloadWhisperAsync),
+            new(OfferedWhisperModels[3], "Any language, the most accurate", "1.6 GB", DownloadWhisperAsync),
         ];
         Aliases = [];
         ShowAliases();
@@ -390,7 +401,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         foreach (var row in WhisperRows)
         {
             row.Show(downloads.FirstOrDefault(d => d.Model == row.Model), _whisper.IsPresentOf(row.Model),
-                row.Model == RavenWhisperModel && Voice.ListeningState is not (null or DictationState.NotDownloaded or DictationState.Downloading)
+                row.Model == RavenWhisperModel && Voice.ListeningState is not (null or WhisperState.NotDownloaded or WhisperState.Downloading)
                     ? Voice.Listening
                     : null);
         }
@@ -550,7 +561,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             // first run picks. Not stored, so it is looked at again until a pick is.
             RavenVoiceEngine = await LoadOrDefaultAsync<string>(SettingKeys.RavenVoiceEngine, "Raven's voice engine", ct) is { Length: > 0 } engine
                 ? (Enum.TryParse<SpeechEngine>(engine, out var known) ? known.ToString() : NoEngine)
-                : await Task.Run(() => _engines.IsInstalled(SpeechEngine.Qwen), ct) ? nameof(SpeechEngine.Qwen) : NoEngine;
+                : await Task.Run(() => _engines.IsInstalled(SpeechSettings.KeyOf(SpeechEngine.Qwen)), ct) ? nameof(SpeechEngine.Qwen) : NoEngine;
             RavenWhisperModel = await LoadOrDefaultAsync<WhisperModel?>(SettingKeys.RavenWhisperModel, "the speech-to-text model", ct) is { } whisperModel
                 && Enum.IsDefined(whisperModel)
                 ? whisperModel

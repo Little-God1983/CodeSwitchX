@@ -1,7 +1,8 @@
 using System.Collections.ObjectModel;
 using CodeSwitchX.UI.Infrastructure;
-using CodeSwitchX.Voice.Audio;
 using CommunityToolkit.Mvvm.ComponentModel;
+using LittleGod.Speech;
+using LittleGod.Speech.Speaking;
 using Microsoft.Extensions.Logging;
 
 namespace CodeSwitchX.UI.Raven;
@@ -128,11 +129,11 @@ public sealed partial class SpeakerChoice : ObservableObject
                 Speakers.Add(device);
             }
 
-            var (chosen, outcome) = MicrophoneChoice.Resolve(devices, PreferredSpeaker, windowsDefault);
-            _defaultIsChosen = PreferredSpeaker is not null && outcome is MicrophoneChoiceOutcome.Stored or MicrophoneChoiceOutcome.Relocated;
+            var (chosen, outcome) = DeviceChoice.Resolve(devices, PreferredSpeaker, windowsDefault);
+            _defaultIsChosen = PreferredSpeaker is not null && outcome is DeviceChoiceOutcome.Stored or DeviceChoiceOutcome.Relocated;
             SpeakerDevice? trial = null;
             if (trialPicked is not null
-                && MicrophoneChoice.Resolve(devices, trialPicked, windowsDefault) is { Outcome: MicrophoneChoiceOutcome.Stored or MicrophoneChoiceOutcome.Relocated } tried)
+                && DeviceChoice.Resolve(devices, trialPicked, windowsDefault) is { Outcome: DeviceChoiceOutcome.Stored or DeviceChoiceOutcome.Relocated } tried)
             {
                 trial = tried.Device;
             }

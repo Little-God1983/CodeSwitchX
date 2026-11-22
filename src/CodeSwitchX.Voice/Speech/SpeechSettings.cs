@@ -1,3 +1,8 @@
+using LittleGod.Speech;
+using LittleGod.Speech.Kokoro;
+using LittleGod.Speech.QwenTts;
+using LittleGod.Speech.Sidecar;
+
 namespace CodeSwitchX.Voice.Speech;
 
 /// <summary>The engines Raven can speak with.</summary>
@@ -20,55 +25,55 @@ public enum SpeechModel
     Large,
 }
 
-/// <summary>A preset voice of an engine.</summary>
-/// <param name="Id">The name the engine knows it by.</param>
-public sealed record SpeechVoice(string Id, string Name, string Description);
-
-/// <summary>How Raven speaks; Settings changes it while the app runs. Read at every sentence.</summary>
+/// <summary>
+/// How Raven speaks, as Settings picked it: the app's engine, voices and model, given to the package's
+/// <see cref="SpeechEngines"/> at once on every change (#328). The one mapping from the app's enums to the engines' keys,
+/// voices and model ids; nothing else sets them.
+/// </summary>
 public sealed class SpeechSettings
 {
-    public const string DefaultQwenVoice = "ryan";
-    public const string DefaultKokoroVoice = "af_heart";
-
-    /// <summary>The preset voices of the Qwen3-TTS CustomVoice models, the English ones first: Raven answers in English.</summary>
-    public static readonly IReadOnlyList<SpeechVoice> QwenVoices =
-    [
-        new("ryan", "Ryan", "English, male, dynamic"),
-        new("aiden", "Aiden", "English, male, sunny American"),
-        new("vivian", "Vivian", "Chinese, female, bright"),
-        new("serena", "Serena", "Chinese, female, warm"),
-        new("uncle_fu", "Uncle Fu", "Chinese, male, low and mellow"),
-        new("dylan", "Dylan", "Beijing, male, clear"),
-        new("eric", "Eric", "Sichuan, male, slightly husky"),
-        new("ono_anna", "Ono Anna", "Japanese, female, playful"),
-        new("sohee", "Sohee", "Korean, female, warm"),
-    ];
-
-    /// <summary>Kokoro's best English voices; its id says the accent ("a" American, "b" British) and the sex.</summary>
-    public static readonly IReadOnlyList<SpeechVoice> KokoroVoices =
-    [
-        new("af_heart", "Heart", "American English, female, warm"),
-        new("am_michael", "Michael", "American English, male, calm"),
-        new("bf_emma", "Emma", "British English, female, clear"),
-        new("bm_george", "George", "British English, male, deep"),
-        new("af_bella", "Bella", "American English, female, bright"),
-    ];
+    /// <summary>
+    /// How many sentences of a reply Raven says; the panel shows the rest ("And 2 more."). The reply voice is given it
+    /// (<c>AddSpeaking</c>), and the panel counts against it.
+    /// </summary>
+    public const int MaximumSentences = 3;
 
     /// <summary>No engine: -1.</summary>
     private volatile int _engine = -1;
     private volatile string _qwenVoice = DefaultQwenVoice;
     private volatile string _kokoroVoice = DefaultKokoroVoice;
     private volatile int _model = (int)SpeechModel.Small;
+    private readonly SpeechEngines _engines;
 
-    /// <summary>Raised when <see cref="Model"/> changes: the engine restarts with the new one.</summary>
-    public event EventHandler? ModelChanged;
+    public SpeechSettings(SpeechEngines engines)
+    {
+        _engines = engines;
+        _engines.Picked = null;
+        Apply(SpeechEngine.Kokoro, _kokoroVoice);
+        Apply(SpeechEngine.Qwen, _qwenVoice);
+        _engines[KeyOf(SpeechEngine.Qwen)].Model = ModelId(Model);
+    }
+
+    public static string DefaultQwenVoice => QwenTtsEngine.Voices.Default;
+
+    public static string DefaultKokoroVoice => KokoroEngine.Voices.Default;
 
     /// <summary>Raised when <see cref="Engine"/> changes: the one picked before stops.</summary>
     public event EventHandler? EngineChanged;
 
-    public static IReadOnlyList<SpeechVoice> VoicesOf(SpeechEngine engine) => engine == SpeechEngine.Kokoro ? KokoroVoices : QwenVoices;
+    /// <summary>The voices of <paramref name="engine"/>, in the order Settings lists them: the English ones first.</summary>
+    public static IReadOnlyList<SpeechVoice> VoicesOf(SpeechEngine engine) => CatalogOf(engine).All;
 
-    public static string DefaultVoiceOf(SpeechEngine engine) => engine == SpeechEngine.Kokoro ? DefaultKokoroVoice : DefaultQwenVoice;
+    public static VoiceCatalog CatalogOf(SpeechEngine engine) => engine == SpeechEngine.Kokoro ? KokoroEngine.Voices : QwenTtsEngine.Voices;
+
+    public static string DefaultVoiceOf(SpeechEngine engine) => CatalogOf(engine).Default;
+
+    /// <summary>The key <see cref="SpeechEngines"/> knows <paramref name="engine"/> by.</summary>
+    public static string KeyOf(SpeechEngine engine) =>
+        engine == SpeechEngine.Kokoro ? KokoroEngine.Definition.Key : QwenTtsEngine.Definition.Key;
+
+    /// <summary>The Hugging Face id of a Qwen3-TTS model.</summary>
+    public static string ModelId(SpeechModel model) => model == SpeechModel.Large ? QwenTtsModels.Large : QwenTtsModels.Small;
 
     /// <summary>The engine Raven speaks with; none (Raven answers in text) until one is picked.</summary>
     public SpeechEngine? Engine
@@ -79,47 +84,43 @@ public sealed class SpeechSettings
             var engine = value is { } picked && Enum.IsDefined(picked) ? (int)picked : -1;
             if (Interlocked.Exchange(ref _engine, engine) != engine)
             {
+                _engines.Picked = engine < 0 ? null : KeyOf((SpeechEngine)engine);
                 EngineChanged?.Invoke(this, EventArgs.Empty);
             }
         }
     }
 
-    /// <summary>One of <see cref="QwenVoices"/>; anything else is <see cref="DefaultQwenVoice"/>.</summary>
+    /// <summary>One of Qwen3-TTS's voices; anything else is <see cref="DefaultQwenVoice"/>.</summary>
     public string QwenVoice
     {
         get => _qwenVoice;
-        set => _qwenVoice = QwenVoices.Any(v => v.Id == value) ? value : DefaultQwenVoice;
+        set => Apply(SpeechEngine.Qwen, _qwenVoice = Known(SpeechEngine.Qwen, value));
     }
 
-    /// <summary>One of <see cref="KokoroVoices"/>; anything else is <see cref="DefaultKokoroVoice"/>.</summary>
+    /// <summary>One of Kokoro's voices; anything else is <see cref="DefaultKokoroVoice"/>.</summary>
     public string KokoroVoice
     {
         get => _kokoroVoice;
-        set => _kokoroVoice = KokoroVoices.Any(v => v.Id == value) ? value : DefaultKokoroVoice;
+        set => Apply(SpeechEngine.Kokoro, _kokoroVoice = Known(SpeechEngine.Kokoro, value));
     }
 
-    public string VoiceOf(SpeechEngine engine) => engine == SpeechEngine.Kokoro ? KokoroVoice : QwenVoice;
-
-    /// <summary>The Qwen3-TTS model; Kokoro has one only.</summary>
+    /// <summary>The Qwen3-TTS model; Kokoro has one only. A change restarts Qwen3-TTS with it.</summary>
     public SpeechModel Model
     {
         get => (SpeechModel)_model;
         set
         {
-            if (Interlocked.Exchange(ref _model, (int)value) != (int)value)
+            var model = Enum.IsDefined(value) ? value : SpeechModel.Small;
+            if (Interlocked.Exchange(ref _model, (int)model) != (int)model)
             {
-                ModelChanged?.Invoke(this, EventArgs.Empty);
+                _engines[KeyOf(SpeechEngine.Qwen)].Model = ModelId(model);
             }
         }
     }
 
-    /// <summary>The model <paramref name="engine"/> speaks with, as its sidecar names it.</summary>
-    public string ModelOf(SpeechEngine engine) => engine == SpeechEngine.Kokoro ? Kokoro.KokoroEnvironment.Model : ModelId(Model);
+    /// <summary>The engine refuses a voice it does not have: an unknown one falls back to the default before it gets there.</summary>
+    private static string Known(SpeechEngine engine, string? voice) =>
+        VoicesOf(engine).FirstOrDefault(v => v.Id == voice)?.Id ?? DefaultVoiceOf(engine);
 
-    /// <summary>The Hugging Face id of a Qwen3-TTS model.</summary>
-    public static string ModelId(SpeechModel model) => model switch
-    {
-        SpeechModel.Large => "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
-        _ => "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
-    };
+    private void Apply(SpeechEngine engine, string voice) => _engines[KeyOf(engine)].Voice = voice;
 }

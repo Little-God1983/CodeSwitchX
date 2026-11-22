@@ -115,7 +115,7 @@ public sealed partial class RavenPanelViewModelTests
     {
         _teller.Gate = new TaskCompletionSource(); // the teller is still at it when the user presses
         _brain.Answer = _ => [new BrainText("Opening it.")];
-        Transcribes(Task.FromResult(new CodeSwitchX.Voice.Dictation.DictationResult("open it", TimeSpan.FromSeconds(1))));
+        Transcribes(Task.FromResult(Transcript("open it", TimeSpan.FromSeconds(1))));
         var (vm, _) = await NewsVmAsync();
         Changes("a", SessionState.Working, SessionState.Idle);
         _time.Advance(TrafficWatcher.NewsGrace);

@@ -3,13 +3,13 @@ using CodeSwitchX.Core;
 using CodeSwitchX.Core.Messaging;
 using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Core.Sessions;
+using CodeSwitchX.Core.Usage;
 using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Data;
 using CodeSwitchX.Hosting;
 using CodeSwitchX.Hosting.VsCode;
 using CodeSwitchX.Hosting.Win32;
 using CodeSwitchX.Ingest.Hooks;
-using CodeSwitchX.Core.Usage;
 using CodeSwitchX.Telemetry;
 using CodeSwitchX.UI.Cab;
 using CodeSwitchX.UI.Raven;
@@ -19,8 +19,11 @@ using CodeSwitchX.UI.Telemetry;
 using CodeSwitchX.UI.Voice;
 using CodeSwitchX.UI.Yard;
 using CodeSwitchX.Voice.Audio;
-using CodeSwitchX.Voice.Dictation;
 using CodeSwitchX.Voice.Speech;
+using LittleGod.Speech.Listening;
+using LittleGod.Speech.Sidecar;
+using LittleGod.Speech.Speaking;
+using LittleGod.Speech.Whisper;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
@@ -45,10 +48,10 @@ public sealed class ShellTestHarness
     public ISpeakerCatalog Speakers { get; } = Substitute.For<ISpeakerCatalog>();
     public IAudioOutput AudioOutput { get; } = Substitute.For<IAudioOutput>();
     public IMicrophoneRecorder Recorder { get; } = Substitute.For<IMicrophoneRecorder>();
-    public IDictationService Dictation { get; } = Substitute.For<IDictationService>();
+    public IWhisperTranscriber Dictation { get; } = Substitute.For<IWhisperTranscriber>();
     internal Raven.FakeSpeech Voice { get; } = new();
     public IWhisperModelStore Models { get; } = Substitute.For<IWhisperModelStore>();
-    public SpeechSettings Speech { get; } = new();
+    public SpeechSettings Speech { get; }
     internal Voice.FakeEngineVoice Kokoro { get; } = new(SpeechEngine.Kokoro);
     internal Voice.FakeEngineVoice Qwen { get; } = new(SpeechEngine.Qwen);
     public SpeechEngines Engines { get; }
@@ -57,7 +60,7 @@ public sealed class ShellTestHarness
 
     internal Raven.FakeSounds Sounds { get; } = new();
 
-    internal CodeSwitchX.Voice.Audio.AudioLevels Levels { get; } = new();
+    internal AudioLevels Levels { get; } = new();
 
     /// <summary>The sounds' pool, with a folder of its own for the user's (#307).</summary>
     internal CodeSwitchX.Voice.Audio.SoundLibrary Library { get; private set; } = null!;
@@ -100,7 +103,8 @@ public sealed class ShellTestHarness
         var paths = new AppPaths(Path.Combine(Path.GetTempPath(), "csx-shell-" + Guid.NewGuid().ToString("N")));
         var claude = new ClaudeCodePaths(Path.Combine(paths.Root, "home"));
         Library = new CodeSwitchX.Voice.Audio.SoundLibrary(paths.SoundsDirectory);
-        Engines = new SpeechEngines(Speech, [Kokoro, Qwen]);
+        Engines = new SpeechEngines([Kokoro, Qwen]);
+        Speech = new SpeechSettings(Engines);
         VoiceStatus = new VoiceStatusViewModel(Engines, Speech, Dictation, dispatcher);
         var settings = new SettingsViewModel(new ClaudeHookInstaller(claude, NullLogger<ClaudeHookInstaller>.Instance), Settings, new PersistenceWriterOptions(), new BrainSettings(), Chats,
             Speech, Engines, Models, VoiceStatus, paths, claude, Samples, dispatcher, NullLogger<SettingsViewModel>.Instance, sounds: Sounds, levels: Levels,

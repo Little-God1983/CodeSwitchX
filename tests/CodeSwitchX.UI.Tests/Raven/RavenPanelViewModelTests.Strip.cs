@@ -1,8 +1,8 @@
 using CodeSwitchX.Conductor;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.UI.Raven;
-using CodeSwitchX.Voice.Dictation;
-using CodeSwitchX.Voice.Speech;
+using LittleGod.Speech;
+using LittleGod.Speech.Whisper;
 using NSubstitute;
 
 namespace CodeSwitchX.UI.Tests.Raven;
@@ -274,7 +274,7 @@ public sealed partial class RavenPanelViewModelTests
     {
         var (vm, _) = await ChatsVmAsync();
         _brain.Answer = _ => [new BrainText("Two chats.")];
-        _speech.Report(new global::CodeSwitchX.Voice.Speech.TextToSpeechStatus(global::CodeSwitchX.Voice.Speech.TextToSpeechState.Failed));
+        _speech.Report(new TextToSpeechStatus(TextToSpeechState.Failed));
         vm.IsOpen = false;
 
         Type(vm, "How many chats run?");
@@ -339,9 +339,9 @@ public sealed partial class RavenPanelViewModelTests
     [Fact]
     public async Task Collapsed_an_answer_only_written_while_the_user_talks_in_Open_mic_counts()
     {
-        var transcript = new TaskCompletionSource<DictationResult>();
-        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new DictationResult("Raven, hello.", TimeSpan.FromSeconds(1))), transcript.Task);
+        var transcript = new TaskCompletionSource<WhisperTranscript>();
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Transcript("Raven, hello.", TimeSpan.FromSeconds(1))), transcript.Task);
         _brain.Answer = q => q.Contains("Hello") ? [new BrainText("Hi.")] : [new BrainText("You have one chat waiting.")];
         var vm = await InOpenMicAsync();
         vm.IsOpen = false;
@@ -350,7 +350,7 @@ public sealed partial class RavenPanelViewModelTests
         _openMic.EndTurn();
 
         _openMic.Speak(); // the user's next turn has started, in the follow-up: theirs
-        transcript.SetResult(new DictationResult("Raven, what's waiting on me?", TimeSpan.FromSeconds(1)));
+        transcript.SetResult(Transcript("Raven, what's waiting on me?", TimeSpan.FromSeconds(1)));
         await WithinAsync(vm.PendingTranscriptions);
         await WithinAsync(vm.PendingAnswers);
 

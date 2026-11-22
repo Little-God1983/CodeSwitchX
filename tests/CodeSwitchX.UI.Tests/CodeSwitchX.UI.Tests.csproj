@@ -1,6 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <UseWPF>true</UseWPF>
+    <!-- FakeEngineVoice implements the package's ISpeechEngine, which is an ITextToSpeechClient: experimental in M.E.AI. -->
+    <NoWarn>$(NoWarn);MEAI001</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\CodeSwitchX.UI\CodeSwitchX.UI.csproj" />

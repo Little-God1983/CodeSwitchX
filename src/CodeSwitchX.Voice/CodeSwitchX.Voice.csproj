@@ -1,21 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <InternalsVisibleTo Include="CodeSwitchX.Voice.Tests" />
-    <!-- ReplyVoice.WhenQuietAsync: the panel's tests wait for the voice to play out before the news's grace. -->
-    <InternalsVisibleTo Include="CodeSwitchX.UI.Tests" />
   </ItemGroup>
   <ItemGroup>
-    <!-- The sample the warm-up decodes; see WarmUpSpeech.cs. -->
-    <EmbeddedResource Include="Dictation\WarmUpSpeech.pcm" LogicalName="CodeSwitchX.Voice.WarmUpSpeech.pcm" />
-    <!-- The speech sidecars: the module they share, each engine's script and the pins of its Python packages; written
-         into each engine's environment (SidecarScripts). -->
-    <EmbeddedResource Include="Speech\Sidecar\tts_sidecar.py" LogicalName="CodeSwitchX.Voice.Sidecar.tts_sidecar.py" />
-    <EmbeddedResource Include="Speech\QwenTts\qwen_tts_server.py" LogicalName="CodeSwitchX.Voice.QwenTts.qwen_tts_server.py" />
-    <EmbeddedResource Include="Speech\QwenTts\constraints.txt" LogicalName="CodeSwitchX.Voice.QwenTts.constraints.txt" />
-    <EmbeddedResource Include="Speech\Kokoro\kokoro_tts_server.py" LogicalName="CodeSwitchX.Voice.Kokoro.kokoro_tts_server.py" />
-    <EmbeddedResource Include="Speech\Kokoro\constraints.txt" LogicalName="CodeSwitchX.Voice.Kokoro.constraints.txt" />
-    <!-- What the voice setup plays: one clip per voice, "Engine.voice.wav", recorded with the engine itself (VoiceSamples). -->
-    <EmbeddedResource Include="Speech\Samples\*.wav" LogicalName="CodeSwitchX.Voice.Samples.%(Filename)%(Extension)" />
     <!-- The chats' sounds (#306), made by scripts/sounds/make-sounds.cs (ShippedSounds). -->
     <EmbeddedResource Include="Audio\Sounds\*.wav" LogicalName="CodeSwitchX.Voice.Sounds.%(Filename)%(Extension)" />
   </ItemGroup>
@@ -24,20 +11,16 @@
     <ProjectReference Include="..\CodeSwitchX.Core\CodeSwitchX.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <!-- Raven's voice is the shared LittleGod.Speech packages (#328): Listening brings Whisper, Speaking the speakers
+         and the reply voice, Kokoro and QwenTts the sidecar and the switch. -->
+    <PackageReference Include="LittleGod.Speech.Kokoro" />
+    <PackageReference Include="LittleGod.Speech.Listening" />
+    <PackageReference Include="LittleGod.Speech.QwenTts" />
+    <PackageReference Include="LittleGod.Speech.Speaking" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
-    <PackageReference Include="Microsoft.Extensions.Options" />
-    <!-- Open mic's turn detection: Silero VAD and Smart Turn v3, on the CPU (Smart Turn: the model about 15 ms, the features 60-90 ms; see Listening/). -->
-    <PackageReference Include="Microsoft.ML.OnnxRuntime" />
+    <!-- The app's own sound pool: WAV reading, Media Foundation for an imported MP3, the resampler. -->
     <PackageReference Include="NAudio.Core" />
     <PackageReference Include="NAudio.Wasapi" />
-    <PackageReference Include="NAudio.WinMM" />
-    <PackageReference Include="Whisper.net" />
-    <!-- Two runtimes, and Whisper.net's default RuntimeLibraryOrder already prefers Vulkan over Cpu, so no code
-         picks between them: Vulkan loads when its native library can load, Cpu is the automatic fallback when it cannot.
-         That fallback covers the native library only. Once a backend is chosen it is fixed for the process.
-         Vulkan rather than Cuda12 on purpose: the Cuda12 package has no native code for Blackwell (sm_120). -->
-    <PackageReference Include="Whisper.net.Runtime.Vulkan" />
-    <PackageReference Include="Whisper.net.Runtime" />
   </ItemGroup>
 </Project>

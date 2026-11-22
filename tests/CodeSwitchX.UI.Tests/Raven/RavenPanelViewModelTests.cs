@@ -1,11 +1,11 @@
-using NSubstitute;
 using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Raven;
-using CodeSwitchX.Voice.Audio;
-using CodeSwitchX.Voice.Dictation;
-using CodeSwitchX.Voice.Speech;
+using LittleGod.Speech.Listening;
+using LittleGod.Speech.Speaking;
+using LittleGod.Speech.Whisper;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
+using NSubstitute;
 
 namespace CodeSwitchX.UI.Tests.Raven;
 
@@ -17,7 +17,7 @@ public sealed partial class RavenPanelViewModelTests
 
     private readonly IMicrophoneCatalog _catalog = Substitute.For<IMicrophoneCatalog>();
     private readonly IMicrophoneRecorder _recorder = Substitute.For<IMicrophoneRecorder>();
-    private readonly IDictationService _dictation = Substitute.For<IDictationService>();
+    private readonly IWhisperTranscriber _dictation = Substitute.For<IWhisperTranscriber>();
     private readonly IWhisperModelStore _models = Substitute.For<IWhisperModelStore>();
     private readonly IDictationVocabularyProvider _vocabulary = Substitute.For<IDictationVocabularyProvider>();
     private readonly FakeTimeProvider _time = new();
@@ -30,16 +30,19 @@ public sealed partial class RavenPanelViewModelTests
         _voice = _speech.NewVoice();
         _catalog.List().Returns([Headset, Desk]);
         _catalog.Default().Returns(Headset);
-        _models.IsPresent.Returns(true);
+        _models.IsPresentOf(Arg.Any<WhisperModel>()).Returns(true);
         _models.Model.Returns(WhisperModel.LargeV3Turbo);
         _vocabulary.GetAsync(Arg.Any<CancellationToken>()).Returns(DictationVocabulary.Empty);
         _recorder.Stop().Returns(new RecordedClip(new float[32000], TimeSpan.FromSeconds(2)));
-        Transcribes(Task.FromResult(new DictationResult("Hallo Raven, open Diffusion Nexus", TimeSpan.FromSeconds(2))));
+        Transcribes(Task.FromResult(Transcript("Hallo Raven, open Diffusion Nexus", TimeSpan.FromSeconds(2))));
         _dictation.WarmUpAsync(Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
     }
 
-    private void Transcribes(Task<DictationResult> result) =>
-        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+    /// <summary>What Whisper wrote for a clip of <paramref name="length"/>.</summary>
+    private static WhisperTranscript Transcript(string text, TimeSpan length) => new(text, length, [], WhisperModel.LargeV3Turbo);
+
+    private void Transcribes(Task<WhisperTranscript> result) =>
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>())
             .Returns(result);
 
     private async Task<RavenPanelViewModel> NewVmAsync(IUiDispatcher? dispatcher = null)
@@ -250,14 +253,14 @@ public sealed partial class RavenPanelViewModelTests
         vm.Log.Single().Kind.ShouldBe(RavenLogKind.Note);
         vm.Log.Single().Text.ShouldBe("That was too short. Hold the keys or the mic button while you talk.");
         vm.State.ShouldBe(RavenState.Idle);
-        await _dictation.DidNotReceive().TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>());
+        await _dictation.DidNotReceive().TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
     public async Task A_missing_model_is_downloaded_then_the_clip_is_transcribed()
     {
-        _models.IsPresent.Returns(false);
-        _models.DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>()).Returns(call =>
+        _models.IsPresentOf(Arg.Any<WhisperModel>()).Returns(false);
+        _models.DownloadAsync(Arg.Any<WhisperModel>(), Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>()).Returns(call =>
         {
             call.Arg<IProgress<double>?>()!.Report(0.5);
             return Task.CompletedTask;
@@ -275,10 +278,10 @@ public sealed partial class RavenPanelViewModelTests
     [Fact]
     public async Task The_download_note_shows_whole_percents_while_it_runs()
     {
-        _models.IsPresent.Returns(false);
+        _models.IsPresentOf(Arg.Any<WhisperModel>()).Returns(false);
         var seen = new List<string>();
         RavenPanelViewModel? vm = null;
-        _models.DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>()).Returns(call =>
+        _models.DownloadAsync(Arg.Any<WhisperModel>(), Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>()).Returns(call =>
         {
             var progress = call.Arg<IProgress<double>?>()!;
             seen.Add(vm!.Log[0].Text);
@@ -300,11 +303,11 @@ public sealed partial class RavenPanelViewModelTests
     [InlineData(WhisperModel.LargeV3Turbo, "1.6 GB")]
     public async Task The_download_note_says_the_size_of_the_model_picked(WhisperModel model, string size)
     {
-        _models.IsPresent.Returns(false);
+        _models.IsPresentOf(Arg.Any<WhisperModel>()).Returns(false);
         _models.Model.Returns(model);
         string? said = null;
         RavenPanelViewModel? vm = null;
-        _models.DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>()).Returns(_ =>
+        _models.DownloadAsync(Arg.Any<WhisperModel>(), Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>()).Returns(_ =>
         {
             said = vm!.Log[0].Text;
             return Task.CompletedTask;
@@ -318,8 +321,8 @@ public sealed partial class RavenPanelViewModelTests
     [Fact]
     public async Task A_failed_download_is_reported_and_retried_next_time()
     {
-        _models.IsPresent.Returns(false);
-        _models.DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>())
+        _models.IsPresentOf(Arg.Any<WhisperModel>()).Returns(false);
+        _models.DownloadAsync(Arg.Any<WhisperModel>(), Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromException(new IOException("disk full")));
         var vm = await NewVmAsync();
 
@@ -331,7 +334,7 @@ public sealed partial class RavenPanelViewModelTests
 
         await HoldAsync(vm);
 
-        await _models.Received(2).DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>());
+        await _models.Received(2).DownloadAsync(Arg.Any<WhisperModel>(), Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>());
     }
 
     // Three clips were recorded while the first-run download ran, then the network dropped. Each queued clip used to
@@ -341,8 +344,8 @@ public sealed partial class RavenPanelViewModelTests
     {
         var download = new TaskCompletionSource();
         var downloading = new TaskCompletionSource();
-        _models.IsPresent.Returns(false);
-        _models.DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>()).Returns(_ =>
+        _models.IsPresentOf(Arg.Any<WhisperModel>()).Returns(false);
+        _models.DownloadAsync(Arg.Any<WhisperModel>(), Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>()).Returns(_ =>
         {
             downloading.TrySetResult();
             return download.Task;
@@ -354,16 +357,16 @@ public sealed partial class RavenPanelViewModelTests
         download.SetException(new IOException("network down"));
         await WithinAsync(Task.WhenAll(releases));
 
-        await _models.Received(1).DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>());
+        await _models.Received(1).DownloadAsync(Arg.Any<WhisperModel>(), Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>());
         vm.Log.Where(l => l.Kind == RavenLogKind.Warning).Select(l => l.Text).ShouldBe(
             ["The speech model could not be downloaded: network down. 2 waiting recordings were dropped. Press the mic to try again."]);
-        await _dictation.DidNotReceive().TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>());
+        await _dictation.DidNotReceive().TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>());
         vm.State.ShouldBe(RavenState.Idle);
 
-        _models.DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        _models.DownloadAsync(Arg.Any<WhisperModel>(), Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
         await HoldAsync(vm);
 
-        await _models.Received(2).DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>());
+        await _models.Received(2).DownloadAsync(Arg.Any<WhisperModel>(), Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>());
         vm.Log[^1].Kind.ShouldBe(RavenLogKind.You);
     }
 
@@ -374,8 +377,8 @@ public sealed partial class RavenPanelViewModelTests
     {
         var download = new TaskCompletionSource();
         var downloading = new TaskCompletionSource();
-        _models.IsPresent.Returns(false);
-        _models.DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>()).Returns(_ =>
+        _models.IsPresentOf(Arg.Any<WhisperModel>()).Returns(false);
+        _models.DownloadAsync(Arg.Any<WhisperModel>(), Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>()).Returns(_ =>
         {
             downloading.TrySetResult();
             return download.Task;
@@ -396,15 +399,15 @@ public sealed partial class RavenPanelViewModelTests
         vm.Log.Single(l => l.Kind == RavenLogKind.Warning).Text.ShouldBe(
             "The speech model could not be downloaded: network down. 1 waiting recording was dropped. Press the mic to try again.");
         vm.Log.ShouldContain(l => l.Kind == RavenLogKind.Note && l.Text == "I didn't hear anything.");
-        await _models.Received(1).DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>());
+        await _models.Received(1).DownloadAsync(Arg.Any<WhisperModel>(), Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
     public async Task A_failed_download_with_one_clip_waiting_says_so_in_the_singular()
     {
         var download = new TaskCompletionSource();
-        _models.IsPresent.Returns(false);
-        _models.DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>()).Returns(download.Task);
+        _models.IsPresentOf(Arg.Any<WhisperModel>()).Returns(false);
+        _models.DownloadAsync(Arg.Any<WhisperModel>(), Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>()).Returns(download.Task);
         var vm = await NewVmAsync();
         var releases = await QueueClipsAsync(vm, 2);
 
@@ -468,7 +471,7 @@ public sealed partial class RavenPanelViewModelTests
         vm.State.ShouldBe(RavenState.Idle);
         await WithinAsync(vm.PendingStop);
         _recorder.Received(1).Stop();
-        await _dictation.DidNotReceive().TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>());
+        await _dictation.DidNotReceive().TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>());
 
         vm.PressMic(TalkInput.MicButton);
         vm.State.ShouldBe(RavenState.Listening);
@@ -604,9 +607,9 @@ public sealed partial class RavenPanelViewModelTests
     [Fact]
     public async Task A_second_recording_during_a_pending_transcription_records_and_both_transcripts_appear_in_recording_order()
     {
-        var first = new TaskCompletionSource<DictationResult>();
-        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
-            .Returns(first.Task, Task.FromResult(new DictationResult("second", TimeSpan.FromSeconds(2))));
+        var first = new TaskCompletionSource<WhisperTranscript>();
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>())
+            .Returns(first.Task, Task.FromResult(Transcript("second", TimeSpan.FromSeconds(2))));
         var vm = await NewVmAsync();
         vm.PressMic(TalkInput.MicButton);
         Speak();
@@ -629,7 +632,7 @@ public sealed partial class RavenPanelViewModelTests
         vm.State.ShouldBe(RavenState.Transcribing);
         vm.Caption.ShouldBe("Transcribing… (1 waiting)", "the first is transcribing, the second waits");
         secondRelease.IsCompleted.ShouldBeFalse("the second clip waits for the first");
-        first.SetResult(new DictationResult("first", TimeSpan.FromSeconds(2)));
+        first.SetResult(Transcript("first", TimeSpan.FromSeconds(2)));
         await WithinAsync(firstRelease);
         await WithinAsync(secondRelease);
 
@@ -644,8 +647,8 @@ public sealed partial class RavenPanelViewModelTests
     {
         var download = new TaskCompletionSource();
         var downloading = new TaskCompletionSource();
-        _models.IsPresent.Returns(false);
-        _models.DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>()).Returns(_ =>
+        _models.IsPresentOf(Arg.Any<WhisperModel>()).Returns(false);
+        _models.DownloadAsync(Arg.Any<WhisperModel>(), Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>()).Returns(_ =>
         {
             downloading.TrySetResult();
             return download.Task;
@@ -668,14 +671,14 @@ public sealed partial class RavenPanelViewModelTests
         vm.State.ShouldBe(RavenState.Transcribing);
         vm.Caption.ShouldBe("Downloading the speech model…");
 
-        _models.IsPresent.Returns(true);
+        _models.IsPresentOf(Arg.Any<WhisperModel>()).Returns(true);
         _models.Model.Returns(WhisperModel.LargeV3Turbo);
         download.SetResult();
         await WithinAsync(firstRelease);
         await WithinAsync(secondRelease);
 
         vm.Log.Count(l => l.Kind == RavenLogKind.You).ShouldBe(2);
-        await _models.Received(1).DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>());
+        await _models.Received(1).DownloadAsync(Arg.Any<WhisperModel>(), Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>());
         vm.State.ShouldBe(RavenState.Idle);
     }
 
@@ -1182,26 +1185,44 @@ public sealed partial class RavenPanelViewModelTests
         vm.State.ShouldBe(RavenState.Idle);
     }
 
+    /// <summary>#328: Whisper read the file after the failed load, and its message says what it found; the panel adds no
+    /// advice of its own (a "delete it" would be wrong for a whole file).</summary>
     [Fact]
-    public async Task A_load_failure_names_the_reason_and_how_to_download_the_model_again()
+    public async Task A_load_failure_shows_what_Whisper_found()
     {
-        _models.ModelPath.Returns(@"c:\m\ggml.bin");
-        var load = new DictationModelLoadException(@"c:\m\ggml.bin", "Vulkan", new InvalidOperationException("out of memory."));
-        Transcribes(Task.FromException<DictationResult>(load));
+        var load = new WhisperModelLoadException(@"c:\m\ggml.bin", "Vulkan", new InvalidOperationException("out of memory."));
+        Transcribes(Task.FromException<WhisperTranscript>(load));
         var vm = await NewVmAsync();
 
         await HoldAsync(vm);
 
         vm.Log.Last().Kind.ShouldBe(RavenLogKind.Warning);
-        vm.Log.Last().Text.ShouldBe(@"The speech model could not be loaded: out of memory. Delete c:\m\ggml.bin and press the mic to download it again.");
-        vm.Log.Last().Text.ShouldNotContain("smaller model");
+        vm.Log.Last().Text.ShouldBe(load.Message);
         vm.State.ShouldBe(RavenState.Idle);
+    }
+
+    /// <summary>#328: a damaged file Whisper removed after it would not load is downloaded again, and the same clip goes through.</summary>
+    [Fact]
+    public async Task A_model_removed_as_damaged_is_downloaded_again_and_the_clip_transcribed()
+    {
+        var removed = new WhisperModelMissingException(@"c:\m\ggml.bin", "The file was damaged. It has been removed.");
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<WhisperTranscript>(removed), Task.FromResult(Transcript("open it", TimeSpan.FromSeconds(2))));
+        _models.DownloadAsync(Arg.Any<WhisperModel>(), Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        var vm = await NewVmAsync();
+
+        await HoldAsync(vm);
+
+        await _models.Received(1).DownloadAsync(WhisperModel.LargeV3Turbo, Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>());
+        vm.Log.ShouldContain(e => e.Text == "Speech model downloaded.");
+        vm.Log.Last().Kind.ShouldBe(RavenLogKind.You);
+        vm.Log.Last().Text.ShouldBe("open it");
     }
 
     [Fact]
     public async Task An_empty_transcript_adds_no_entry()
     {
-        Transcribes(Task.FromResult(new DictationResult("  ", TimeSpan.FromSeconds(2))));
+        Transcribes(Task.FromResult(Transcript("  ", TimeSpan.FromSeconds(2))));
         var vm = await NewVmAsync();
 
         await HoldAsync(vm);
@@ -1272,22 +1293,22 @@ public sealed partial class RavenPanelViewModelTests
     [Fact]
     public async Task A_downloaded_model_is_not_warmed_up_the_clip_that_asked_for_it_loads_it()
     {
-        _models.IsPresent.Returns(false);
-        _models.DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        _models.IsPresentOf(Arg.Any<WhisperModel>()).Returns(false);
+        _models.DownloadAsync(Arg.Any<WhisperModel>(), Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
         var vm = await NewVmAsync();
 
         await HoldAsync(vm);
         await Task.Delay(50, TestContext.Current.CancellationToken);
 
-        await _dictation.Received(1).TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>());
+        await _dictation.Received(1).TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>());
         await _dictation.DidNotReceive().WarmUpAsync(Arg.Any<CancellationToken>());
     }
 
     [Fact]
     public async Task A_failed_download_warms_nothing_up()
     {
-        _models.IsPresent.Returns(false);
-        _models.DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>())
+        _models.IsPresentOf(Arg.Any<WhisperModel>()).Returns(false);
+        _models.DownloadAsync(Arg.Any<WhisperModel>(), Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromException(new IOException("disk full")));
         var vm = await NewVmAsync();
 
@@ -1349,7 +1370,7 @@ public sealed partial class RavenPanelViewModelTests
     [Fact]
     public async Task There_is_no_startup_warm_up_without_a_model()
     {
-        _models.IsPresent.Returns(false);
+        _models.IsPresentOf(Arg.Any<WhisperModel>()).Returns(false);
         var vm = await NewVmAsync();
 
         vm.ScheduleWarmUp();
@@ -1371,7 +1392,7 @@ public sealed partial class RavenPanelViewModelTests
 
         await vm.ReleaseMicAsync(TalkInput.MicButton);
 
-        await _dictation.DidNotReceive().TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>());
+        await _dictation.DidNotReceive().TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>());
         vm.Log.Single().Kind.ShouldBe(RavenLogKind.Note);
         vm.Log.Single().Text.ShouldBe("I didn't hear anything.");
         vm.State.ShouldBe(RavenState.Idle);
@@ -1413,7 +1434,7 @@ public sealed partial class RavenPanelViewModelTests
     [Fact]
     public async Task A_quiet_clip_does_not_start_the_model_download()
     {
-        _models.IsPresent.Returns(false);
+        _models.IsPresentOf(Arg.Any<WhisperModel>()).Returns(false);
         var vm = await NewVmAsync();
         vm.PressMic(TalkInput.MicButton);
         RoomNoise(2);
@@ -1421,7 +1442,7 @@ public sealed partial class RavenPanelViewModelTests
 
         await vm.ReleaseMicAsync(TalkInput.MicButton);
 
-        await _models.DidNotReceive().DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>());
+        await _models.DidNotReceive().DownloadAsync(Arg.Any<WhisperModel>(), Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -1436,16 +1457,16 @@ public sealed partial class RavenPanelViewModelTests
         await vm.ReleaseMicAsync(TalkInput.MicButton);
 
         vm.Log.Last().Text.ShouldBe("I didn't hear anything.");
-        await _dictation.Received(1).TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>());
+        await _dictation.Received(1).TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
     public async Task The_caption_says_downloading_while_the_model_downloads()
     {
-        _models.IsPresent.Returns(false);
+        _models.IsPresentOf(Arg.Any<WhisperModel>()).Returns(false);
         string? caption = null;
         RavenPanelViewModel? vm = null;
-        _models.DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>()).Returns(_ =>
+        _models.DownloadAsync(Arg.Any<WhisperModel>(), Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>()).Returns(_ =>
         {
             caption = vm!.Caption;
             return Task.CompletedTask;
@@ -1759,18 +1780,18 @@ public sealed partial class RavenPanelViewModelTests
         vm.Log.Single().Kind.ShouldBe(RavenLogKind.Warning);
         vm.Log.Single().Text.ShouldContain("Privacy & security");
         _recorder.DidNotReceive().Stop();
-        await _dictation.DidNotReceive().TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>());
+        await _dictation.DidNotReceive().TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>());
     }
 
     // 1.6 GB in 80 KB reads is some twenty thousand reports: only a new whole percent goes to the UI thread.
     [Fact]
     public async Task Download_progress_is_posted_to_the_ui_thread_only_when_the_percent_changes()
     {
-        _models.IsPresent.Returns(false);
+        _models.IsPresentOf(Arg.Any<WhisperModel>()).Returns(false);
         var dispatcher = new CountingDispatcher();
         var postsDuringDownload = 0;
         RavenPanelViewModel? vm = null;
-        _models.DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>()).Returns(call =>
+        _models.DownloadAsync(Arg.Any<WhisperModel>(), Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>()).Returns(call =>
         {
             var progress = call.Arg<IProgress<double>?>()!;
             var before = dispatcher.Posts;
@@ -1810,7 +1831,7 @@ public sealed partial class RavenPanelViewModelTests
         await vm.ReleaseMicAsync(TalkInput.MicButton);
 
         await _vocabulary.Received(1).GetAsync(Arg.Any<CancellationToken>());
-        await _dictation.Received(1).TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), words, Arg.Any<CancellationToken>());
+        await _dictation.Received(1).TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Is<WhisperRequest?>(r => r!.Vocabulary == words), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -1822,7 +1843,7 @@ public sealed partial class RavenPanelViewModelTests
         await HoldAsync(vm);
 
         vm.Log.Single().Kind.ShouldBe(RavenLogKind.You);
-        await _dictation.Received(1).TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), DictationVocabulary.Empty, Arg.Any<CancellationToken>());
+        await _dictation.Received(1).TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Is<WhisperRequest?>(r => r!.Vocabulary == DictationVocabulary.Empty), Arg.Any<CancellationToken>());
     }
 
     /// <summary>Keeps posts until the test runs them, the way the UI thread runs them later.</summary>

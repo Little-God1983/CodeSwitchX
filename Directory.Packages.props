@@ -7,29 +7,28 @@
     <PackageVersion Include="H.NotifyIcon.Wpf" Version="2.4.1" />
     <!-- The shared Claude CLI package, from the local feed (nuget.config): Raven's brains run on its ClaudeCliSession (#314). -->
     <PackageVersion Include="LittleGod.Llm.ClaudeCli" Version="[0.7.1]" />
+    <!-- Raven's voice (#328): Whisper, the microphone, the TTS engines and the speakers, from the same local feed. All -->
+    <!-- LittleGod.Speech packages share one version; Whisper, Abstractions, Devices and the Sidecar come with these four. -->
+    <PackageVersion Include="LittleGod.Speech.Kokoro" Version="[0.12.1]" />
+    <PackageVersion Include="LittleGod.Speech.Listening" Version="[0.12.1]" />
+    <PackageVersion Include="LittleGod.Speech.QwenTts" Version="[0.12.1]" />
+    <PackageVersion Include="LittleGod.Speech.Speaking" Version="[0.12.1]" />
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.12" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.12" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.12" />
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
     <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.12" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.12" />
-    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.13" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.13" />
     <PackageVersion Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.10.0" />
-    <PackageVersion Include="Microsoft.ML.OnnxRuntime" Version="1.30.0" />
     <PackageVersion Include="Microsoft.Windows.CsWin32" Version="0.3.335" />
     <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="2.2.0" />
     <PackageVersion Include="NAudio.Core" Version="2.4.0" />
     <PackageVersion Include="NAudio.Wasapi" Version="2.4.0" />
-    <PackageVersion Include="NAudio.WinMM" Version="2.4.0" />
     <PackageVersion Include="Serilog" Version="4.4.0" />
     <PackageVersion Include="Serilog.Extensions.Hosting" Version="10.0.0" />
     <PackageVersion Include="Serilog.Sinks.File" Version="7.0.0" />
     <PackageVersion Include="Serilog.Sinks.Debug" Version="3.0.0" />
-    <PackageVersion Include="System.Speech" Version="10.0.12" />
-    <PackageVersion Include="Whisper.net" Version="1.9.1" />
-    <PackageVersion Include="Whisper.net.Runtime" Version="1.9.1" />
-    <PackageVersion Include="Whisper.net.Runtime.Vulkan" Version="1.9.1" />
     <PackageVersion Include="xunit.v3" Version="4.0.1" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.0" />
     <PackageVersion Include="Shouldly" Version="4.3.0" />

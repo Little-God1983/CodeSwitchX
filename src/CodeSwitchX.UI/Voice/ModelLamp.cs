@@ -1,5 +1,6 @@
-using CodeSwitchX.Voice.Dictation;
 using CodeSwitchX.Voice.Speech;
+using LittleGod.Speech;
+using LittleGod.Speech.Whisper;
 
 namespace CodeSwitchX.UI.Voice;
 
@@ -32,7 +33,7 @@ public sealed record ModelLamp(ModelDot Dot, string Text, string Detail, double?
         _ => engine.ToString(),
     };
 
-    /// <summary>"Whisper Tiny"; a model added later is called by its member's name until it gets one here.</summary>
+    /// <summary>"Whisper Tiny".</summary>
     public static string NameOf(WhisperModel model) => $"Whisper {RowNameOf(model)}";
 
     /// <summary>"Large v3 Turbo": the model's name on its Listening row, and as Raven says it.</summary>
@@ -42,6 +43,13 @@ public sealed record ModelLamp(ModelDot Dot, string Text, string Detail, double?
         WhisperModel.BaseEnglish => "Base",
         WhisperModel.SmallEnglish => "Small",
         WhisperModel.LargeV3Turbo => "Large v3 Turbo",
+        // Not offered (#328), named all the same: one stored before, or set by hand, is shown by a name of its own.
+        WhisperModel.MediumEnglish => "Medium",
+        WhisperModel.Tiny => "Tiny multilingual",
+        WhisperModel.Base => "Base multilingual",
+        WhisperModel.Small => "Small multilingual",
+        WhisperModel.Medium => "Medium multilingual",
+        WhisperModel.LargeV3 => "Large v3",
         _ => model.ToString(),
     };
 
@@ -65,18 +73,22 @@ public sealed record ModelLamp(ModelDot Dot, string Text, string Detail, double?
         };
     }
 
-    public static ModelLamp Of(DictationStatus status)
+    public static ModelLamp Of(WhisperStatus status)
     {
         var name = NameOf(status.Model);
         return status.State switch
         {
-            DictationState.NotDownloaded => new(ModelDot.Red, "not downloaded",
-                $"{name} is not on this PC yet. It downloads with your first dictation, or from Settings."),
-            DictationState.Downloading => new(ModelDot.Yellow, status.Bytes is { } b ? $"downloading {b.Fraction:P0}" : "downloading",
+            // Detail: why its last download failed, or that a damaged file was removed (#328).
+            WhisperState.NotDownloaded => new(ModelDot.Red, "not downloaded",
+                $"{name} is not on this PC yet. It downloads with your first dictation, or from Settings."
+                + (status.Detail is { Length: > 0 } why ? $" {why}" : "")),
+            WhisperState.Downloading => new(ModelDot.Yellow, status.Bytes is { } b ? $"downloading {b.Fraction:P0}" : "downloading",
                 $"Downloading {name}{(status.Bytes is { } d ? $": {d}" : "")}", status.Bytes?.Fraction),
-            DictationState.Asleep => new(ModelDot.Grey, "asleep", $"{name} is on this PC; it loads with your next dictation."),
-            DictationState.Loading => new(ModelDot.Yellow, "loading", $"Loading {name}."),
-            DictationState.Ready => new(ModelDot.Green, "ready", $"{name} is loaded and ready."),
+            WhisperState.Asleep => new(ModelDot.Grey, "asleep", $"{name} is on this PC; it loads with your next dictation."),
+            WhisperState.Loading => new(ModelDot.Yellow, "loading", $"Loading {name}."),
+            WhisperState.Ready => new(ModelDot.Green, "ready", $"{name} is loaded and ready."),
+            WhisperState.OutOfMemory => new(ModelDot.Red, "out of memory", status.Detail
+                ?? $"{name} loaded, but the graphics card had no memory left for a clip. Close an app that uses it, or pick a smaller model."),
             _ => new(ModelDot.Red, "failed", status.Detail ?? $"{name} could not be loaded."),
         };
     }

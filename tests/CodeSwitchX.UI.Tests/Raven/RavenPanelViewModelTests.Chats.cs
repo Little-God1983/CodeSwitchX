@@ -1,11 +1,11 @@
 using CodeSwitchX.Conductor;
 using CodeSwitchX.Core.Sessions;
-using CodeSwitchX.UI.Raven;
-using CodeSwitchX.Voice.Speech;
-using CodeSwitchX.Voice.Dictation;
-using NSubstitute;
 using CodeSwitchX.Core.Yard;
+using CodeSwitchX.UI.Raven;
+using LittleGod.Speech;
+using LittleGod.Speech.Whisper;
 using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
 
 namespace CodeSwitchX.UI.Tests.Raven;
 
@@ -965,9 +965,9 @@ public sealed partial class RavenPanelViewModelTests
     [Fact]
     public async Task A_question_said_right_after_a_spoken_switch_goes_to_the_chat_switched_to()
     {
-        var first = new TaskCompletionSource<DictationResult>();
-        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
-            .Returns(first.Task, Task.FromResult(new DictationResult("what is it doing", TimeSpan.FromSeconds(2))));
+        var first = new TaskCompletionSource<WhisperTranscript>();
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>())
+            .Returns(first.Task, Task.FromResult(Transcript("what is it doing", TimeSpan.FromSeconds(2))));
         var (vm, _) = await ChatsVmAsync();
         vm.PressMic(TalkInput.MicButton);
         Speak();
@@ -981,7 +981,7 @@ public sealed partial class RavenPanelViewModelTests
         var questionRelease = vm.ReleaseMicAsync(TalkInput.MicButton);
         await WithinAsync(vm.PendingStop);
 
-        first.SetResult(new DictationResult("chat three", TimeSpan.FromSeconds(2)));
+        first.SetResult(Transcript("chat three", TimeSpan.FromSeconds(2)));
         await WithinAsync(switchRelease);
         await WithinAsync(questionRelease);
         await WithinAsync(vm.PendingAnswers);
@@ -1036,10 +1036,10 @@ public sealed partial class RavenPanelViewModelTests
     [Fact]
     public async Task A_question_after_two_spoken_switches_goes_to_the_last_one()
     {
-        var first = new TaskCompletionSource<DictationResult>();
-        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
-            .Returns(first.Task, Task.FromResult(new DictationResult("chat one", TimeSpan.FromSeconds(2))),
-                Task.FromResult(new DictationResult("what is it doing", TimeSpan.FromSeconds(2))));
+        var first = new TaskCompletionSource<WhisperTranscript>();
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>())
+            .Returns(first.Task, Task.FromResult(Transcript("chat one", TimeSpan.FromSeconds(2))),
+                Task.FromResult(Transcript("what is it doing", TimeSpan.FromSeconds(2))));
         var (vm, _) = await ChatsVmAsync();
         var releases = new List<Task>();
         for (var i = 0; i < 3; i++)
@@ -1052,7 +1052,7 @@ public sealed partial class RavenPanelViewModelTests
             await WithinAsync(vm.PendingStop);
         }
 
-        first.SetResult(new DictationResult("chat three", TimeSpan.FromSeconds(2)));
+        first.SetResult(Transcript("chat three", TimeSpan.FromSeconds(2)));
         foreach (var release in releases)
         {
             await WithinAsync(release);
@@ -1135,10 +1135,10 @@ public sealed partial class RavenPanelViewModelTests
     [Fact]
     public async Task A_question_said_between_two_spoken_switches_being_heard_goes_to_the_second()
     {
-        var first = new TaskCompletionSource<DictationResult>();
-        var second = new TaskCompletionSource<DictationResult>();
-        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
-            .Returns(first.Task, second.Task, Task.FromResult(new DictationResult("what is it doing", TimeSpan.FromSeconds(2))));
+        var first = new TaskCompletionSource<WhisperTranscript>();
+        var second = new TaskCompletionSource<WhisperTranscript>();
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<WhisperRequest?>(), Arg.Any<CancellationToken>())
+            .Returns(first.Task, second.Task, Task.FromResult(Transcript("what is it doing", TimeSpan.FromSeconds(2))));
         var (vm, _) = await ChatsVmAsync();
         var releases = new List<Task>();
         async Task SayAsync()
@@ -1153,10 +1153,10 @@ public sealed partial class RavenPanelViewModelTests
 
         await SayAsync();
         await SayAsync();
-        first.SetResult(new DictationResult("chat three", TimeSpan.FromSeconds(2)));
+        first.SetResult(Transcript("chat three", TimeSpan.FromSeconds(2)));
         await Until(() => vm.SelectedChat.Number == 3);
         await SayAsync(); // the question, while "chat one" is still being transcribed
-        second.SetResult(new DictationResult("chat one", TimeSpan.FromSeconds(2)));
+        second.SetResult(Transcript("chat one", TimeSpan.FromSeconds(2)));
         foreach (var release in releases)
         {
             await WithinAsync(release);

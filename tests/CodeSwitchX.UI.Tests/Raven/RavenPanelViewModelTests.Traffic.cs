@@ -3,7 +3,7 @@ using CodeSwitchX.Core.Messaging;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.UI.Raven;
 using CodeSwitchX.Voice.Audio;
-using CodeSwitchX.Voice.Speech;
+using LittleGod.Speech;
 using Microsoft.Extensions.Logging.Abstractions;
 using Shouldly;
 

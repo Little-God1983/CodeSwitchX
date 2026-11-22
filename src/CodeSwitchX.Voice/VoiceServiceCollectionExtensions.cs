@@ -1,66 +1,56 @@
 using CodeSwitchX.Voice.Audio;
-using CodeSwitchX.Voice.Dictation;
-using CodeSwitchX.Voice.Listening;
 using CodeSwitchX.Voice.Speech;
-using CodeSwitchX.Voice.Speech.Kokoro;
-using CodeSwitchX.Voice.Speech.QwenTts;
-using CodeSwitchX.Voice.Speech.Sidecar;
+using LittleGod.Speech.Kokoro;
+using LittleGod.Speech.Listening;
+using LittleGod.Speech.QwenTts;
+using LittleGod.Speech.Sidecar;
+using LittleGod.Speech.Speaking;
+using LittleGod.Speech.Whisper;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 
 namespace CodeSwitchX.Voice;
 
 public static class VoiceServiceCollectionExtensions
 {
-    /// <param name="voiceDirectory">Where the text-to-speech engine is installed.</param>
+    /// <summary>
+    /// Raven's voice on the shared LittleGod.Speech packages (#328), in this app's folders, so nothing is downloaded again:
+    /// Whisper and open mic's models under <paramref name="modelsDirectory"/>, uv, Python and the engines' environments
+    /// under <paramref name="voiceDirectory"/>. What is the app's own: the picks (<see cref="SpeechSettings"/>) and the
+    /// chats' sounds.
+    /// </summary>
+    /// <param name="voiceDirectory">Where the text-to-speech engines are installed.</param>
     public static IServiceCollection AddCodeSwitchXVoice(this IServiceCollection services, string modelsDirectory, string voiceDirectory)
     {
-        services.Configure<DictationOptions>(o =>
+        services.AddWhisper(o =>
         {
             o.ModelFolder = modelsDirectory;
             o.Model = WhisperModel.LargeV3Turbo;
             o.Language = "auto";
         });
-        services.AddSingleton<IWhisperModelStore, WhisperModelStore>();
-        services.AddSingleton<IDictationService, WhisperDictationService>();
-        services.AddSingleton<IMicrophoneCatalog, WasapiMicrophoneCatalog>();
-        services.AddSingleton<ISpeakerCatalog, WasapiSpeakerCatalog>();
-        services.AddSingleton<IAudioOutput, AudioOutput>();
-        services.AddSingleton<IMicrophoneRecorder, WasapiMicrophoneRecorder>();
 
-        // Open mic: listens until stopped; its two models are fetched the first time the user switches to it.
-        services.AddSingleton(_ => new ListeningModelStore(Path.Combine(modelsDirectory, "listening"), new HttpClient()));
-        services.AddSingleton<IMicrophoneStream, WasapiMicrophoneStream>();
-        services.AddSingleton<IOpenMic, OpenMicListener>();
+        // The microphones, push to talk, and open mic, whose two models are fetched the first time the user switches to it.
+        services.AddListening(o => o.ModelFolder = Path.Combine(modelsDirectory, "listening"));
 
-        // Speech: the engine picked (Kokoro or Qwen3-TTS), each in a sidecar of its own, installed on first need or from the Settings
-        // Voice page. The requests stream for as long as a sentence takes, so the client has no timeout of its own;
-        // ReplyVoice watches for a stalled one.
+        // The engines, each in a sidecar of its own, installed on first need or from the Settings Voice page; the switch
+        // speaks with the one SpeechSettings picks.
+        services.AddKokoro(o =>
+        {
+            o.VoiceFolder = voiceDirectory;
+            o.ModelFolder = Path.Combine(modelsDirectory, "kokoro");
+        });
+        services.AddQwenTts(o =>
+        {
+            o.VoiceFolder = voiceDirectory;
+            o.ModelCache = Path.Combine(modelsDirectory, "huggingface");
+        });
+        services.AddSpeechEngines();
         services.AddSingleton<SpeechSettings>();
-        services.AddSingleton<IProcessRunner, ProcessRunner>();
-        services.AddSingleton(sp => new Uv(voiceDirectory, sp.GetRequiredService<IProcessRunner>(), new HttpClient(), Uv.FindOnPath,
-            sp.GetRequiredService<ILogger<Uv>>()));
-        services.AddSingleton<ISidecarLauncher, SidecarLauncher>();
-        services.AddSingleton(sp => new SpeechEngines(sp.GetRequiredService<SpeechSettings>(),
-        [
-            Engine(sp, SpeechEngine.Kokoro, new KokoroEnvironment(Path.Combine(voiceDirectory, "kokoro"), Path.Combine(modelsDirectory, "kokoro"),
-                sp.GetRequiredService<Uv>(), new HttpClient { Timeout = Timeout.InfiniteTimeSpan })),
-            Engine(sp, SpeechEngine.Qwen, new QwenTtsEnvironment(voiceDirectory, Path.Combine(modelsDirectory, "huggingface"), sp.GetRequiredService<Uv>())),
-        ]));
-        services.AddSingleton<ITextToSpeech>(sp => sp.GetRequiredService<SpeechEngines>());
-        services.AddSingleton<IVoiceSamples, VoiceSamples>();
-        services.AddSingleton<ISpeechPlayer, WaveOutSpeechPlayer>();
-        services.AddSingleton<IAudioKeepAlive, AudioKeepAlive>();
-        services.AddSingleton<AudioLevels>();
+
+        // The speakers and the reply voice: Raven says three sentences at most, the panel shows the rest.
+        services.AddSpeaking(o => o.MaximumSentences = SpeechSettings.MaximumSentences);
+
         services.AddSingleton<SoundPicks>();
         services.AddSingleton<IChatSounds, ChatSounds>();
-        services.AddSingleton<ReplyVoice>();
         return services;
     }
-
-    /// <remarks>Disposed with <see cref="SpeechEngines"/>, which the container disposes: it stops its sidecar.</remarks>
-    private static SidecarTextToSpeech Engine(IServiceProvider sp, SpeechEngine engine, ISidecarEnvironment environment) =>
-        new(engine, environment, sp.GetRequiredService<ISidecarLauncher>(), sp.GetRequiredService<SpeechSettings>(),
-            new HttpClient { Timeout = Timeout.InfiniteTimeSpan }, sp.GetRequiredService<TimeProvider>(),
-            sp.GetRequiredService<ILogger<SidecarTextToSpeech>>());
 }

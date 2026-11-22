@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
-using CodeSwitchX.Voice.Audio;
 using CodeSwitchX.Voice.Speech;
+using LittleGod.Speech;
+using LittleGod.Speech.Speaking;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace CodeSwitchX.UI.Tests.Raven;
@@ -47,7 +48,7 @@ internal sealed class FakeSpeech : ITextToSpeech
     {
     }
 
-    public async IAsyncEnumerable<SpeechChunk> SpeakAsync(string text, [EnumeratorCancellation] CancellationToken ct)
+    public async IAsyncEnumerable<SpeechChunk> SpeakAsync(string text, SpeechRequest? request, [EnumeratorCancellation] CancellationToken ct)
     {
         lock (_spoken)
         {
@@ -67,17 +68,31 @@ internal sealed class FakeSpeech : ITextToSpeech
         yield return new SpeechChunk(new byte[480], 24000);
     }
 
-    /// <summary>A reply voice over this fake, a player that plays at once and no keep-alive; on real time, so it plays out.</summary>
+    /// <summary>
+    /// A reply voice over this fake, a player that plays at once and no keep-alive; on real time, so it plays out. It says
+    /// at most the sentences the app's voice says (#328), as the panel counts against them.
+    /// </summary>
     public ReplyVoice NewVoice(ISpeechPlayer? player = null) =>
-        new(this, player ?? new InstantPlayer(), new NoKeepAlive(), TimeProvider.System, NullLogger<ReplyVoice>.Instance);
+        new(this, player ?? new InstantPlayer(), new NoKeepAlive(), TimeProvider.System, NullLogger<ReplyVoice>.Instance,
+            new SpeakingOptions { MaximumSentences = SpeechSettings.MaximumSentences });
 
+    /// <summary>Plays what it is given the moment it is given: all of it is heard at once.</summary>
     internal sealed class InstantPlayer : ISpeechPlayer
     {
         private int _stops;
+        private long _queued;
 
         public int Stops => Volatile.Read(ref _stops);
 
         public TimeSpan Remaining => TimeSpan.Zero;
+
+        public bool IsOpening => false;
+
+        public TimeSpan Latency => TimeSpan.Zero;
+
+        public TimeSpan Queued => TimeSpan.FromTicks(Volatile.Read(ref _queued));
+
+        public TimeSpan Position => Queued;
 
         public event EventHandler<float>? LevelChanged
         {
@@ -85,11 +100,19 @@ internal sealed class FakeSpeech : ITextToSpeech
             remove { }
         }
 
-        public void Enqueue(SpeechChunk chunk, Func<bool>? hushed = null)
+        public event EventHandler<DroppedAudio>? Dropped
         {
+            add { }
+            remove { }
         }
 
-        public void Stop() => Interlocked.Increment(ref _stops);
+        public void Enqueue(SpeechChunk chunk, Func<bool>? hushed = null) => Interlocked.Add(ref _queued, chunk.Duration.Ticks);
+
+        public void Stop()
+        {
+            Interlocked.Increment(ref _stops);
+            Interlocked.Exchange(ref _queued, 0);
+        }
 
         public void Dispose()
         {

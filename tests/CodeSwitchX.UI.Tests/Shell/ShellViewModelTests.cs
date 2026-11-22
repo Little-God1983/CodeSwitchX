@@ -12,7 +12,9 @@ using CodeSwitchX.UI.GitHub;
 using CodeSwitchX.UI.Raven;
 using CodeSwitchX.UI.Settings;
 using CodeSwitchX.UI.Shell;
-using CodeSwitchX.Voice.Audio;
+using LittleGod.Speech.Listening;
+using LittleGod.Speech.Speaking;
+using LittleGod.Speech.Whisper;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 
@@ -308,7 +310,7 @@ public class ShellViewModelTests
     [Fact]
     public async Task The_speech_model_is_warmed_up_a_few_seconds_after_startup()
     {
-        _h.Models.IsPresent.Returns(true);
+        _h.Models.IsPresentOf(Arg.Any<WhisperModel>()).Returns(true);
         var warmed = new TaskCompletionSource();
         _h.Dictation.WarmUpAsync(Arg.Any<CancellationToken>()).Returns(_ =>
         {

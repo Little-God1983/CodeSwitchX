@@ -17,7 +17,7 @@ Load it before writing C#/XAML here.
 | `src/CodeSwitchX.Hosting` | VS Code windows: launch, hide/show, dock, Win32 (CsWin32), the companion extension installer. |
 | `src/CodeSwitchX.Telemetry` | Token usage, cost estimate, context fill, cache warmth. |
 | `src/CodeSwitchX.Conductor` | Raven's brains on `LittleGod.Llm.ClaudeCli` (headless Claude Code sessions). |
-| `src/CodeSwitchX.Voice` | Speech: Whisper.net dictation, Open mic (ONNX VAD/turn), TTS sidecars (Python), sounds. |
+| `src/CodeSwitchX.Voice` | Raven's voice wired onto the shared `LittleGod.Speech` packages (Whisper, microphone and Open mic, Kokoro/Qwen3-TTS sidecars, speakers); the app's own part: the engine picks (`SpeechSettings`) and the chat sounds. |
 | `src/CodeSwitchX.UI` | WPF app (`CodeSwitchX.exe`): App/DI, views and ViewModels per feature folder. |
 | `tests/<Project>.Tests` | One xUnit v3 project per `src` project; `tests/Shared` is compiled into all of them. |
 | `vscode-companion/` | JS VS Code extension, embedded into Hosting as resources and packed at run time. |
@@ -83,7 +83,7 @@ Load it before writing C#/XAML here.
 - `src/CodeSwitchX.Hook` must stay AOT-safe: JSON goes through `RelayJsonContext` (source-generated), no reflection.
 - Win32 APIs in Hosting come from CsWin32: add the name to `src/CodeSwitchX.Hosting/NativeMethods.txt`. Hook and UI
   have no CsWin32 and keep their few hand-written P/Invokes.
-- `LittleGod.Llm.ClaudeCli` comes from the local feed `E:\NuGetFeed` (`nuget.config`), pinned to an exact version.
+- `LittleGod.Llm.ClaudeCli` and the `LittleGod.Speech.*` packages come from the local feed `E:\NuGetFeed` (`nuget.config`), pinned to an exact version.
 - `<Version>` in `Directory.Build.props` is bumped by `scripts/build.ps1` only; don't edit it by hand.
 - `docs/review/decisions.md` lists settled "by design" rulings; read it before calling something a bug.
 - Building a test project rebuilds `CodeSwitchX.exe` from the checked-out branch. Three `HotkeyServiceTests` fail

@@ -1,10 +1,9 @@
-using CodeSwitchX.Voice.Audio;
-using CodeSwitchX.Voice.Listening;
+using LittleGod.Speech.Listening;
 
 namespace CodeSwitchX.UI.Tests.Raven;
 
 /// <summary>Keeps runs as the real listener does: a start ends the run before it, a stop of an old run does nothing.</summary>
-internal sealed class FakeOpenMic : IOpenMic
+internal sealed class FakeOpenMic : IOpenMicListener
 {
     private readonly object _gate = new();
     private OpenMicRun? _run;
@@ -66,6 +65,15 @@ internal sealed class FakeOpenMic : IOpenMic
 
         ModelsPresent = true;
         progress?.Report(1);
+    }
+
+    /// <summary>Back at once, the start on the pool, as the real listener's since 0.12: a test's gate holds it there.</summary>
+    public Task<OpenMicRun> StartAsync(string deviceId, CancellationToken ct = default) => Task.Run(() => Start(deviceId), ct);
+
+    public Task StopAsync(OpenMicRun run)
+    {
+        Stop(run);
+        return Task.CompletedTask;
     }
 
     public OpenMicRun Start(string deviceId)

@@ -2,7 +2,6 @@ using CodeSwitchX.Conductor;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Core.Yard;
 using CodeSwitchX.UI.Raven;
-using CodeSwitchX.Voice.Dictation;
 
 namespace CodeSwitchX.UI.Tests.Raven;
 
@@ -211,7 +210,7 @@ public sealed partial class RavenPanelViewModelTests
         _speech.Gate = new TaskCompletionSource(); // the answer is being heard
         _brain.Answer = q => q.Contains("new") ? TellsWhatsNew(vm) : [];
 
-        Transcribes(Task.FromResult(new DictationResult("What's new?", TimeSpan.FromSeconds(1))));
+        Transcribes(Task.FromResult(Transcript("What's new?", TimeSpan.FromSeconds(1))));
         vm.PressMic(TalkInput.MicButton);
         await WithinAsync(vm.PendingStart);
         Speak();
