@@ -1932,7 +1932,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             }
             catch (WhisperModelMissingException ex)
             {
-                // The file would not load and was not the model's: Whisper removed it (#328, the package's #55). Downloaded
+                // The file would not load and was not the model's: Whisper removed it (#328). Downloaded
                 // again, the same clip goes through, as one that found no model on disk does.
                 _logger.LogWarning(ex, "The speech model was gone when the clip came to it");
                 if (!await DownloadModelAsync(number, quiet))
@@ -1996,7 +1996,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         catch (WhisperModelLoadException ex)
         {
             // The file is on disk and would not load. Whisper read it after the failure, and its message says what it found
-            // (#328, the package's #55): the file whole, so the card or a smaller model, not a download; or no verdict.
+            // (#328): the file whole, so the card or a smaller model, not a download; or no verdict.
             _logger.LogWarning(ex, "The speech model could not be loaded");
             AddEntry(RavenLogKind.Warning, ex.Message, chat);
         }
