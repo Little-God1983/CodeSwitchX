@@ -258,6 +258,23 @@ public class BuildScriptTests
     }
 
     [Fact]
+    public void A_drive_root_as_the_path_is_the_root_not_the_folder_the_script_runs_in()
+    {
+        // The same trap on the other side: the path's own ID was asked of the trimmed full path, "E:" for
+        // a drive root, which is the current folder on E:. Run from inside the stable root, -InstallDir E:\
+        // was "the stable root itself" (#442).
+        using var temp = new TempFolder();
+        var drive = temp.Path[..3];
+
+        var result = Pwsh.RunCommon(
+            $"[Environment]::CurrentDirectory = '{temp.Path}'; " +
+            $"Test-PathUnder '{drive}' '{temp.Path}' -OrEqual; " +
+            $"Test-PathUnder '{drive}' '{drive}' -OrEqual");
+
+        Lines(result.Output).ShouldBe(["False", "True"]);
+    }
+
+    [Fact]
     public void The_folder_the_current_link_points_at_is_current_however_the_link_spells_it()
     {
         // A link remade by hand, or by a run with another spelling of the root, still points at the same
@@ -313,6 +330,46 @@ public class BuildScriptTests
         result.Output.ShouldContain("caught: ");
         result.Output.ShouldContain("still opens the previous version");
         new DirectoryInfo(link).LinkTarget.ShouldBe(old);
+    }
+
+    [Fact]
+    public void A_first_current_link_that_cannot_be_made_does_not_claim_one_was_lost()
+    {
+        // With no link before - the first stable build - nothing was taken away, and no Start Menu entry
+        // exists yet that could lead nowhere (#442).
+        using var temp = new TempFolder();
+        var root = Directory.CreateDirectory(Path.Combine(temp.Path, "root")).FullName;
+
+        var result = Pwsh.RunCommon(
+            $"try {{ Set-CurrentLink '{root}' '{Path.Combine(root, "no|such|folder")}' | Out-Null; 'no throw' }} " +
+            "catch { \"caught: $($_.Exception.Message)\" }");
+
+        result.Output.ShouldContain("caught: ");
+        result.Output.ShouldContain("there was no current link before");
+        result.Output.ShouldNotContain("is gone");
+        result.Output.ShouldNotContain("Start Menu");
+    }
+
+    [Fact]
+    public void A_current_link_that_cannot_be_put_back_says_why()
+    {
+        // When the old link cannot be made again either, its own reason is part of the message, not
+        // swallowed (#442).
+        using var temp = new TempFolder();
+        var root = Directory.CreateDirectory(Path.Combine(temp.Path, "root")).FullName;
+        var old = Directory.CreateDirectory(Path.Combine(root, "CodeSwitchX-0.1.0.10")).FullName;
+        var next = Directory.CreateDirectory(Path.Combine(root, "CodeSwitchX-0.1.0.11")).FullName;
+        var link = Path.Combine(root, "CodeSwitchX");
+
+        var result = Pwsh.RunCommon(
+            $"New-Item -ItemType Junction -Path '{link}' -Target '{old}' | Out-Null; " +
+            "function New-Item { throw 'every junction is refused' }; " +
+            $"try {{ Set-CurrentLink '{root}' '{next}' | Out-Null; 'no throw' }} " +
+            "catch { \"caught: $($_.Exception.Message)\" }");
+
+        result.Output.ShouldContain("caught: ");
+        result.Output.ShouldContain("could not be put back (every junction is refused)");
+        Directory.Exists(link).ShouldBeFalse();
     }
 
     [Fact]

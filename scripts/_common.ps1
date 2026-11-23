@@ -189,8 +189,9 @@ function Test-PathUnder {
 
     $parentId = Get-FolderId $Parent
     if (-not $parentId) { return $false }
-    $folder = (Resolve-FullPath $Path).TrimEnd('\')
-    if (-not $OrEqual) { $folder = [System.IO.Path]::GetDirectoryName($folder) }
+    # Untrimmed for the same reason: a drive root stays E:\, never E:.
+    $folder = Resolve-FullPath $Path
+    if (-not $OrEqual) { $folder = [System.IO.Path]::GetDirectoryName($folder.TrimEnd('\')) }
     while ($folder) {
         if ((Get-FolderId $folder) -eq $parentId) { return $true }
         $folder = [System.IO.Path]::GetDirectoryName($folder.TrimEnd('\'))
@@ -444,8 +445,8 @@ function Get-CurrentLinkPath {
 # point at the versioned folder directly. Returns $true when the link now points at the target.
 function Set-CurrentLink {
     param([string]$InstallRoot, [string]$Target)
-    $linkPath = Get-CurrentLinkPath $InstallRoot
-    $target   = (Resolve-FullPath $Target).TrimEnd('\')
+    $linkPath   = Get-CurrentLinkPath $InstallRoot
+    $targetPath = (Resolve-FullPath $Target).TrimEnd('\')
 
     $existingTarget = $null
     if (Test-Path -LiteralPath $linkPath) {
@@ -454,7 +455,7 @@ function Set-CurrentLink {
             Write-Warn "$linkPath is a real folder, not a link to a version - left alone"
             return $false
         }
-        if ((Resolve-FullPath $existingTarget).TrimEnd('\') -ieq $target) { return $true }
+        if ((Resolve-FullPath $existingTarget).TrimEnd('\') -ieq $targetPath) { return $true }
         Remove-DirectoryLink $linkPath
     }
 
@@ -462,18 +463,22 @@ function Set-CurrentLink {
     # the old one is put back, so the Start Menu entry and every taskbar pin still open the previous
     # version instead of nothing. It throws rather than Fail: build.ps1 calls this after closing the
     # running app, and only its catch starts that app again (Fail exits past every catch).
-    try { New-Item -ItemType Junction -Path $linkPath -Target $target | Out-Null }
+    try { New-Item -ItemType Junction -Path $linkPath -Target $targetPath | Out-Null }
     catch {
         $reason = $_.Exception.Message
-        $state  = "$linkPath is gone, so the Start Menu entry cannot start CodeSwitchX until a build succeeds"
-        if ($existingTarget) {
+        if (-not $existingTarget) {
+            $state = "there was no current link before, and there is none now"
+        }
+        else {
             try {
                 New-Item -ItemType Junction -Path $linkPath -Target $existingTarget | Out-Null
                 $state = "$linkPath still opens the previous version"
             }
-            catch { }
+            catch {
+                $state = "$linkPath is gone and could not be put back ($($_.Exception.Message)), so the Start Menu entry cannot start CodeSwitchX until a build succeeds"
+            }
         }
-        throw "$reason; $state. Close whatever holds $linkPath (a virus scanner, an Explorer window inside it)"
+        throw "$reason; $state. Close whatever holds $linkPath or $targetPath (a virus scanner, an Explorer window inside one)"
     }
     return $true
 }
