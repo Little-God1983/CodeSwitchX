@@ -263,13 +263,19 @@ public class BuildScriptTests
         // The same trap on the other side: the path's own ID was asked of the trimmed full path, "E:" for
         // a drive root, which is the current folder on E:. Run from inside the stable root, -InstallDir E:\
         // was "the stable root itself" (#442).
+        // The share spelling of the root as the parent passes the text check by, so the ID answers.
         using var temp = new TempFolder();
         var drive = temp.Path[..3];
+        var shareRoot = @"\\localhost\" + temp.Path[0] + "$";
+        if (!Directory.Exists(shareRoot))
+        {
+            Assert.Skip("No admin share to this drive for this user.");
+        }
 
         var result = Pwsh.RunCommon(
             $"[Environment]::CurrentDirectory = '{temp.Path}'; " +
             $"Test-PathUnder '{drive}' '{temp.Path}' -OrEqual; " +
-            $"Test-PathUnder '{drive}' '{drive}' -OrEqual");
+            $"Test-PathUnder '{drive}' '{shareRoot}' -OrEqual");
 
         Lines(result.Output).ShouldBe(["False", "True"]);
     }

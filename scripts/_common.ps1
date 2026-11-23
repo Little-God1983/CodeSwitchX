@@ -478,7 +478,7 @@ function Set-CurrentLink {
                 $state = "$linkPath is gone and could not be put back ($($_.Exception.Message)), so the Start Menu entry cannot start CodeSwitchX until a build succeeds"
             }
         }
-        throw "$reason; $state. Close whatever holds $linkPath or $targetPath (a virus scanner, an Explorer window inside one)"
+        throw "$reason; $state. If something holds $linkPath or $targetPath (a virus scanner, an Explorer window inside one), close it"
     }
     return $true
 }
