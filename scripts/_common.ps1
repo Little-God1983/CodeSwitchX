@@ -57,7 +57,7 @@ function Resolve-FullPath {
 # the number whenever the C# changes, or a window that ran an older copy keeps using that one. The
 # C# is kept to what Windows PowerShell 5.1 compiles.
 function Get-PathInfoType {
-    $name = 'CodeSwitchX.BuildScripts.PathInfoV2'
+    $name = 'CodeSwitchX.BuildScripts.PathInfoV3'
     if (-not ($name -as [type])) {
         Add-Type -TypeDefinition @'
 using System;
@@ -67,9 +67,12 @@ using Microsoft.Win32.SafeHandles;
 
 namespace CodeSwitchX.BuildScripts
 {
-    public static class PathInfoV2
+    public static class PathInfoV3
     {
-        [StructLayout(LayoutKind.Sequential)]
+        // Pack = 4: the FILETIMEs in BY_HANDLE_FILE_INFORMATION are two DWORDs, aligned on 4 bytes.
+        // As 8-aligned longs every later field moved, the volume serial read as 0, and C:\ and E:\
+        // got the same ID.
+        [StructLayout(LayoutKind.Sequential, Pack = 4)]
         private struct FileInformation
         {
             public uint Attributes;
@@ -441,6 +444,7 @@ function Set-CurrentLink {
     $linkPath = Get-CurrentLinkPath $InstallRoot
     $target   = (Resolve-FullPath $Target).TrimEnd('\')
 
+    $existingTarget = $null
     if (Test-Path -LiteralPath $linkPath) {
         $existingTarget = Get-DirectoryLinkTarget $linkPath
         if (-not $existingTarget) {
@@ -451,7 +455,23 @@ function Set-CurrentLink {
         Remove-DirectoryLink $linkPath
     }
 
-    New-Item -ItemType Junction -Path $linkPath -Target $target | Out-Null
+    # The old link is gone by now. When the new one cannot be made - a virus scanner, access denied -
+    # the old one is put back, so the Start Menu entry and every taskbar pin still open the previous
+    # version instead of nothing. It throws rather than Fail: build.ps1 calls this after closing the
+    # running app, and only its catch starts that app again (Fail exits past every catch).
+    try { New-Item -ItemType Junction -Path $linkPath -Target $target | Out-Null }
+    catch {
+        $reason = $_.Exception.Message
+        $state  = "$linkPath is gone, so the Start Menu entry cannot start CodeSwitchX until a build succeeds"
+        if ($existingTarget) {
+            try {
+                New-Item -ItemType Junction -Path $linkPath -Target $existingTarget | Out-Null
+                $state = "$linkPath still opens the previous version"
+            }
+            catch { }
+        }
+        throw "$reason; $state. Close whatever holds $linkPath (a virus scanner, an Explorer window inside it)"
+    }
     return $true
 }
 

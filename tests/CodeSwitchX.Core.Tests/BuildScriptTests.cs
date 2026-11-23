@@ -254,6 +254,45 @@ public class BuildScriptTests
     }
 
     [Fact]
+    public void A_folder_id_carries_the_real_volume_serial()
+    {
+        // BY_HANDLE_FILE_INFORMATION packs its FILETIMEs on 4 bytes. Declared as 8-aligned longs, every
+        // field after them moved, the serial read as 0 and C:\ and E:\ got the same ID - so folders on two
+        // drives could pass for one (#442).
+        using var temp = new TempFolder();
+        var drive = temp.Path[..2];
+
+        var result = Pwsh.RunCommon(
+            $"(Get-FolderId '{temp.Path}').Split(':')[0]; " +
+            $"(Get-CimInstance Win32_LogicalDisk -Filter \"DeviceID='{drive}'\").VolumeSerialNumber");
+
+        var lines = Lines(result.Output);
+        lines.Length.ShouldBe(2, result.Output);
+        lines[0].ShouldBe(lines[1], StringCompareShould.IgnoreCase);
+    }
+
+    [Fact]
+    public void A_current_link_that_cannot_be_remade_keeps_pointing_at_the_old_version()
+    {
+        // The old link is deleted before the new one is made. When the new one fails - a virus scanner,
+        // access denied - the Start Menu entry and every taskbar pin would lead nowhere. It has to throw,
+        // not Fail: build.ps1 starts the closed CodeSwitchX again in a catch, and an exit passes that by (#442).
+        using var temp = new TempFolder();
+        var root = Directory.CreateDirectory(Path.Combine(temp.Path, "root")).FullName;
+        var old = Directory.CreateDirectory(Path.Combine(root, "CodeSwitchX-0.1.0.10")).FullName;
+        var link = Path.Combine(root, "CodeSwitchX");
+
+        var result = Pwsh.RunCommon(
+            $"New-Item -ItemType Junction -Path '{link}' -Target '{old}' | Out-Null; " +
+            $"try {{ Set-CurrentLink '{root}' '{Path.Combine(root, "no|such|folder")}' | Out-Null; 'no throw' }} " +
+            "catch { \"caught: $($_.Exception.Message)\" }");
+
+        result.Output.ShouldContain("caught: ");
+        result.Output.ShouldContain("still opens the previous version");
+        new DirectoryInfo(link).LinkTarget.ShouldBe(old);
+    }
+
+    [Fact]
     public void A_running_app_is_found_by_its_real_folder_however_it_was_started()
     {
         // The real lookup, with a stand-in that keeps running: a copy of ping.exe under the app's name. It
@@ -439,6 +478,30 @@ public class BuildScriptTests
         result.Output.ShouldContain("Could not make 0.1.0.11 the current version");
         repo.CurrentLinkTarget.ShouldBeNull();
         repo.Calls.Where(call => call.StartsWith("start ")).ShouldBe(["start " + Path.Combine(oldFolder, "CodeSwitchX.exe")]);
+    }
+
+    [Fact]
+    public void A_current_link_that_cannot_be_remade_leaves_the_old_version_current_and_running()
+    {
+        // The real link step, with only the junction to the new folder refused. The old link is put back,
+        // the closed version is started again, and nothing is bumped: the Start Menu entry and the running
+        // CodeSwitchX are what they were before the build (#442).
+        using var repo = new FakeRepo("0.1.0.10");
+        var oldFolder = Directory.CreateDirectory(repo.VersionFolder("0.1.0.10")).FullName;
+        File.WriteAllText(Path.Combine(oldFolder, "CodeSwitchX.exe"), "x");
+
+        var result = repo.Build(before:
+            $"New-Item -ItemType Junction -Path '{repo.CurrentLink}' -Target '{oldFolder}' | Out-Null; " +
+            $"$env:FAKE_RUNNING_FROM = '{Path.Combine(repo.CurrentLink, "CodeSwitchX.exe")}'; " +
+            $"$env:FAKE_NO_JUNCTION_TO = '{repo.VersionFolder("0.1.0.11")}'");
+
+        result.ExitCode.ShouldBe(1);
+        result.Output.ShouldContain("Could not make 0.1.0.11 the current version - the junction is refused");
+        result.Output.ShouldContain("still opens the previous version");
+        repo.CurrentLinkTarget.ShouldBe(oldFolder);
+        repo.Calls.Where(call => call.StartsWith("start ")).ShouldBe(["start " + Path.Combine(oldFolder, "CodeSwitchX.exe")]);
+        FakeRepo.IsMarkedComplete(repo.VersionFolder("0.1.0.11")).ShouldBeFalse();
+        repo.Version.ShouldBe("0.1.0.10");
     }
 
     [Fact]
@@ -756,6 +819,13 @@ public class BuildScriptTests
                     param([string]$InstallRoot, [string]$Target)
                     if ($env:FAKE_LINK_FAILS -eq 'removed') { Remove-DirectoryLink (Get-CurrentLinkPath $InstallRoot) }
                     throw 'the junction could not be made'
+                }
+            }
+            if ($env:FAKE_NO_JUNCTION_TO) {
+                # The real Set-CurrentLink runs; only its junction to this one folder is refused.
+                function New-Item {
+                    if ($args -contains 'Junction' -and $args -contains $env:FAKE_NO_JUNCTION_TO) { throw 'the junction is refused' }
+                    Microsoft.PowerShell.Management\New-Item @args
                 }
             }
 
