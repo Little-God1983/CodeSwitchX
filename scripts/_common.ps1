@@ -179,10 +179,13 @@ function Test-SamePath {
 # of each folder above the path catches a share or a mapped drive that leads back to this PC.
 function Test-PathUnder {
     param([string]$Path, [string]$Parent, [switch]$OrEqual)
-    $full   = (Resolve-RealPath $Path).TrimEnd('\')
-    $parent = (Resolve-RealPath $Parent).TrimEnd('\')
-    if ($OrEqual -and $full.Equals($parent, [StringComparison]::OrdinalIgnoreCase)) { return $true }
-    if ($full.StartsWith($parent + '\', [StringComparison]::OrdinalIgnoreCase)) { return $true }
+    # Names of their own: PowerShell ignores case, so a local $parent would be the parameter $Parent,
+    # and the ID below would be asked of the trimmed path. For a drive root that is "E:", which
+    # Windows reads as the current folder on E:, not as E:\.
+    $realPath   = (Resolve-RealPath $Path).TrimEnd('\')
+    $realParent = (Resolve-RealPath $Parent).TrimEnd('\')
+    if ($OrEqual -and $realPath.Equals($realParent, [StringComparison]::OrdinalIgnoreCase)) { return $true }
+    if ($realPath.StartsWith($realParent + '\', [StringComparison]::OrdinalIgnoreCase)) { return $true }
 
     $parentId = Get-FolderId $Parent
     if (-not $parentId) { return $false }

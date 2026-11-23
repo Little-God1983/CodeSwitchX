@@ -235,6 +235,29 @@ public class BuildScriptTests
     }
 
     [Fact]
+    public void A_drive_root_as_the_parent_is_the_root_not_the_folder_the_script_runs_in()
+    {
+        // PowerShell names ignore case, so a local $parent was the parameter $Parent: the ID was asked of
+        // the trimmed real path. For a drive root that is "E:", which Windows reads as the current folder
+        // on E:. Only a share path gets as far as the ID, and only a run from another folder shows it (#442).
+        using var temp = new TempFolder();
+        var drive = temp.Path[..2];
+        var runFrom = Directory.CreateDirectory(Path.Combine(temp.Path, "runFrom")).FullName;
+        var share = @"\\localhost\" + temp.Path[0] + "$" + temp.Path[2..];
+        if (!Directory.Exists(share))
+        {
+            Assert.Skip("No admin share to this drive for this user.");
+        }
+
+        var result = Pwsh.RunCommon(
+            $"[Environment]::CurrentDirectory = '{runFrom}'; " +
+            $"Test-PathUnder '{share}\\root\\CodeSwitchX-0.1.0.11' '{drive}\\'; " +
+            $"Test-PathUnder '{share}\\root\\CodeSwitchX-0.1.0.11' '{runFrom}'");
+
+        Lines(result.Output).ShouldBe(["True", "False"]);
+    }
+
+    [Fact]
     public void The_folder_the_current_link_points_at_is_current_however_the_link_spells_it()
     {
         // A link remade by hand, or by a run with another spelling of the root, still points at the same
