@@ -1,6 +1,9 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Globalization;
+using System.IO;
 using CodeSwitchX.Core.GitHub;
+using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.UI.GitHub;
 using CodeSwitchX.UI.Infrastructure;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -23,6 +26,10 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     private readonly TimeProvider _time;
     private readonly Action<GitHubPanelViewModel> _closed;
     private readonly PanelCheckout? _checkout;
+    // Opens Explorer for the Changes tab (#444); a test notes what was asked instead.
+    private readonly Func<ProcessStartInfo, bool> _start;
+    // Opened from the line's "N changed" pill (#444): the GitHub list in front is read only when it is first shown.
+    private readonly bool _openedOnChanges;
     // Ends a read a tab starts later, when the panel has closed by then. No timer and no wait handle is taken from it.
     private readonly CancellationTokenSource _stop = new();
     // The tab the panel opened on, read by LoadAsync; the other is read when it is first shown.
@@ -65,10 +72,16 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     /// <summary><see cref="ActionMessage"/> is a refusal or a failure, not progress or success.</summary>
     [ObservableProperty] private bool _isActionFailed;
 
+    /// <param name="showChanges">Opens on the Changes tab (#444), the line's changed files; with no <paramref name="checkout"/> there is none to open on.</param>
+    /// <param name="start">Starts Explorer for a changed file's folder; <see cref="ShellStart.TryStart"/> when null.</param>
     public GitHubPanelViewModel(RepoActivity repo, GitHubItemKind shown, GitHubReader reader, GitHubActivity activity, GitHubBrowsers browsers,
-        ITextClipboard clipboard, IUiDispatcher ui, TimeProvider time, ILogger logger, Action<GitHubPanelViewModel> closed, PanelCheckout? checkout = null)
+        ITextClipboard clipboard, IUiDispatcher ui, TimeProvider time, ILogger logger, Action<GitHubPanelViewModel> closed, PanelCheckout? checkout = null,
+        bool showChanges = false, Func<ProcessStartInfo, bool>? start = null)
     {
         _checkout = checkout;
+        _start = start ?? ShellStart.TryStart;
+        Changes = checkout is null ? null : new ChangesTabViewModel(checkout.Files);
+        _openedOnChanges = showChanges && Changes is not null;
         _branch = checkout?.Branch;
         _changedFiles = checkout?.ChangedFiles;
         _repo = repo;
@@ -81,7 +94,9 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
         Issues = new GitHubListViewModel(new GitHubPill(repo, GitHubItemKind.Issue), reader, activity, ui, time, logger);
         _first = ListOf(shown);
         _shown = _first;
-        _first.IsShown = true;
+        _first.IsShown = !_openedOnChanges;
+        _isChangesShown = _openedOnChanges;
+        Changes?.IsShown = _openedOnChanges;
         Tabs = [PullRequests, Issues];
         PullRequests.PropertyChanged += OnListChanged;
         Issues.PropertyChanged += OnListChanged;
@@ -116,10 +131,22 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     /// <summary>The two tabs in their order, for the one tab template (#410).</summary>
     public IReadOnlyList<GitHubListViewModel> Tabs { get; }
 
-    partial void OnShownChanged(GitHubListViewModel value)
+    /// <summary>The Changes tab (#444): the line's changed files. Null when the panel has no checkout, so no line to list them for.</summary>
+    public ChangesTabViewModel? Changes { get; }
+
+    /// <summary>The Changes tab is in front (#444); <see cref="Shown"/> then keeps the GitHub list that was, and shows it again when picked.</summary>
+    [ObservableProperty] private bool _isChangesShown;
+
+    partial void OnShownChanged(GitHubListViewModel value) => ShowTabs();
+
+    partial void OnIsChangesShownChanged(bool value) => ShowTabs();
+
+    /// <summary>Exactly one tab is in front: Changes, or the GitHub list <see cref="Shown"/>.</summary>
+    private void ShowTabs()
     {
-        PullRequests.IsShown = ReferenceEquals(value, PullRequests);
-        Issues.IsShown = ReferenceEquals(value, Issues);
+        PullRequests.IsShown = !IsChangesShown && ReferenceEquals(Shown, PullRequests);
+        Issues.IsShown = !IsChangesShown && ReferenceEquals(Shown, Issues);
+        Changes?.IsShown = IsChangesShown;
     }
 
     /// <summary>The repository's name; the tabs carry the counts.</summary>
@@ -142,6 +169,12 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     /// </summary>
     public async Task LoadAsync(CancellationToken ct)
     {
+        if (_openedOnChanges)
+        {
+            // A tab that is not looked at costs no read (#406); Show reads it when it is.
+            return;
+        }
+
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _stop.Token);
         await _first.LoadAsync(linked.Token).ConfigureAwait(false);
     }
@@ -160,6 +193,8 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     private void Show(GitHubItemKind kind)
     {
         Shown = ListOf(kind);
+        // Picking the list that was in front before Changes sets no new Shown: this is what brings it back to the front.
+        IsChangesShown = false;
         // Even before LoadAsync has run: the Yard starts it on the pool, and a quick click can come first (review of #406).
         if (!Shown.HasStarted)
         {
@@ -168,6 +203,73 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
             // leaving the Yard closes the panel.
             _ = Task.Run(() => list.LoadAsync(_stop.Token));
         }
+    }
+
+    /// <summary>The Changes tab to the front (#444), with its files read again now: the last round may be up to 30 s old.</summary>
+    [RelayCommand]
+    private void ShowChanges()
+    {
+        if (Changes is null)
+        {
+            return;
+        }
+
+        IsChangesShown = true;
+        _checkout?.ReadGit?.Invoke();
+    }
+
+    /// <summary>The line was read again (#444): the Changes tab lists its files as git has them now; null when git could not tell.</summary>
+    public void FollowChanges(ChangedFileList? files) => Changes?.Follow(files);
+
+    /// <summary>
+    /// Explorer on the row's folder (#444), the file selected in it. A file deleted, or a folder gone with it, opens the nearest folder above
+    /// that is there; the panel says so when none is, or Explorer did not start.
+    /// </summary>
+    [RelayCommand]
+    private void OpenFolder(ChangedFileRow row)
+    {
+        var file = row.File;
+        var selects = !file.IsFolder && File.Exists(file.FullPath);
+        if ((selects ? row.FolderPath : NearestFolder(row.FolderPath)) is not { } folder)
+        {
+            OpenMessage = $"Can't open a folder for {file.Path}: it is gone.";
+            return;
+        }
+
+        var start = new ProcessStartInfo("explorer.exe", selects ? $"/select,\"{file.FullPath}\"" : $"\"{folder}\"");
+        OpenMessage = _start(start) ? null : $"Explorer did not open {folder}.";
+    }
+
+    /// <summary>The folder, or the nearest one above it that is there; null when none is.</summary>
+    private static string? NearestFolder(string folder)
+    {
+        for (var at = folder; !string.IsNullOrEmpty(at); at = Path.GetDirectoryName(at))
+        {
+            if (Directory.Exists(at))
+            {
+                return at;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>The row's folder, full path, on the clipboard (#444).</summary>
+    [RelayCommand]
+    private void CopyFolderPath(ChangedFileRow row) => Copy(row.FolderPath, $"Copied {row.FolderPath}.");
+
+    /// <summary>Every changed file's full path (#444), one to a line, in the tab's order.</summary>
+    [RelayCommand]
+    private void CopyAllPaths()
+    {
+        if (Changes is not { } changes)
+        {
+            return;
+        }
+
+        var count = changes.Rows.Count;
+        Copy(string.Join(Environment.NewLine, changes.Rows.Select(r => r.FullPath)),
+            count == 1 ? "Copied 1 path." : string.Create(CultureInfo.InvariantCulture, $"Copied {count} paths."));
     }
 
     /// <summary>The checkout's folder, for the Yard to keep <see cref="Branch"/> up to date; null when the panel has none.</summary>
