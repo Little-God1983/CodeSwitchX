@@ -83,8 +83,13 @@ For chats from                                              [ 200,000 tokens v ]
 | Size 200,000 | `env.CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS` | entry removed; `env` removed too if that emptied it |
 | Any other size | `env.CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS` | the number as a string, `"100000"` |
 
-Reading: `idleCompaction` counts as on unless it is the boolean `false`. The size is the integer in the env entry, raised to
-100,000 if lower; missing or not a number means 200,000.
+Reading: `idleCompaction` counts as on unless it is the boolean `false`. The size is read as Claude Code 2.1.332 reads a plain
+integer: the env entry trimmed, an optional sign and digits; below 1 counts as unset (200,000), anything else is raised to
+100,000. No entry means 200,000. An entry in any other form (grouped digits, an exponent, not a string) is shown as no
+selection: Claude Code accepts some of those, and the page does not guess.
+
+Writing: only the value the user changed is written, so a value changed in the file meanwhile is never overwritten by the
+other control. One writer at a time: the hook installer and this card share a lock on the file.
 
 ### In the code
 

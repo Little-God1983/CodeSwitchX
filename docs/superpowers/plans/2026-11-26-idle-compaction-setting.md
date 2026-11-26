@@ -378,3 +378,98 @@ Not part of the build handoff. The app is started from this branch with `CLAUDE_
 - Project-level, local or managed Claude Code settings.
 - Raven's settings list (`AppSettings`), `SettingKeys`, migrations.
 - A new pull request per task: all of this is one branch and one PR for #450.
+
+---
+
+## Review round 1: fixes (decided after the code review of Tasks 1 to 4)
+
+The review proved three bugs and found one error in this plan's own reading rules. All four are fixed in this branch, with the nits named below. Where this section and the tasks above disagree, this section wins.
+
+### Fix A: one writer of `settings.json` at a time
+
+**Bug:** `IdleCompactionSetting.Write` and `ClaudeHookInstaller.Install`/`Uninstall` each load, edit and save on a pool thread with nothing ordering them, and share one temp file. With the file held by another process for a moment, a switch flip plus "Install hooks" lost one of the two changes, or failed on the temp file.
+
+**Decided:** `ClaudeSettingsFile` gets
+
+```csharp
+/// Runs load-edit-save alone: one lock per settings file for the whole process, whoever holds the instance.
+internal T Locked<T>(Func<T> work);
+```
+
+backed by a `static ConcurrentDictionary<string, Lock>` keyed by the full path of `paths.SettingsFile` (`StringComparer.OrdinalIgnoreCase`). `ClaudeHookInstaller.Install` and `Uninstall` and `IdleCompactionSetting.Write` run their whole body inside it. `GetStatus` and `Read` do not lock: the replace is atomic, so a read sees the old or the new file.
+
+**Test** (`IdleCompactionSettingTests`): `A_hook_install_and_a_switch_flip_at_once_both_land`. File `{"model":"x"}`, opened by the test with `FileAccess.Read, FileShare.Read` so writes retry; start `Task.Run(() => setting.Write(false, null))` and `Task.Run(() => installer.Install(Exe))` (`Exe` as in `ClaudeHookInstallerTests`), wait 150 ms, dispose the stream, await both. Assert: neither threw; the file has `idleCompaction` `false`, the `hooks` object with every event, and `model` `"x"`.
+
+### Fix B: `Write` takes only what the user changed
+
+**Bug:** the view model sent both values, so flipping the switch wrote the size the page still showed over a size changed in the file meanwhile.
+
+**Decided:** `Write(IdleCompaction value)` is replaced by
+
+```csharp
+/// Writes the given values where they differ from Read(); null leaves that one alone. Whether the file was written.
+public bool Write(bool? enabled, int? minTokens);
+```
+
+`ArgumentOutOfRangeException` only for a non-null `minTokens` below `LowestMinTokens`. The view model's two change handlers queue `(value, null)` and `(null, value)`. The log line names what was written.
+
+**Tests:** the existing `Write` tests pass both values as before, in the new form. New in `IdleCompactionSettingTests`:
+
+- `Write_of_the_switch_alone_leaves_a_size_changed_meanwhile`: file `{"env":{"CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS":"300000"}}`, `Write(false, null)`: the entry is still `"300000"`, `idleCompaction` is `false`.
+- `Write_of_the_size_alone_leaves_the_switch`: file `{"idleCompaction":false}`, `Write(null, 150_000)`: `idleCompaction` is still `false`, the entry is `"150000"`.
+
+New in the view model tests:
+
+- `A_size_changed_in_the_file_meanwhile_survives_a_flip_of_the_switch`: no file, `LoadAsync`, write the 300000 file, `IdleCompaction = false`, await: the entry is still `"300000"`, and the view model now shows 300000.
+- `A_size_that_is_no_choice_survives_a_flip_of_the_switch`: file with `"250000"`, flip the switch, await: the entry is still `"250000"`.
+
+### Fix C: the page follows the file once the saves are done, and not before
+
+**Bug:** a `Refresh()` while a save was queued or running read the file before the write landed and left the switch showing the old state; a failed first save reset the controls while a queued second save still wrote.
+
+**Decided:**
+- The view model counts its pending idle compaction saves. `ShowIdleCompaction()` called from `Refresh()` does nothing while the count is above zero.
+- Each save, in a `finally`, lowers the count and, when it reaches zero, calls `ShowIdleCompaction()` once: after success as well as after failure. The re-read inside the `catch` goes.
+- The chain never faults: every save catches all, so `await before` cannot throw. An exception that is no `ClaudeSettingsException` is logged with `LogError` and shown as `LastMessage = "Idle compaction could not be saved. The log says why."`.
+- `FlushSavesAsync(ct)` also waits for `IdleCompactionSaved` (`WaitAsync(ct)`), so a change made right before Exit is written.
+
+**Tests** (view model):
+
+- `A_refresh_while_a_save_is_under_way_does_not_show_the_old_file`: file `{"model":"x"}` held open with `FileShare.Read`; `IdleCompaction = false`; `Refresh()`; release; await: `IdleCompaction` is false and the file holds `false`.
+- `After_a_save_that_failed_a_queued_one_still_lands_and_the_page_shows_the_file`: read-only file; `IdleCompaction = false`; clear the attribute; `IdleCompactionMinTokens = 150_000`; await: the page shows exactly what a fresh `IdleCompactionSetting.Read()` gives.
+- `The_problem_line_goes_once_the_file_can_be_read_again`: file `not json`, `LoadAsync`, rewrite it as `{}`, `Refresh()`: `IdleCompactionProblem` is null.
+- `Flushing_the_saves_waits_for_idle_compaction`: a change, `await FlushAsync()`, the file holds it.
+
+### Fix D: read the size as Claude Code does
+
+**Error in this plan:** Claude Code 2.1.332 parses the variable with a minimum of 1 and takes anything below as unset, so `"0"` means 200,000, not 100,000. It also accepts forms this plan called "no number" (`"150,000"`, `"1.5e5"`).
+
+**Decided:** the record becomes `IdleCompaction(bool Enabled, int? MinTokens)`; `MinTokens` is null when the file holds a size this app cannot be sure how Claude Code reads. Rules for the `env` entry:
+
+| Entry | `MinTokens` |
+|---|---|
+| none (no `env`, `env` no object, no entry) | `200000` |
+| a JSON string that, trimmed, is an optional `+` or `-` followed by digits only, value below 1 | `200000` (Claude Code takes it as unset) |
+| the same, value 1 or more | the value, raised to `100000`, capped at `int.MaxValue` (also when it does not fit a `long`) |
+| anything else (another string, a number, a boolean, null) | `null` |
+
+The view model shows null as no selection: `IdleCompactionMinTokens = 0`, with the five listed choices. Picking a size then writes it (null differs from any value). The mirror of Claude Code's grouped-digit and exponent forms is deliberately not built: they come from hand edits only, and showing nothing is true where a guess might not be.
+
+**Tests:**
+
+- `Read_treats_an_odd_size_as_Claude_Code_does` becomes: `"50000"` gives 100000; `"0"` 200000; `"-5"` 200000; `" 150000 "` 150000; `"+150000"` 150000; `"99999999999"` `int.MaxValue`; `"99999999999999999999999"` `int.MaxValue`.
+- New theory `Read_of_a_size_it_cannot_be_sure_of_is_no_size`: `"abc"`, `""`, `"1.5"`, `"150,000"`, `"1.5e5"`, `true`, `150000` (a JSON number) and `null` each give `MinTokens` null.
+- `Read_takes_the_size_from_env` loses its JSON-number case.
+- New `Write_of_a_size_over_one_it_could_not_read_writes_it`: entry `"150,000"`, `Write(null, 150_000)`: the entry is `"150000"`.
+- New `Write_of_the_switch_leaves_a_size_it_could_not_read`: entry `"150,000"`, `Write(false, null)`: the entry is still `"150,000"`.
+- View model: `A_size_the_page_cannot_be_sure_of_is_shown_as_no_selection`: file with `"150,000"`: `IdleCompactionMinTokens` is 0, there are five choices, the file is unchanged.
+
+### Order and checks
+
+One job, in the order A, then B and D together (both change `IdleCompactionSetting`), then C. After each: `dotnet build CodeSwitchX.slnx` (0 warnings), the affected test classes, commit, push. At the end `dotnet test --solution CodeSwitchX.slnx`. Commit messages:
+
+- `fix(ingest): one writer of settings.json at a time (review of #450)`
+- `fix(ingest): idle compaction writes only what changed and reads the size as Claude Code does (review of #450)`
+- `fix(settings): the idle compaction card follows the file once its saves are done (review of #450)`
+
+Not changed, by decision: a card that stays disabled after a failed re-read until the next Refresh (the design accepts it).
