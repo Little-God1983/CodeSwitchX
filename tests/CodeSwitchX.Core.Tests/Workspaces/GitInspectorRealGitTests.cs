@@ -36,6 +36,25 @@ public class GitInspectorRealGitTests : RealGitRepos
     }
 
     [Fact]
+    public async Task A_line_on_a_subfolder_gets_the_paths_from_the_checkouts_top()
+    {
+        // Porcelain v2 writes paths relative to the folder git runs in (review of #444): a line on a subfolder must still get real paths.
+        await Arrange();
+        Directory.CreateDirectory(Path.Combine(Work, "sub"));
+        await Commit(Work, "sub/b.txt", "one");
+        File.WriteAllText(Path.Combine(Work, "a.txt"), "edited");
+        File.WriteAllText(Path.Combine(Work, "sub", "b.txt"), "edited");
+
+        var info = await new GitInspector().InspectAsync(Path.Combine(Work, "sub"), TestContext.Current.CancellationToken);
+
+        info.ChangedFiles.ShouldNotBeNull().Files.Select(f => (f.Path, f.FullPath)).ShouldBe(
+        [
+            ("a.txt", Path.Combine(Work, "a.txt")),
+            ("sub/b.txt", Path.Combine(Work, "sub", "b.txt")),
+        ]);
+    }
+
+    [Fact]
     public async Task The_changed_files_come_with_their_real_names_and_kinds()
     {
         // An edit, a name git quotes (a space and an umlaut), and a staged rename (#444).

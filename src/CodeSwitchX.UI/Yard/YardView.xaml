@@ -706,7 +706,10 @@
           <TextBlock Style="{StaticResource GitHubDimLine}" Text="{Binding Shown.LoadingMessage}" />
           <TextBlock Style="{StaticResource GitHubDimLine}" Text="{Binding Shown.EmptyText}" />
         </StackPanel>
-        <TextBlock Style="{StaticResource GitHubDimLine}" Text="{Binding Changes.EmptyText}" Visibility="{Binding IsChangesShown, Converter={StaticResource BoolVisible}}" />
+        <!-- in a panel of its own, so the line's style still collapses it while the tab has rows (review of #444) -->
+        <StackPanel DockPanel.Dock="Top" Visibility="{Binding IsChangesShown, Converter={StaticResource BoolVisible}}">
+          <TextBlock Style="{StaticResource GitHubDimLine}" Text="{Binding Changes.EmptyText}" />
+        </StackPanel>
         <!-- the tab in front shows its rows; the other keeps its list, scrolled where it was -->
         <Grid>
           <ItemsControl ItemsSource="{Binding PullRequests.Rows}" Tag="{Binding PullRequests}" Style="{StaticResource GitHubRows}" />

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Media;
 using CodeSwitchX.Core.GitHub;
 using CodeSwitchX.Core.Workspaces;
@@ -265,6 +266,41 @@ public partial class GitHubListViewModelTests
             shown.ShouldContain("Copy all links");
             shown.ShouldNotContain("Copy all paths");
             shown.ShouldNotContain("Open the folder of src/a.cs");
+        });
+    }
+
+    [Fact]
+    public async Task Copy_all_paths_is_off_with_nothing_to_copy()
+    {
+        // An empty copy would wipe what the user has on the clipboard (review of #444).
+        var model = await OpenWithChanges(ChangedFileList.Empty);
+        _clipboard.TrySetText("kept");
+
+        model.CopyAllPathsCommand.CanExecute(null).ShouldBeFalse();
+        model.FollowChanges(Files(Edited("a.cs")));
+        model.CopyAllPathsCommand.CanExecute(null).ShouldBeTrue();
+        model.FollowChanges(null);
+        model.CopyAllPathsCommand.CanExecute(null).ShouldBeFalse();
+        _clipboard.Text.ShouldBe("kept");
+    }
+
+    [Fact]
+    public async Task The_empty_line_shows_only_while_the_tab_has_no_rows()
+    {
+        var model = await OpenWithChanges(Files(Edited("a.cs")));
+
+        await StaThread.RunAsync(() =>
+        {
+            var panel = PanelView(model);
+            var empty = Descendants(panel).OfType<TextBlock>().Single(t => BindingOperations.GetBinding(t, TextBlock.TextProperty)?.Path.Path == "Changes.EmptyText");
+
+            Shown(empty).ShouldBeFalse("no blank line above the rows");
+
+            model.FollowChanges(ChangedFileList.Empty);
+            panel.UpdateLayout();
+
+            Shown(empty).ShouldBeTrue();
+            empty.Text.ShouldBe("No changed files.");
         });
     }
 

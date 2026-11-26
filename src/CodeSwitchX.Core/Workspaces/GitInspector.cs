@@ -130,7 +130,9 @@ public sealed class GitInspector
 
         // Format 2 with the branch header: the commit comes with the files, at no process of its own (#426). Its "# ..." lines are no
         // files. Without the count against the upstream, which costs a walk nobody reads.
-        var status = await _runGit(root, "status " + string.Join(' ', StatusArguments), ct).ConfigureAwait(false);
+        // At the checkout's top, not in the folder asked about: porcelain v2 writes paths relative to where git runs, and the changed files
+        // (#444) are told from the top. The status lists the whole checkout either way, so the counts are the same.
+        var status = await _runGit(top!, "status " + string.Join(' ', StatusArguments), ct).ConfigureAwait(false);
         var lines = status?.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.Trim('\r')).Where(l => l.Length > 0).ToList();
         int? dirty = lines?.Count(l => !l.StartsWith('#'));
         int? tracked = lines is null ? null : TrackedChangesIn(lines);
@@ -316,8 +318,8 @@ public sealed class GitInspector
 
     /// <summary>
     /// The files among the lines of a status run with <see cref="StatusArguments"/>, line ends taken off (#444): what the pill counts, for
-    /// the Changes tab. Porcelain paths are relative to the checkout's <paramref name="top"/>, whatever folder git ran in. A line of no
-    /// form known here is passed over rather than guessed at.
+    /// the Changes tab. Porcelain v2 paths are relative to the folder git ran in, so the status must have run at <paramref name="top"/>,
+    /// the checkout's top (review of #444). A line of no form known here is passed over rather than guessed at.
     /// </summary>
     internal static ChangedFileList ChangedFilesIn(IEnumerable<string> statusLines, string top)
     {

@@ -219,7 +219,11 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     }
 
     /// <summary>The line was read again (#444): the Changes tab lists its files as git has them now; null when git could not tell.</summary>
-    public void FollowChanges(ChangedFileList? files) => Changes?.Follow(files);
+    public void FollowChanges(ChangedFileList? files)
+    {
+        Changes?.Follow(files);
+        CopyAllPathsCommand.NotifyCanExecuteChanged();
+    }
 
     /// <summary>
     /// Explorer on the row's folder (#444), the file selected in it. A file deleted, or a folder gone with it, opens the nearest folder above
@@ -254,12 +258,14 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
         return null;
     }
 
+    private bool HasChangeRows() => Changes is { Rows.Count: > 0 };
+
     /// <summary>The row's folder, full path, on the clipboard (#444).</summary>
     [RelayCommand]
     private void CopyFolderPath(ChangedFileRow row) => Copy(row.FolderPath, $"Copied {row.FolderPath}.");
 
-    /// <summary>Every changed file's full path (#444), one to a line, in the tab's order.</summary>
-    [RelayCommand]
+    /// <summary>Every changed file's full path (#444), one to a line, in the tab's order. Off with none: an empty copy would wipe the clipboard.</summary>
+    [RelayCommand(CanExecute = nameof(HasChangeRows))]
     private void CopyAllPaths()
     {
         if (Changes is not { } changes)
