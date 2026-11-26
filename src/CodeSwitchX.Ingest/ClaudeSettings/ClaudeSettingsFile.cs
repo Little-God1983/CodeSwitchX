@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -27,6 +28,23 @@ internal sealed class ClaudeSettingsFile(ClaudeCodePaths paths, ILogger logger)
         WriteIndented = true,
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
+
+    /// <summary>One per settings file, whoever holds the instance: the hook installer and the idle compaction card share it.</summary>
+    private static readonly ConcurrentDictionary<string, Lock> Writers = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Runs load-edit-save alone: one lock per settings file for the whole process (review of #450). Without it two writers
+    /// on pool threads each loaded the same file and the later save dropped the earlier change, or both used the one temporary
+    /// file. Reads do not take it: the replace is atomic, so a read sees the old file or the new.
+    /// </summary>
+    internal T Locked<T>(Func<T> work)
+    {
+        var gate = Writers.GetOrAdd(Path.GetFullPath(paths.SettingsFile), _ => new Lock());
+        lock (gate)
+        {
+            return work();
+        }
+    }
 
     /// <summary>The file as text of the form it is written in: what <see cref="Save"/> compares against.</summary>
     internal static string TextOf(JsonObject settings) => settings.ToJsonString(WriteOptions);

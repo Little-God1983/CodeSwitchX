@@ -48,6 +48,12 @@ public sealed class IdleCompactionSetting
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(value.MinTokens, LowestMinTokens);
 
+        // One writer of settings.json at a time: the hook installer writes it too (review of #450).
+        return _file.Locked(() => WriteAlone(value));
+    }
+
+    private bool WriteAlone(IdleCompaction value)
+    {
         var settings = _file.Load(Touch);
         var before = ClaudeSettingsFile.TextOf(settings);
         var now = Of(settings);

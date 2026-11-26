@@ -118,6 +118,12 @@ public sealed class ClaudeHookInstaller
             throw new HookInstallException($"The relay path must lead to {Marker}.exe: \"{relayExecutable}\"");
         }
 
+        // One writer of settings.json at a time: the idle compaction card writes it too (review of #450).
+        return _file.Locked(() => InstallEntries(relayExecutable));
+    }
+
+    private HookInstallResult InstallEntries(string relayExecutable)
+    {
         var settings = Load();
         var before = ClaudeSettingsFile.TextOf(settings);
 
@@ -258,7 +264,10 @@ public sealed class ClaudeHookInstaller
     /// <summary>An entry that holds what a chat asks: the relay's argument for it, its event, and its matcher if it has one.</summary>
     private sealed record HeldEntry(string Argument, string Event, string? Matcher);
 
-    public HookInstallResult Uninstall()
+    /// <summary>One writer of settings.json at a time, as <see cref="Install"/> is.</summary>
+    public HookInstallResult Uninstall() => _file.Locked(UninstallEntries);
+
+    private HookInstallResult UninstallEntries()
     {
         var settings = Load();
         var before = ClaudeSettingsFile.TextOf(settings);

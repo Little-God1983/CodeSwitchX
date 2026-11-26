@@ -2,12 +2,16 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeSwitchX.Core;
 using CodeSwitchX.Ingest.ClaudeSettings;
+using CodeSwitchX.Ingest.Hooks;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace CodeSwitchX.Ingest.Tests.ClaudeSettings;
 
 public class IdleCompactionSettingTests : IDisposable
 {
+    /// <summary>As <c>ClaudeHookInstallerTests</c> has it: the relay's path must lead to csx-hook.exe.</summary>
+    private const string HookExe = @"C:\Program Files\CodeSwitchX\csx-hook.exe";
+
     private readonly string _home = Path.Combine(Path.GetTempPath(), "csx-idle-" + Guid.NewGuid().ToString("N"));
     private readonly ClaudeCodePaths _paths;
     private readonly IdleCompactionSetting _setting;
@@ -251,5 +255,41 @@ public class IdleCompactionSettingTests : IDisposable
         _setting.Write(new IdleCompaction(false, 300_000));
 
         _setting.Read().ShouldBe(new IdleCompaction(false, 300_000));
+    }
+
+    /// <summary>
+    /// The hook installer and this card write the same file from pool threads: held by another process for a moment, both
+    /// wait their turn, and neither change is lost (review of #450).
+    /// </summary>
+    [Fact]
+    public async Task A_hook_install_and_a_switch_flip_at_once_both_land()
+    {
+        WriteSettings("""{"model":"x"}""");
+        var installer = new ClaudeHookInstaller(_paths, NullLogger<ClaudeHookInstaller>.Instance);
+        Task<bool> flip;
+        Task<HookInstallResult> install;
+        var held = new FileStream(_paths.SettingsFile, FileMode.Open, FileAccess.Read, FileShare.Read);
+        try
+        {
+            flip = Task.Run(() => _setting.Write(new IdleCompaction(false, 200_000)), TestContext.Current.CancellationToken);
+            install = Task.Run(() => installer.Install(HookExe), TestContext.Current.CancellationToken);
+            await Task.Delay(TimeSpan.FromMilliseconds(150), TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            held.Dispose();
+        }
+
+        await flip;
+        await install;
+
+        var settings = Settings();
+        settings["idleCompaction"]!.GetValueKind().ShouldBe(JsonValueKind.False);
+        settings["model"]!.GetValue<string>().ShouldBe("x");
+        var hooks = settings["hooks"]!.AsObject();
+        foreach (var eventName in ClaudeHookInstaller.Events)
+        {
+            hooks.ContainsKey(eventName).ShouldBeTrue(eventName);
+        }
     }
 }
