@@ -22,12 +22,17 @@ public partial class GitHubListViewModelTests
 
     private static ChangedFileList Files(params ChangedFile[] files) => new(files);
 
-    /// <summary>A panel opened from a line in <paramref name="path"/> with <paramref name="files"/> changed, on the Changes tab or not.</summary>
+    /// <summary>
+    /// A panel opened from a line in <paramref name="path"/> with <paramref name="files"/> changed, on the Changes tab or not. Its browser
+    /// is Firefox (alpha), which fails to open once <c>_start</c> returns false.
+    /// </summary>
     private async Task<GitHubPanelViewModel> OpenWithChanges(ChangedFileList? files, bool showChanges = true, Action? readGit = null, string path = Checkout,
         Func<ProcessStartInfo, bool>? start = null)
     {
         var (activity, pill) = await PillAsync();
-        return new GitHubPanelViewModel(pill.Activity, GitHubItemKind.Issue, new GitHubReader(_gh), activity, Browsers(), _clipboard, new ImmediateDispatcher(), _time,
+        var browsers = Browsers();
+        browsers.SetChoice("me", "firefox|alpha");
+        return new GitHubPanelViewModel(pill.Activity, GitHubItemKind.Issue, new GitHubReader(_gh), activity, browsers, _clipboard, new ImmediateDispatcher(), _time,
             NullLogger.Instance, _closedLists.Add, new PanelCheckout(path, "main", () => false, NewJobs(), ReadGit: readGit, Files: files), showChanges, start);
     }
 
@@ -283,13 +288,98 @@ public partial class GitHubListViewModelTests
     public async Task An_Open_folder_that_ends_later_leaves_a_newer_line_alone()
     {
         // Review of #446: a browser failure said while Open folder ran is newer than Open folder's own outcome.
-        var model = await WhileOpenFolderWaits(info => true, (panel, _) => panel.OpenMessage = "Couldn't open the row.");
+        // Review round 2: also the same failure said again, which leaves the line's text as it was.
+        var model = await WhileOpenFolderWaits(info => true, (panel, _) => panel.OpenRepositoryCommand.Execute(null), before: panel =>
+        {
+            _start = _ => false;
+            panel.OpenRepositoryCommand.Execute(null);
+        });
 
-        model.OpenMessage.ShouldBe("Couldn't open the row.");
+        model.OpenMessage.ShouldNotBeNull().ShouldStartWith("Couldn't open");
     }
 
-    /// <summary>Presses Open folder on a file that is there, does <paramref name="meanwhile"/> before Explorer starts, then lets it end.</summary>
-    private async Task<GitHubPanelViewModel> WhileOpenFolderWaits(Func<ProcessStartInfo, bool> start, Action<GitHubPanelViewModel, ChangedFileRow> meanwhile)
+    [Fact]
+    public async Task Of_two_Open_folders_the_one_that_ends_last_has_the_line()
+    {
+        // Review round 2 of #446: a failure, then a press that worked, leaves the line clear, as it would one after the other.
+        var top = TempCheckout();
+        using var failing = new ManualResetEventSlim();
+        using var working = new ManualResetEventSlim();
+        try
+        {
+            File.WriteAllText(Path.Combine(top, "a.cs"), "x");
+            File.WriteAllText(Path.Combine(top, "b.cs"), "x");
+            var model = await OpenWithChanges(Files(Edited("a.cs", top), Edited("b.cs", top)), path: top, start: info =>
+                info.Arguments.Contains("a.cs", StringComparison.Ordinal)
+                    ? !failing.Wait(TimeSpan.FromSeconds(30)) // false once let go: Explorer did not open
+                    : working.Wait(TimeSpan.FromSeconds(30)));
+            var first = model.OpenFolderCommand.ExecuteAsync(model.Changes!.Rows[0]);
+            var second = model.OpenFolderCommand.ExecuteAsync(model.Changes!.Rows[1]);
+
+            failing.Set();
+            await first;
+            model.OpenMessage.ShouldNotBeNull();
+            working.Set();
+            await second;
+
+            model.OpenMessage.ShouldBeNull();
+        }
+        finally
+        {
+            failing.Set();
+            working.Set();
+            Directory.Delete(top, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Open_folder_starts_no_Explorer_once_the_panel_is_closed()
+    {
+        // Review round 2 of #446: a look at a slow disk that ends after the panel closed opens nothing out of the blue.
+        var top = TempCheckout();
+        try
+        {
+            File.WriteAllText(Path.Combine(top, "a.cs"), "x");
+            var model = await OpenWithChanges(Files(Edited("a.cs", top)), path: top, start: Started);
+            var row = model.Changes!.Rows[0];
+            model.CloseCommand.Execute(null);
+
+            await model.OpenFolderCommand.ExecuteAsync(row);
+
+            _started.ShouldBeEmpty();
+        }
+        finally
+        {
+            Directory.Delete(top, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Picking_the_tab_already_in_front_keeps_the_failure_line()
+    {
+        // Review round 2 of #446: only a tab that comes to the front starts with a clear line.
+        var model = await OpenWithChanges(Files(Edited("a.cs")), showChanges: false);
+        _start = _ => false;
+        model.OpenRepositoryCommand.Execute(null);
+        var failure = model.OpenMessage.ShouldNotBeNull();
+
+        model.ShowCommand.Execute(GitHubItemKind.Issue);
+
+        model.OpenMessage.ShouldBe(failure);
+
+        model.ShowChangesCommand.Execute(null);
+        model.OpenMessage = "Explorer did not open C:\\app.";
+        model.ShowChangesCommand.Execute(null);
+
+        model.OpenMessage.ShouldBe("Explorer did not open C:\\app.");
+    }
+
+    /// <summary>
+    /// Does <paramref name="before"/>, presses Open folder on a file that is there, does <paramref name="meanwhile"/> before Explorer
+    /// starts, then lets it end.
+    /// </summary>
+    private async Task<GitHubPanelViewModel> WhileOpenFolderWaits(Func<ProcessStartInfo, bool> start, Action<GitHubPanelViewModel, ChangedFileRow> meanwhile,
+        Action<GitHubPanelViewModel>? before = null)
     {
         var top = TempCheckout();
         using var gate = new ManualResetEventSlim();
@@ -302,6 +392,7 @@ public partial class GitHubListViewModelTests
                 return start(info);
             });
             var row = model.Changes!.Rows[0];
+            before?.Invoke(model);
             var run = model.OpenFolderCommand.ExecuteAsync(row);
 
             meanwhile(model, row);
