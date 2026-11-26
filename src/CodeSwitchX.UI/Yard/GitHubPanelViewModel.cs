@@ -45,6 +45,11 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     /// <summary>Why the browser could not open the repository, a tab's page or a row, or none; any of them that opens clears it.</summary>
     [ObservableProperty] private string? _openMessage;
 
+    // Counts the changes of OpenMessage: an Open folder that ends later leaves a line said meanwhile alone (review of #446).
+    private int _openMessageChanges;
+
+    partial void OnOpenMessageChanged(string? value) => _openMessageChanges++;
+
     /// <summary>What the last copy did, for a moment. It has a place of its own in the header, so the rows do not move under the pointer.</summary>
     [ObservableProperty] private string? _copyMessage;
 
@@ -233,12 +238,21 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     /// Explorer on the row's folder (#444), the file selected in it; a changed submodule, a folder git lists like a file, is selected too
     /// (#446). A file deleted, or a folder gone with it, opens the nearest folder above that is there; the panel says so when none is, or
     /// Explorer did not start. The disk is looked at off the UI thread (#446): a checkout on an offline share blocks a look for about 20 s.
+    /// Meanwhile the buttons stay enabled, as WPF drops the keyboard from a button it disables; the outcome is shown only on the Changes
+    /// tab still in front, and only when nothing was said on the failure line since (review of #446).
     /// </summary>
-    [RelayCommand]
+    [RelayCommand(AllowConcurrentExecutions = true)]
     private async Task OpenFolderAsync(ChangedFileRow row)
     {
+        var said = _openMessageChanges;
         var message = await Task.Run(() => OpenFolderOf(row)).ConfigureAwait(false);
-        _ui.Post(() => OpenMessage = message);
+        _ui.Post(() =>
+        {
+            if (IsChangesShown && _openMessageChanges == said)
+            {
+                OpenMessage = message;
+            }
+        });
     }
 
     /// <summary>Starts Explorer for the row; why it could not, or null when it did.</summary>

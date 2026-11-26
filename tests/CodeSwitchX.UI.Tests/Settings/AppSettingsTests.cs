@@ -36,6 +36,7 @@ public sealed class AppSettingsTests
     {
         await _h.Shell.InitializeAsync(CancellationToken.None);
         await _h.Shell.Raven.PendingRefresh;
+        await _h.Shell.Raven.PendingOpenMic; // a stored open mic starts once the microphones are listed
         if (_h.Shell.Raven.Speakers is { } speakers)
         {
             await speakers.PendingRefresh;

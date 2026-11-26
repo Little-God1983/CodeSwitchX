@@ -219,15 +219,22 @@ public partial class GitHubListViewModelTests
         try
         {
             File.WriteAllText(Path.Combine(top, "a.cs"), "x");
-            var caller = Environment.CurrentManagedThreadId;
             int? starter = null;
             var model = await OpenWithChanges(Files(Edited("a.cs", top)), path: top, start: info =>
             {
                 starter = Environment.CurrentManagedThreadId;
                 return Started(info);
             });
+            // Pressed on a thread of its own, as the UI thread is: a thread-pool caller could pick its own queued work up again.
+            var caller = 0;
+            Task? run = null;
 
-            await model.OpenFolderCommand.ExecuteAsync(model.Changes!.Rows[0]);
+            await StaThread.RunAsync(() =>
+            {
+                caller = Environment.CurrentManagedThreadId;
+                run = model.OpenFolderCommand.ExecuteAsync(model.Changes!.Rows[0]);
+            });
+            await run!;
 
             starter.ShouldNotBeNull().ShouldNotBe(caller);
             _started.ShouldHaveSingleItem();
@@ -254,6 +261,59 @@ public partial class GitHubListViewModelTests
         model.ShowChangesCommand.Execute(null);
 
         model.OpenMessage.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Open_folder_leaves_its_button_usable_while_it_runs()
+    {
+        // Review of #446: a button greyed out while it has the keyboard drops the keyboard to the window.
+        await WhileOpenFolderWaits(info => true, (panel, row) => panel.OpenFolderCommand.CanExecute(row).ShouldBeTrue());
+    }
+
+    [Fact]
+    public async Task An_Open_folder_failure_after_a_tab_switch_stays_off_the_other_tab()
+    {
+        // Review of #446: the failure line belongs to the tab it happened on, also when the look at the disk took a while.
+        var model = await WhileOpenFolderWaits(info => false, (panel, _) => panel.ShowCommand.Execute(GitHubItemKind.Issue));
+
+        model.OpenMessage.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task An_Open_folder_that_ends_later_leaves_a_newer_line_alone()
+    {
+        // Review of #446: a browser failure said while Open folder ran is newer than Open folder's own outcome.
+        var model = await WhileOpenFolderWaits(info => true, (panel, _) => panel.OpenMessage = "Couldn't open the row.");
+
+        model.OpenMessage.ShouldBe("Couldn't open the row.");
+    }
+
+    /// <summary>Presses Open folder on a file that is there, does <paramref name="meanwhile"/> before Explorer starts, then lets it end.</summary>
+    private async Task<GitHubPanelViewModel> WhileOpenFolderWaits(Func<ProcessStartInfo, bool> start, Action<GitHubPanelViewModel, ChangedFileRow> meanwhile)
+    {
+        var top = TempCheckout();
+        using var gate = new ManualResetEventSlim();
+        try
+        {
+            File.WriteAllText(Path.Combine(top, "a.cs"), "x");
+            var model = await OpenWithChanges(Files(Edited("a.cs", top)), path: top, start: info =>
+            {
+                gate.Wait(TimeSpan.FromSeconds(30));
+                return start(info);
+            });
+            var row = model.Changes!.Rows[0];
+            var run = model.OpenFolderCommand.ExecuteAsync(row);
+
+            meanwhile(model, row);
+            gate.Set();
+            await run;
+            return model;
+        }
+        finally
+        {
+            gate.Set();
+            Directory.Delete(top, recursive: true);
+        }
     }
 
     [Theory]
