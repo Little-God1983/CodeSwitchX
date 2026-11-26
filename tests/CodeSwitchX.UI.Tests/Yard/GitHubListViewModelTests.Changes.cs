@@ -1,6 +1,11 @@
 using System.Diagnostics;
+using System.Windows;
+using System.Windows.Automation;
+using System.Windows.Controls;
+using System.Windows.Media;
 using CodeSwitchX.Core.GitHub;
 using CodeSwitchX.Core.Workspaces;
+using CodeSwitchX.UI.Tests.Infrastructure;
 using CodeSwitchX.UI.Yard;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -233,6 +238,59 @@ public partial class GitHubListViewModelTests
         renamed.DisplayPath.ShouldBe("b.cs ← a.cs");
         renamed.OpenFolderName.ShouldBe("Open the folder of b.cs");
         renamed.CopyFolderName.ShouldBe("Copy the folder path of b.cs");
+    }
+
+    [Fact]
+    public async Task Changes_tab_renders_rows_with_both_buttons()
+    {
+        var model = await OpenWithChanges(Files(Edited("src/a.cs")));
+
+        await StaThread.RunAsync(() =>
+        {
+            var panel = PanelView(model);
+            var shown = Descendants(panel).OfType<Button>().Where(Shown).Select(AutomationProperties.GetName).ToList();
+
+            shown.ShouldContain("Open the folder of src/a.cs");
+            shown.ShouldContain("Copy the folder path of src/a.cs");
+            shown.ShouldContain("Copy all paths");
+            shown.ShouldNotContain("Copy all links", "the links are the GitHub tabs' to copy");
+            shown.ShouldContain("Changes, 1 files, shown");
+            Descendants(panel).OfType<TextBlock>().Where(Shown).Select(t => t.Text).ShouldContain("src/a.cs");
+            Descendants(panel).OfType<TextBlock>().Where(Shown).Select(t => t.Text).ShouldContain("edited");
+
+            model.ShowCommand.Execute(GitHubItemKind.Issue);
+            panel.UpdateLayout();
+            shown = Descendants(panel).OfType<Button>().Where(Shown).Select(AutomationProperties.GetName).ToList();
+
+            shown.ShouldContain("Copy all links");
+            shown.ShouldNotContain("Copy all paths");
+            shown.ShouldNotContain("Open the folder of src/a.cs");
+        });
+    }
+
+    [Fact]
+    public async Task A_panel_without_a_checkout_has_no_changes_tab_on_screen()
+    {
+        var (activity, pill) = await PillAsync();
+        var model = Open(activity, pill);
+
+        await StaThread.RunAsync(() =>
+            Descendants(PanelView(model)).OfType<Button>().Where(Shown).Select(AutomationProperties.GetName)
+                .ShouldNotContain(n => n.StartsWith("Changes", StringComparison.Ordinal)));
+    }
+
+    /// <summary>Nothing up the tree collapses it. Not IsVisible: the panel hangs in no window.</summary>
+    private static bool Shown(DependencyObject element)
+    {
+        for (var node = element; node is not null; node = VisualTreeHelper.GetParent(node))
+        {
+            if (node is UIElement { Visibility: not Visibility.Visible })
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private bool Started(ProcessStartInfo info)
