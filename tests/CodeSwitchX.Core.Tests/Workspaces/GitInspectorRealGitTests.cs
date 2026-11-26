@@ -34,4 +34,24 @@ public class GitInspectorRealGitTests : RealGitRepos
         (await inspector.BehindAsync(Work, await Git(Work, "rev-parse", "HEAD"), onGitHub, null, "feature/y", TestContext.Current.CancellationToken))
             .ShouldBe(BehindAnswer.Of(new GitBehind(1, WentApart: true)), "beside the squashed commit of its own");
     }
+
+    [Fact]
+    public async Task The_changed_files_come_with_their_real_names_and_kinds()
+    {
+        // An edit, a name git quotes (a space and an umlaut), and a staged rename (#444).
+        await Arrange();
+        await Commit(Work, "move.txt", "moved");
+        File.WriteAllText(Path.Combine(Work, "a.txt"), "edited");
+        File.WriteAllText(Path.Combine(Work, "ä b.txt"), "new");
+        await Git(Work, "mv", "move.txt", "moved.txt");
+
+        var info = await new GitInspector().InspectAsync(Work, TestContext.Current.CancellationToken);
+
+        info.ChangedFiles.ShouldNotBeNull().Files.ShouldBe(
+        [
+            new ChangedFile("a.txt", Path.Combine(Work, "a.txt"), ChangeKind.Edited),
+            new ChangedFile("moved.txt", Path.Combine(Work, "moved.txt"), ChangeKind.Renamed, "move.txt"),
+            new ChangedFile("ä b.txt", Path.Combine(Work, "ä b.txt"), ChangeKind.New),
+        ]);
+    }
 }
