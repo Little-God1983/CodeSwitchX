@@ -45,6 +45,16 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     /// <summary>Why the browser could not open the repository, a tab's page or a row, or none; any of them that opens clears it.</summary>
     [ObservableProperty] private string? _openMessage;
 
+    // Counts what the panel says on the failure line, Open folder aside, also the same text again: an Open folder that worked but
+    // ended later leaves a line said meanwhile alone (review of #446).
+    private int _said;
+
+    private void Say(string? message)
+    {
+        _said++;
+        OpenMessage = message;
+    }
+
     /// <summary>What the last copy did, for a moment. It has a place of its own in the header, so the rows do not move under the pointer.</summary>
     [ObservableProperty] private string? _copyMessage;
 
@@ -192,11 +202,16 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     [RelayCommand]
     private void Show(GitHubItemKind kind)
     {
+        var comesForward = IsChangesShown || !ReferenceEquals(Shown, ListOf(kind));
         Shown = ListOf(kind);
         // Picking the list that was in front before Changes sets no new Shown: this is what brings it back to the front.
         IsChangesShown = false;
-        // A failure line belongs to the tab it happened on (#446).
-        OpenMessage = null;
+        if (comesForward)
+        {
+            // A failure line belongs to the tab it happened on (#446); the tab already in front keeps it (review of #446).
+            Say(null);
+        }
+
         // Even before LoadAsync has run: the Yard starts it on the pool, and a quick click can come first (review of #406).
         if (!Shown.HasStarted)
         {
@@ -216,9 +231,13 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
             return;
         }
 
-        IsChangesShown = true;
-        // A failure line belongs to the tab it happened on (#446).
-        OpenMessage = null;
+        if (!IsChangesShown)
+        {
+            // A failure line belongs to the tab it happened on (#446); the tab already in front keeps it (review of #446).
+            IsChangesShown = true;
+            Say(null);
+        }
+
         _checkout?.ReadGit?.Invoke();
     }
 
@@ -233,12 +252,22 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     /// Explorer on the row's folder (#444), the file selected in it; a changed submodule, a folder git lists like a file, is selected too
     /// (#446). A file deleted, or a folder gone with it, opens the nearest folder above that is there; the panel says so when none is, or
     /// Explorer did not start. The disk is looked at off the UI thread (#446): a checkout on an offline share blocks a look for about 20 s.
+    /// Meanwhile the buttons stay enabled, as WPF drops the keyboard from a button it disables. The outcome is shown only on the Changes
+    /// tab still in front: a failure as it comes, the last word as one after the other would be; a press that worked clears the line only
+    /// when nothing else was said on it since. A panel closed meanwhile starts no Explorer (review of #446).
     /// </summary>
-    [RelayCommand]
+    [RelayCommand(AllowConcurrentExecutions = true)]
     private async Task OpenFolderAsync(ChangedFileRow row)
     {
+        var said = _said;
         var message = await Task.Run(() => OpenFolderOf(row)).ConfigureAwait(false);
-        _ui.Post(() => OpenMessage = message);
+        _ui.Post(() =>
+        {
+            if (IsChangesShown && (message is not null || _said == said))
+            {
+                OpenMessage = message;
+            }
+        });
     }
 
     /// <summary>Starts Explorer for the row; why it could not, or null when it did.</summary>
@@ -249,6 +278,11 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
         if ((selects ? row.FolderPath : NearestFolder(row.FolderPath)) is not { } folder)
         {
             return $"Can't open a folder for {file.Path}: it is gone.";
+        }
+
+        if (_stop.IsCancellationRequested)
+        {
+            return null; // the panel closed while the disk was looked at: no window out of the blue
         }
 
         var start = new ProcessStartInfo("explorer.exe", selects ? $"/select,\"{file.FullPath}\"" : $"\"{folder}\"");
@@ -509,16 +543,16 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
 
     /// <summary>Opens the item and keeps the panel open; a browser that cannot open it says why in the panel.</summary>
     [RelayCommand]
-    private void OpenRow(GitHubRow row) => OpenMessage = _browsers.Open(_repo.Account, row.Item.Url);
+    private void OpenRow(GitHubRow row) => Say(_browsers.Open(_repo.Account, row.Item.Url));
 
     /// <summary>Opens the repository's main page and keeps the panel open.</summary>
     [RelayCommand]
-    private void OpenRepository() => OpenMessage = _browsers.Open(_repo.Account, _repo.Repo.Url);
+    private void OpenRepository() => Say(_browsers.Open(_repo.Account, _repo.Repo.Url));
 
     /// <summary>Opens every open pull request or issue of the repository on GitHub, the tab's arrow (#406).</summary>
     [RelayCommand]
     private void OpenOnGitHub(GitHubItemKind kind) =>
-        OpenMessage = _browsers.Open(_repo.Account, $"{_repo.Repo.Url}/{(kind == GitHubItemKind.PullRequest ? "pulls" : "issues")}");
+        Say(_browsers.Open(_repo.Account, $"{_repo.Repo.Url}/{(kind == GitHubItemKind.PullRequest ? "pulls" : "issues")}"));
 
     /// <summary>The row's address on the clipboard; opens nothing.</summary>
     [RelayCommand]
