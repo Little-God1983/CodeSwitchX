@@ -28,6 +28,20 @@ public sealed class AppSettingsTests
         _settings = new AppSettings(() => _h.Shell, new ImmediateDispatcher(), _h.Chats);
     }
 
+    /// <summary>
+    /// Starts the shell and waits for its microphone and speaker listings (#448). They run on the thread pool, and the test's
+    /// dispatcher applies them right there, so a test that read or changed the lists meanwhile would race them.
+    /// </summary>
+    private async Task StartAsync()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await _h.Shell.Raven.PendingRefresh;
+        if (_h.Shell.Raven.Speakers is { } speakers)
+        {
+            await speakers.PendingRefresh;
+        }
+    }
+
     [Theory]
     [InlineData("voice", SettingsPage.Voice)]
     [InlineData("the listening settings", SettingsPage.Listening)]
@@ -37,7 +51,7 @@ public sealed class AppSettingsTests
     [InlineData("sounds", SettingsPage.Sounds)]
     public async Task Open_the_voice_settings_opens_settings_at_that_page(string said, SettingsPage page)
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
 
         var shown = await _settings.OpenAsync(said, Ct);
 
@@ -53,7 +67,7 @@ public sealed class AppSettingsTests
     [InlineData("40 percent")]
     public async Task The_voice_volume_is_set_by_voice(string said)
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
 
         await _settings.SetAsync("voice volume", said, Ct);
 
@@ -64,7 +78,7 @@ public sealed class AppSettingsTests
     [Fact]
     public async Task The_sound_volume_is_read_and_set_by_voice()
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
 
         (await _settings.GetAsync("chime volume", Ct)).Value.ShouldBe("60 %");
         await _settings.SetAsync("sound volume", "0", Ct);
@@ -87,7 +101,7 @@ public sealed class AppSettingsTests
     [InlineData("up to full", 100)]
     public async Task A_volume_said_in_words_is_set(string said, int volume)
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
         _h.Shell.Settings.RavenVoiceVolume = 50;
 
         await _settings.SetAsync("voice volume", said, Ct);
@@ -104,7 +118,7 @@ public sealed class AppSettingsTests
     [InlineData("-10")]
     public async Task A_volume_said_as_a_change_is_refused_and_nothing_changes(string said)
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
 
         var error = await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("voice volume", said, Ct));
 
@@ -119,7 +133,7 @@ public sealed class AppSettingsTests
     [InlineData("40,5")]
     public async Task A_volume_not_from_0_to_100_is_refused_and_nothing_changes(string said)
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
 
         var error = await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("voice volume", said, Ct));
 
@@ -130,7 +144,7 @@ public sealed class AppSettingsTests
     [Fact]
     public async Task A_page_settings_does_not_have_is_refused_with_the_pages()
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
 
         var error = await Should.ThrowAsync<YardActionException>(() => _settings.OpenAsync("colours", Ct));
 
@@ -143,7 +157,7 @@ public sealed class AppSettingsTests
     public async Task Is_open_mic_on_is_answered_and_turn_it_off_switches_the_panel_and_the_stored_setting()
     {
         _h.Settings.GetAsync<string?>(SettingKeys.RavenMicMode, Arg.Any<CancellationToken>()).Returns(Task.FromResult<string?>("OpenMic"));
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
 
         (await _settings.GetAsync("open mic", Ct)).Value.ShouldBe("on");
         var set = await _settings.SetAsync("Open Mic", "off", Ct);
@@ -158,7 +172,7 @@ public sealed class AppSettingsTests
     [Fact]
     public async Task Raven_sets_a_slot_s_sound_by_its_name()
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
 
         (await _settings.SetAsync("sound when a chat fails", "soft bell", Ct)).Value.ShouldBe("Soft bell");
         (await _settings.SetAsync("start sound", "none", Ct)).Value.ShouldBe("None");
@@ -173,7 +187,7 @@ public sealed class AppSettingsTests
     [Fact]
     public async Task Raven_sets_a_slot_to_a_sound_of_the_user_s_by_name()
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
         var picked = TestSounds.Tone(Path.Combine(Path.GetTempPath(), "csx-picked-" + Guid.NewGuid().ToString("N")), "Doorbell.wav", 0.5);
         var id = _h.Library.Add(picked).Sound.Id;
 
@@ -189,7 +203,7 @@ public sealed class AppSettingsTests
     [InlineData("the chat I'm in also waits for the cooldown")]
     public async Task The_removed_settings_are_not_known_any_more(string name)
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
 
         (await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync(name, "on", Ct))).Message.ShouldContain("There is no setting");
     }
@@ -198,7 +212,7 @@ public sealed class AppSettingsTests
     [Fact]
     public async Task Open_mics_follow_up_is_set_from_what_is_said_off_too()
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
 
         (await _settings.SetAsync("follow-up without Raven's name", "30 seconds", Ct)).Value.ShouldBe("30 seconds");
         _h.Shell.Raven.FollowUpSeconds.ShouldBe(30);
@@ -209,7 +223,7 @@ public sealed class AppSettingsTests
     [Fact]
     public async Task Use_the_kokoro_voice_picks_the_engine_and_then_a_voice_of_it()
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
         (await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("voice", "Zebra", Ct))).Message.ShouldContain("No voice engine");
 
         var engine = await _settings.SetAsync("voice engine", "kokoro", Ct);
@@ -226,7 +240,7 @@ public sealed class AppSettingsTests
     [Fact]
     public async Task Speak_news_off_sets_the_switch_of_the_voice_page()
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
 
         await _settings.SetAsync("speak chat news", "no", Ct);
 
@@ -237,7 +251,7 @@ public sealed class AppSettingsTests
     [Fact]
     public async Task The_whisper_model_and_the_models_are_set_by_their_names()
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
 
         (await _settings.SetAsync("speech to text model", "small english", Ct)).Note.ShouldNotBeNull();
         _h.Shell.Settings.RavenWhisperModel.ShouldBe(WhisperModel.SmallEnglish);
@@ -253,7 +267,7 @@ public sealed class AppSettingsTests
     [InlineData("claude-haiku-4-5")]
     public async Task The_haiku_before_the_default_is_set_back_by_its_name_or_id(string said)
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
 
         await _settings.SetAsync("Raven's model", said, Ct);
 
@@ -263,7 +277,7 @@ public sealed class AppSettingsTests
     [Fact]
     public async Task An_alias_with_its_version_keeps_the_alias_s_id_for_raven_s_model()
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
         _h.Shell.Settings.RavenModelAliases = "Opus = claude-opus-5-5[1m]";
 
         await _settings.SetAsync("Raven's model", "Opus 5.5", Ct);
@@ -274,7 +288,7 @@ public sealed class AppSettingsTests
     [Fact]
     public async Task Raven_s_effort_is_set_by_voice_as_said()
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
 
         await _settings.SetAsync("your effort", "extra high", Ct);
         _h.Shell.Settings.RavenEffort.ShouldBe("xhigh");
@@ -292,7 +306,7 @@ public sealed class AppSettingsTests
     [Fact]
     public async Task The_github_browser_is_not_set_by_voice_and_opens_its_page()
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
 
         (await _settings.ListAsync(Ct)).Single(s => s.Name == "github browser").ByVoice.ShouldBeFalse();
         var error = await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("github browser", "Firefox", Ct));
@@ -304,7 +318,7 @@ public sealed class AppSettingsTests
     [Fact]
     public async Task A_setting_not_changed_by_voice_is_explained_and_its_page_opened()
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
 
         var error = await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("hooks", "off", Ct));
 
@@ -318,7 +332,7 @@ public sealed class AppSettingsTests
     [Fact]
     public async Task An_unknown_or_unclear_name_is_refused_in_words()
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
 
         (await Should.ThrowAsync<YardActionException>(() => _settings.GetAsync("wallpaper", Ct))).Message.ShouldContain("no setting 'wallpaper'");
         (await Should.ThrowAsync<YardActionException>(() => _settings.GetAsync("model", Ct))).Message.ShouldContain("ask the user which");
@@ -327,7 +341,7 @@ public sealed class AppSettingsTests
     [Fact]
     public async Task Muted_is_the_panel_s_speaker_button()
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
 
         await _settings.SetAsync("mute", "on", Ct);
 
@@ -340,7 +354,7 @@ public sealed class AppSettingsTests
     [InlineData("5.5")]
     public async Task A_model_name_that_is_no_model_is_refused_not_stored(string said)
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
         var before = _h.Shell.Settings.RavenBrainModel;
 
         (await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("Raven's model", said, Ct))).Message.ShouldContain("Nothing was changed");
@@ -354,7 +368,7 @@ public sealed class AppSettingsTests
     [InlineData("claude-sonnet-5-5", "claude-sonnet-5-5")]
     public async Task A_model_is_an_alias_an_alias_with_its_version_or_a_full_id(string said, string id)
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
 
         await _settings.SetAsync("chat 0's model", said, Ct);
 
@@ -364,7 +378,7 @@ public sealed class AppSettingsTests
     [Fact]
     public async Task New_chats_model_and_effort_take_what_set_defaults_takes()
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
 
         await _settings.SetAsync("new chats' model", "Opus 5.5", Ct);
         await _settings.SetAsync("new chats' effort", "extra high", Ct);
@@ -391,7 +405,7 @@ public sealed class AppSettingsTests
     [InlineData("default", "Claude Code's default", null, null)]
     public async Task Set_defaults_and_set_setting_store_the_same_for_the_same_words(string model, string effort, string? stored, string? level)
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
         var actions = SetDefaultsTool();
         var before = new ChatDefaults("Fable", "high");
 
@@ -410,7 +424,7 @@ public sealed class AppSettingsTests
     [Fact]
     public async Task Set_defaults_and_set_setting_refuse_a_model_in_the_same_words()
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
         var actions = SetDefaultsTool();
 
         var byDefaults = await Should.ThrowAsync<YardActionException>(() => actions.SetDefaultsAsync("GPT", null, Ct));
@@ -430,7 +444,7 @@ public sealed class AppSettingsTests
     [InlineData("large", WhisperModel.LargeV3Turbo)]
     public async Task The_speech_to_text_model_goes_by_its_row_s_name(string said, WhisperModel model)
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
 
         var set = await _settings.SetAsync("whisper model", said, Ct);
 
@@ -443,7 +457,7 @@ public sealed class AppSettingsTests
     [Fact]
     public async Task The_most_chats_on_a_tile_is_set_by_voice()
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
 
         (await _settings.SetAsync("max chats", "8", Ct)).Value.ShouldBe("8 chats");
         _h.Shell.Yard.MaxChats.ShouldBe(8);
@@ -458,7 +472,7 @@ public sealed class AppSettingsTests
     [Fact]
     public async Task The_Yard_s_times_are_set_by_voice()
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
 
         (await _settings.SetAsync("keep closed chats", "10 minutes", Ct)).Value.ShouldBe("10 minutes");
         _h.Shell.Yard.KeepClosed.ShouldBe(TimeSpan.FromMinutes(10));
@@ -489,7 +503,7 @@ public sealed class AppSettingsTests
     [InlineData("gap")]
     public async Task The_pause_between_messages_is_set_by_voice(string said)
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
 
         (await _settings.SetAsync(said, "5 seconds", Ct)).Value.ShouldBe("5 seconds");
         _h.Shell.Raven.Traffic.Pause.ShouldBe(TimeSpan.FromSeconds(5));
@@ -503,7 +517,7 @@ public sealed class AppSettingsTests
     [InlineData("update speed", null)]
     public async Task A_name_is_matched_by_its_words_not_by_a_short_alias_inside_another(string said, string? found)
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
 
         if (found is null)
         {
@@ -522,7 +536,7 @@ public sealed class AppSettingsTests
     [InlineData("800 thousand tokens", 800_000)]
     public async Task The_budget_is_read_with_its_decimals_and_scale(string said, long tokens)
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
 
         await _settings.SetAsync("5-hour budget", said, Ct);
 
@@ -532,7 +546,7 @@ public sealed class AppSettingsTests
     [Fact]
     public async Task A_voice_of_the_other_engine_switches_the_engine_as_the_voice_page_does()
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
         await _settings.SetAsync("voice engine", "Qwen3-TTS", Ct);
         var kokoro = CodeSwitchX.Voice.Speech.SpeechSettings.VoicesOf(CodeSwitchX.Voice.Speech.SpeechEngine.Kokoro)[1];
 
@@ -545,7 +559,7 @@ public sealed class AppSettingsTests
     public async Task Open_mic_that_fell_back_is_said_to_be_off()
     {
         _h.Settings.GetAsync<string?>(SettingKeys.RavenMicMode, Arg.Any<CancellationToken>()).Returns(Task.FromResult<string?>("OpenMic"));
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
 
         _h.Shell.Raven.MicMode = MicMode.PushToTalk; // a failure dropped it back; the user's choice stays open mic
 
@@ -576,7 +590,7 @@ public sealed class AppSettingsTests
     [Fact]
     public async Task The_list_carries_the_voices_and_microphones_there_are_now()
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
         await _settings.SetAsync("voice engine", "Kokoro", Ct);
         _h.Shell.Raven.Microphones.Add(new MicrophoneDevice("m1", "Desk mic"));
 
@@ -605,7 +619,7 @@ public sealed class AppSettingsTests
     [InlineData("the settings")]
     public async Task Open_settings_said_as_the_page_opens_settings(string page)
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
 
         await _settings.OpenAsync(page, Ct);
 
@@ -626,7 +640,7 @@ public sealed class AppSettingsTests
     [Fact]
     public async Task The_voice_model_note_is_only_given_when_qwen_speaks_and_it_changed()
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
         await _settings.SetAsync("voice engine", "Kokoro", Ct);
 
         (await _settings.SetAsync("voice model", "1.7B", Ct)).Note.ShouldBeNull("Kokoro does not speak with it");
@@ -636,7 +650,7 @@ public sealed class AppSettingsTests
     [Fact]
     public async Task Push_to_talk_is_a_name_of_its_own_the_other_way_round()
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
 
         (await _settings.GetAsync("push to talk", Ct)).Value.ShouldBe("on");
         await _settings.SetAsync("push to talk", "off", Ct);
@@ -647,7 +661,7 @@ public sealed class AppSettingsTests
     [Fact]
     public async Task With_no_microphone_listed_the_refusal_says_so()
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
         _h.Shell.Raven.Microphones.Clear();
 
         (await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("microphone", "Blue Yeti", Ct))).Message.ShouldContain("No microphone");
@@ -661,8 +675,7 @@ public sealed class AppSettingsTests
         var desk = new MicrophoneDevice("id-desk", "Desk mic");
         _h.Microphones.List().Returns([headset, desk]);
         _h.Microphones.Default().Returns(headset);
-        await _h.Shell.InitializeAsync(CancellationToken.None);
-        await _h.Shell.Raven.PendingRefresh;
+        await StartAsync();
         _h.Shell.Raven.SelectedMicrophone = desk;
 
         (await _settings.GetAsync("microphone", Ct)).Value.ShouldBe("Headset");
@@ -679,9 +692,8 @@ public sealed class AppSettingsTests
         var headphones = new SpeakerDevice("id-headphones", "Headphones");
         _h.Speakers.List().Returns([speakers, headphones]);
         _h.Speakers.Default().Returns(speakers);
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
         var choice = _h.Shell.Raven.Speakers!;
-        await choice.PendingRefresh;
         choice.SelectedSpeaker = headphones;
 
         (await _settings.GetAsync("audio output", Ct)).Value.ShouldBe("Speakers");
@@ -695,7 +707,7 @@ public sealed class AppSettingsTests
     [Fact]
     public async Task Opening_settings_brings_the_window_forward()
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
         var forward = 0;
         _h.Shell.ForwardRequested += () => forward++;
 
@@ -710,7 +722,7 @@ public sealed class AppSettingsTests
     [InlineData("claude-made-up-9")]
     public async Task An_id_no_alias_or_known_model_has_is_refused_for_raven_s_own_brain(string id)
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
         var before = _h.Shell.Settings.RavenBrainModel;
 
         (await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("Raven's model", id, Ct))).Message.ShouldContain("Brain & chats");
@@ -727,7 +739,7 @@ public sealed class AppSettingsTests
     [Fact]
     public async Task The_budget_reads_back_the_same_whatever_the_culture()
     {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await StartAsync();
         var culture = System.Globalization.CultureInfo.CurrentCulture;
         System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("de-DE");
         try
