@@ -182,7 +182,8 @@
         <!-- The "N changed" pill on a tile line on GitHub (#444): a button of its own that opens the repository panel on the Changes tab.
              Inside the line's button, as the issue and pull request pills are: the click is the pill's, not the line's. The look is the
              plain pill's; everywhere else (clean, off GitHub, Raven's header) the plain pill above stays. -->
-        <Button Margin="8,0,0,0" VerticalAlignment="Center" Cursor="Hand" ToolTip="Show the changed files" AutomationProperties.Name="Show the changed files"
+        <!-- named so the keyboard comes back to it, not to the line, when the panel it opened closes (#446; GitHubPanelFocus.ChangesPillName) -->
+        <Button x:Name="ChangesPill" Margin="8,0,0,0" VerticalAlignment="Center" Cursor="Hand" ToolTip="Show the changed files" AutomationProperties.Name="Show the changed files"
                 Command="{Binding DataContext.OpenChangesCommand, RelativeSource={RelativeSource AncestorType=yard:YardView}}" CommandParameter="{Binding}">
           <Button.Style>
             <Style TargetType="Button">

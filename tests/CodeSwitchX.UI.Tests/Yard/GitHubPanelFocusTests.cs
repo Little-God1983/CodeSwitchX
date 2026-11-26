@@ -370,6 +370,44 @@ public sealed class GitHubPanelFocusTests
         Keyboard.FocusedElement.ShouldBeSameAs(line);
     });
 
+    /// <summary>A tile whose line on GitHub has 3 changed files: the line's button with the "N changed" pill inside it (#444), named as the app's is.</summary>
+    private static (Button Line, Button Changes) LineWithChanges(Rig rig)
+    {
+        var model = new WorkspaceTileViewModel(new Workspace { Name = "W", RootPath = @"c:\w" }, null!);
+        var data = new GitLine("app", "main", 3, @"c:\w\app", GitHub: Pill().Activity);
+        var changes = new Button { DataContext = data, Name = "ChangesPill" };
+        var line = new Button { DataContext = data, Content = changes };
+        rig.Root.Children.Add(new StackPanel { DataContext = model, Children = { line } });
+        rig.Root.UpdateLayout(); // the pill is inside the line's template, which only a layout builds
+        return (line, changes);
+    }
+
+    [Fact]
+    public Task Closing_a_panel_the_changed_pill_opened_hands_the_keyboard_back_to_that_pill() => StaThread.RunAsync(() =>
+    {
+        // #446: the pill shows the line's data too, and must not count as the line itself.
+        using var rig = new Rig();
+        var (_, changes) = LineWithChanges(rig);
+        rig.Open(changes);
+
+        rig.Close();
+
+        Keyboard.FocusedElement.ShouldBeSameAs(changes);
+    });
+
+    [Fact]
+    public Task A_changed_pill_that_is_gone_hands_the_keyboard_to_its_line() => StaThread.RunAsync(() =>
+    {
+        using var rig = new Rig();
+        var (line, changes) = LineWithChanges(rig);
+        rig.Open(changes);
+        line.Content = null; // the files were committed meanwhile: the line is clean, its pill no button
+
+        rig.Close();
+
+        Keyboard.FocusedElement.ShouldBeSameAs(line);
+    });
+
     [Fact]
     public Task The_pill_is_given_back_once() => StaThread.RunAsync(() =>
     {
