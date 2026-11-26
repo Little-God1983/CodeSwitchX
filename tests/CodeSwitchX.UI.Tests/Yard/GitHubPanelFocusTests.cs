@@ -375,7 +375,7 @@ public sealed class GitHubPanelFocusTests
     {
         var model = new WorkspaceTileViewModel(new Workspace { Name = "W", RootPath = @"c:\w" }, null!);
         var data = new GitLine("app", "main", 3, @"c:\w\app", GitHub: Pill().Activity);
-        var changes = new Button { DataContext = data, Name = "ChangesPill" };
+        var changes = new Button { DataContext = data, Name = GitHubPanelFocus.ChangesPillName };
         var line = new Button { DataContext = data, Content = changes };
         rig.Root.Children.Add(new StackPanel { DataContext = model, Children = { line } });
         rig.Root.UpdateLayout(); // the pill is inside the line's template, which only a layout builds

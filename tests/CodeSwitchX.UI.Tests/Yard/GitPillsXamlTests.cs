@@ -84,6 +84,8 @@ public sealed class GitPillsXamlTests
 
         var pill = Descendants<Button>(presenter).Single(IsChangesPill);
         NothingCollapsed(pill).ShouldBeTrue();
+        // The keyboard comes back to it by this name after the panel closes (#446); a rename in App.xaml would send it to the line.
+        pill.Name.ShouldBe(GitHubPanelFocus.ChangesPillName);
         Descendants<TextBlock>(pill).Single().Text.ShouldBe("3 changed");
         var own = Descendants<Border>(pill);
         Descendants<Border>(presenter).Where(b => b.Child is TextBlock { Text: "3 changed" } && !own.Contains(b))
