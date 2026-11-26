@@ -181,4 +181,15 @@ public partial class SettingsViewModelTests
             CultureInfo.CurrentCulture = culture;
         }
     }
+
+    [Theory]
+    [InlineData("compact")]
+    [InlineData("idle compaction")]
+    [InlineData("cache")]
+    public void A_search_for_compaction_or_the_cache_finds_the_Yard_page(string search)
+    {
+        _vm.Search = search;
+
+        _vm.Pages.ShouldContain(p => p.Page == SettingsPage.Yard);
+    }
 }
