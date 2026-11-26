@@ -808,7 +808,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             var read = line with
             {
                 Branch = info.Branch, DirtyCount = info.DirtyCount, Head = info.Head, IsRepository = info.IsRepository, GitDir = info.GitDir,
-                StableBuild = StableBuildOf(info, [line]), TrackedChanges = info.TrackedChanges, Behind = null, BehindAgainst = null,
+                StableBuild = StableBuildOf(info, [line]), TrackedChanges = info.TrackedChanges, ChangedFiles = info.ChangedFiles, Behind = null, BehindAgainst = null,
             };
             // Another branch, changes, no git: refused whatever GitHub has, and said at once rather than after up to 5 s.
             if (StableBuildCheck.BuildBlock(read) is not null)
@@ -1231,6 +1231,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         if (GitHubPanel?.CheckoutPath is { } path && LinesOf(path).FirstOrDefault() is { } line)
         {
             GitHubPanel.FollowBranch(line.Branch, line.TrackedChanges);
+            GitHubPanel.FollowChanges(line.ChangedFiles);
         }
     }
 
@@ -1283,7 +1284,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
                 : [previous[0] with
                 {
                     Branch = root.Branch, DirtyCount = root.DirtyCount, Path = tile.RootPath, IsRepository = root.IsRepository, GitDir = root.GitDir,
-                    StableBuild = rootStableBuild, Head = root.Head, TrackedChanges = root.TrackedChanges,
+                    StableBuild = rootStableBuild, Head = root.Head, TrackedChanges = root.TrackedChanges, ChangedFiles = root.ChangedFiles,
                 }, .. previous.Skip(1)];
         }
 
@@ -1297,7 +1298,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             GitDir: root.GitDir,
             StableBuild: rootStableBuild,
             Head: root.Head,
-            TrackedChanges: root.TrackedChanges);
+            TrackedChanges: root.TrackedChanges, ChangedFiles: root.ChangedFiles);
         var others = folders.Where(f => PathNormalizer.Normalize(f.Path) != rootKey).ToList();
 
         // Each folder's git directory first, which reads a file or two, so git status runs once per checkout, not once per
@@ -1370,7 +1371,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             {
                 var info = await _git.InspectAsync(folder.Path, ct).ConfigureAwait(false);
                 return new GitLine(folder.Label, info.Branch, info.DirtyCount, folder.Path, IsRepository: info.IsRepository, GitDir: info.GitDir,
-                    StableBuild: StableBuildOf(info, previous), Head: info.Head, TrackedChanges: info.TrackedChanges);
+                    StableBuild: StableBuildOf(info, previous), Head: info.Head, TrackedChanges: info.TrackedChanges, ChangedFiles: info.ChangedFiles);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -1524,23 +1525,40 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
     }
 
+    /// <summary>
+    /// A click on a line's "N changed" pill opens its panel on the Changes tab (#444), its files read again at once: the last round may be up
+    /// to 30 s old. A line not on GitHub has no panel, and its pill is no button.
+    /// </summary>
+    [RelayCommand]
+    private void OpenChanges(GitLine? line)
+    {
+        if (line?.GitHub is { } activity && OpenPanel(activity, GitHubPanelViewModel.DefaultKind(activity), line, showChanges: true) && line.Path is { } path)
+        {
+            ReadGitOfCheckout(path);
+        }
+    }
+
     /// <param name="line">The line the panel was opened from: where its Pull acts (#407). Null when it is gone; then the panel has no Pull.</param>
-    private void OpenPanel(RepoActivity activity, GitHubItemKind kind, GitLine? line)
+    /// <param name="showChanges">Opens on the Changes tab (#444) rather than on <paramref name="kind"/>.</param>
+    /// <returns>Whether a panel opened: without the readers there is none.</returns>
+    private bool OpenPanel(RepoActivity activity, GitHubItemKind kind, GitLine? line, bool showChanges = false)
     {
         if (_gitHub is null || _gitHubReader is null || _gitHubBrowsers is null)
         {
-            return;
+            return false;
         }
 
         GitHubPanel?.CloseCommand.Execute(null);
         var checkout = line?.Path is { } path
-            ? new PanelCheckout(path, line.Branch, () => ChatIsWorkingIn(line, activity.Repo), GitJobs, line.GitDir, line.TrackedChanges, () => ReadGitOfCheckout(path))
+            ? new PanelCheckout(path, line.Branch, () => ChatIsWorkingIn(line, activity.Repo), GitJobs, line.GitDir, line.TrackedChanges, () => ReadGitOfCheckout(path),
+                line.ChangedFiles)
             : null;
         var panel = new GitHubPanelViewModel(activity, kind, _gitHubReader, _gitHub, _gitHubBrowsers, _clipboard, _ui, _time, _logger,
-            closed => { if (ReferenceEquals(GitHubPanel, closed)) { GitHubPanel = null; } }, checkout);
+            closed => { if (ReferenceEquals(GitHubPanel, closed)) { GitHubPanel = null; } }, checkout, showChanges);
         GitHubPanel = panel;
         // Not on the UI thread: the load starts its first gh before its first await.
         _ = Task.Run(() => panel.LoadAsync(_gitHubStop.Token));
+        return true;
     }
 
     /// <summary>
