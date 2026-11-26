@@ -184,4 +184,26 @@ public class GitLineTests
         (Compared("dev", branch: "develop") with { GitHub = WithBranches }).GitStateLabel.ShouldBe("clean");
         (Compared(null, branch: "local-only") with { GitHub = WithBranches }).GitStateLabel.ShouldBe("clean", "nothing on GitHub to be behind");
     }
+
+    private static ChangedFileList OneFile() => new([new ChangedFile("a.cs", @"C:\app\a.cs", ChangeKind.Edited)]);
+
+    [Fact]
+    public void Lines_with_the_same_changed_files_are_equal()
+    {
+        // A tile replaces its lines only when they differ (WorkspaceTileViewModel compares them): a list read again must not count as new (#444).
+        var one = new GitLine(null, "main", 1, ChangedFiles: OneFile());
+        var two = new GitLine(null, "main", 1, ChangedFiles: OneFile());
+
+        one.ShouldBe(two);
+        new[] { one }.SequenceEqual([two]).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Only_a_changed_pill_on_GitHub_shows_its_files()
+    {
+        (Line(2, null) with { GitHub = OnGitHub }).HasChangesToShow.ShouldBeTrue();
+        (Line(0, null) with { GitHub = OnGitHub }).HasChangesToShow.ShouldBeFalse("a clean pill has nothing to show");
+        (Line(null, null) with { GitHub = OnGitHub }).HasChangesToShow.ShouldBeFalse();
+        Line(2, null).HasChangesToShow.ShouldBeFalse("the Changes tab is in the repository panel, which needs GitHub");
+    }
 }

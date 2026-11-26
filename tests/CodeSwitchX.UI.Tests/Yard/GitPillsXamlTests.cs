@@ -36,7 +36,7 @@ public sealed class GitPillsXamlTests
     {
         var line = new GitLine(null, "main", 0, Issues: Pill(GitHubItemKind.Issue), PullRequests: Pill(GitHubItemKind.PullRequest), GitHub: Read());
 
-        var button = Descendants<Button>(Render(line, tile: true)).Single(b => b.DataContext is GitLine);
+        var button = Descendants<Button>(Render(line, tile: true)).Single(IsLineButton);
 
         System.Windows.Automation.AutomationProperties.GetName(button).ShouldBe("Open issues and pull requests of SomeRepo");
         PillButtons(button).Count(IsShown).ShouldBe(2, "the pills stay, inside the line");
@@ -46,8 +46,8 @@ public sealed class GitPillsXamlTests
     [Fact]
     public Task A_line_without_github_or_in_ravens_header_is_no_button() => StaThread.RunAsync(() =>
     {
-        Descendants<Button>(Render(new GitLine(null, "main", 0), tile: true)).ShouldNotContain(b => b.DataContext is GitLine);
-        Descendants<Button>(Render(new GitLine(null, "main", 0, GitHub: Read()), tile: false)).ShouldNotContain(b => b.DataContext is GitLine);
+        Descendants<Button>(Render(new GitLine(null, "main", 0), tile: true)).ShouldNotContain(b => IsLineButton(b));
+        Descendants<Button>(Render(new GitLine(null, "main", 0, GitHub: Read()), tile: false)).ShouldNotContain(b => IsLineButton(b));
     });
 
     [Fact]
@@ -57,7 +57,7 @@ public sealed class GitPillsXamlTests
 
         var clickable = Render(new GitLine("Folder", "main", 0, GitHub: Read(0, 0)), tile: true);
 
-        Descendants<Button>(clickable).ShouldContain(b => b.DataContext is GitLine);
+        Descendants<Button>(clickable).ShouldContain(b => IsLineButton(b));
         clickable.DesiredSize.ShouldBe(plain.DesiredSize);
     });
 
@@ -72,8 +72,39 @@ public sealed class GitPillsXamlTests
 
         var presenter = Render(new GitLine("Folder", "main", 0, Issues: Pill(GitHubItemKind.Issue), GitHub: Read()), tile: true, implicitButton: themed);
 
-        var line = Descendants<Button>(presenter).Single(b => b.DataContext is GitLine);
+        var line = Descendants<Button>(presenter).Single(IsLineButton);
         line.ActualWidth.ShouldBe(presenter.ActualWidth, 0.5);
+    });
+
+    [Fact]
+    public Task A_changed_pill_on_a_tile_line_on_GitHub_is_a_button_of_its_own() => StaThread.RunAsync(() =>
+    {
+        // #444: a click on it is the pill's, not the line's, as with the issue and pull request pills.
+        var presenter = Render(new GitLine(null, "main", 3, GitHub: Read()), tile: true);
+
+        var pill = Descendants<Button>(presenter).Single(IsChangesPill);
+        NothingCollapsed(pill).ShouldBeTrue();
+        Descendants<TextBlock>(pill).Single().Text.ShouldBe("3 changed");
+        var own = Descendants<Border>(pill);
+        Descendants<Border>(presenter).Where(b => b.Child is TextBlock { Text: "3 changed" } && !own.Contains(b))
+            .ShouldAllBe(b => !NothingCollapsed(b), "the plain pill gives way to the button");
+    });
+
+    /// <summary>The line's own button (#406), not the "N changed" pill's inside it (#444), which shows the same line.</summary>
+    private static bool IsLineButton(Button button) => button.DataContext is GitLine && !IsChangesPill(button);
+
+    private static bool IsChangesPill(Button button) => System.Windows.Automation.AutomationProperties.GetName(button) == "Show the changed files";
+
+    [Fact]
+    public Task A_clean_pill_a_line_off_GitHub_and_Ravens_header_keep_the_plain_pill() => StaThread.RunAsync(() =>
+    {
+        foreach (var (line, tile) in new[] { (new GitLine(null, "main", 0, GitHub: Read()), true), (new GitLine(null, "main", 3), true), (new GitLine(null, "main", 3, GitHub: Read()), false) })
+        {
+            var presenter = Render(line, tile);
+
+            Descendants<Button>(presenter).Where(IsChangesPill).ShouldAllBe(b => !NothingCollapsed(b));
+            ShownPillTexts(presenter).ShouldBe([line.GitStateLabel!]);
+        }
     });
 
     [Fact]

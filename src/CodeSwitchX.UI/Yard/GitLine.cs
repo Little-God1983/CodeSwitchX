@@ -21,9 +21,13 @@ namespace CodeSwitchX.UI.Yard;
 /// <param name="BehindAgainst">The commit of the line's branch on GitHub (#426, #428) that <paramref name="Behind"/> was worked out against; null when the line was not compared. One that differs from what <paramref name="GitHub"/> has now says <paramref name="Behind"/> is out of date.</param>
 /// <param name="Behind">The line lacks commits GitHub has on its branch (#426, #428), as of the last read of GitHub; null when it is not behind, its branch is not on GitHub, or nothing is known.</param>
 /// <param name="TrackedChanges">Of <paramref name="DirtyCount"/>, the files git tracks: what a pull stops at (#429). Null when git could not tell.</param>
+/// <param name="ChangedFiles">The files <paramref name="DirtyCount"/> counts, for the panel's Changes tab (#444). Null when git could not tell.</param>
 public sealed record GitLine(string? Folder, string? Branch, int? DirtyCount, string? Path = null, GitHubPill? Issues = null, GitHubPill? PullRequests = null, bool IsRepository = false, RepoActivity? GitHub = null, string? GitDir = null,
-    StableBuildRepo? StableBuild = null, string? Head = null, GitBehind? Behind = null, string? BehindAgainst = null, int? TrackedChanges = null)
+    StableBuildRepo? StableBuild = null, string? Head = null, GitBehind? Behind = null, string? BehindAgainst = null, int? TrackedChanges = null, ChangedFileList? ChangedFiles = null)
 {
+    /// <summary>The state pill opens the Changes tab (#444): it says "N changed", and the line has the repository panel the tab is in.</summary>
+    public bool HasChangesToShow => GitHub is not null && DirtyCount > 0;
+
     /// <summary>Before the first git round: "no git" and no pill.</summary>
     public static readonly GitLine Unknown = new(null, null, null);
 

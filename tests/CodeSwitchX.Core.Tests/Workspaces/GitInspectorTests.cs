@@ -63,7 +63,9 @@ public class GitInspectorTests : IDisposable
 
         var info = await inspector.InspectAsync(_root, CancellationToken.None);
 
-        info.ShouldBe(new GitInfo(true, "main", 2, Path.Combine(_root, ".git"), Here, _root, TrackedChanges: 1), "the git directory tells folders of one checkout apart from another repository");
+        info.ShouldBe(new GitInfo(true, "main", 2, Path.Combine(_root, ".git"), Here, _root, TrackedChanges: 1,
+            ChangedFiles: new ChangedFileList([new ChangedFile("a.cs", Path.Combine(_root, "a.cs"), ChangeKind.Edited), new ChangedFile("b.cs", Path.Combine(_root, "b.cs"), ChangeKind.New)])),
+            "the git directory tells folders of one checkout apart from another repository");
         asked.ShouldBe(["status --porcelain=v2 --branch --no-ahead-behind --untracked-files=normal"], "the commit comes with the status, at no process of its own");
     }
 

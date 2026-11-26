@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.Text;
 using CodeSwitchX.Core.Paths;
 
 namespace CodeSwitchX.Core.Workspaces;
@@ -10,7 +11,9 @@ namespace CodeSwitchX.Core.Workspaces;
 /// <param name="Head">The commit the checkout is at, the full hash (#426); null when git could not tell, or there is no commit yet.</param>
 /// <param name="Top">The checkout's top folder, full path: where its <c>.git</c> is (#425). Null outside a repository.</param>
 /// <param name="TrackedChanges">The changed files git tracks, untracked ones left out: what a pull stops at (#429). Null when git could not report them.</param>
-public sealed record GitInfo(bool IsRepository, string? Branch, int? DirtyCount, string? GitDir = null, string? Head = null, string? Top = null, int? TrackedChanges = null);
+/// <param name="ChangedFiles">The files <paramref name="DirtyCount"/> counts, for the Changes tab (#444). Null when git could not report them.</param>
+public sealed record GitInfo(bool IsRepository, string? Branch, int? DirtyCount, string? GitDir = null, string? Head = null, string? Top = null, int? TrackedChanges = null,
+    ChangedFileList? ChangedFiles = null);
 
 /// <summary>A checkout's branch lacks commits its branch on GitHub has (#426).</summary>
 /// <param name="Commits">How many; null when only "behind" can be told (a shallow clone, commits of its own, no count from GitHub).</param>
@@ -127,12 +130,16 @@ public sealed class GitInspector
 
         // Format 2 with the branch header: the commit comes with the files, at no process of its own (#426). Its "# ..." lines are no
         // files. Without the count against the upstream, which costs a walk nobody reads.
-        var status = await _runGit(root, "status " + string.Join(' ', StatusArguments), ct).ConfigureAwait(false);
+        // At the checkout's top, not in the folder asked about: porcelain v2 writes paths relative to where git runs, and the changed files
+        // (#444) are told from the top. The status lists the whole checkout either way, so the counts are the same.
+        var status = await _runGit(top!, "status " + string.Join(' ', StatusArguments), ct).ConfigureAwait(false);
         var lines = status?.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.Trim('\r')).Where(l => l.Length > 0).ToList();
         int? dirty = lines?.Count(l => !l.StartsWith('#'));
         int? tracked = lines is null ? null : TrackedChangesIn(lines);
         var head = lines?.FirstOrDefault(l => l.StartsWith(HeadLinePrefix, StringComparison.Ordinal))?[HeadLinePrefix.Length..].Trim();
-        return new GitInfo(true, branch, dirty, Path.GetFullPath(gitDir), IsFullHash(head) ? head : null, top, tracked);
+        // The files come from the same lines, at no process of their own (#444). Where the git directory was found, so was its top.
+        var files = lines is null ? null : ChangedFilesIn(lines, top!);
+        return new GitInfo(true, branch, dirty, Path.GetFullPath(gitDir), IsFullHash(head) ? head : null, top, tracked, files);
     }
 
     /// <summary>
@@ -308,6 +315,103 @@ public sealed class GitInspector
     /// </summary>
     internal static int TrackedChangesIn(IEnumerable<string> statusLines) =>
         statusLines.Count(l => l.Length > 0 && l[0] is not ('#' or '?' or '!') && !l.StartsWith("1 .M S..U ", StringComparison.Ordinal));
+
+    /// <summary>
+    /// The files among the lines of a status run with <see cref="StatusArguments"/>, line ends taken off (#444): what the pill counts, for
+    /// the Changes tab. Porcelain v2 paths are relative to the folder git ran in, so the status must have run at <paramref name="top"/>,
+    /// the checkout's top (review of #444). A line of no form known here is passed over rather than guessed at.
+    /// </summary>
+    internal static ChangedFileList ChangedFilesIn(IEnumerable<string> statusLines, string top)
+    {
+        var files = new List<ChangedFile>();
+        foreach (var line in statusLines)
+        {
+            if (StatusEntry(line.TrimEnd('\r')) is var (path, kind, oldPath))
+            {
+                files.Add(new ChangedFile(path, Path.GetFullPath(Path.Combine(top, path.TrimEnd('/').Replace('/', Path.DirectorySeparatorChar))), kind, oldPath));
+            }
+        }
+
+        return new ChangedFileList(files);
+    }
+
+    /// <summary>
+    /// One porcelain v2 line: <c>1</c> a change, <c>2</c> a rename or copy (<c>path&lt;TAB&gt;origPath</c>), <c>u</c> a conflict, <c>?</c>
+    /// an untracked file. The path is the last field and may hold spaces, so the line is split only as far as the fields before it.
+    /// </summary>
+    private static (string Path, ChangeKind Kind, string? OldPath)? StatusEntry(string line)
+    {
+        if (line.Length < 3 || line[1] != ' ')
+        {
+            return null;
+        }
+
+        switch (line[0])
+        {
+            case '?':
+                return (Unquote(line[2..]), ChangeKind.New, null);
+            case '1' when line.Split(' ', 9) is [_, var xy, _, _, _, _, _, _, var path]:
+                return (Unquote(path), xy.Contains('D') ? ChangeKind.Deleted : xy.Contains('A') ? ChangeKind.New : ChangeKind.Edited, null);
+            case '2' when line.Split(' ', 10) is [_, _, _, _, _, _, _, _, _, var paths] && paths.Split('\t', 2) is [var path, var oldPath]:
+                return (Unquote(path), ChangeKind.Renamed, Unquote(oldPath));
+            case 'u' when line.Split(' ', 11) is [_, _, _, _, _, _, _, _, _, _, var path]:
+                return (Unquote(path), ChangeKind.Conflict, null);
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>
+    /// A path as git wrote it, unquoted: one with a quote, a control character or (with <c>core.quotePath</c>, the default) a byte past
+    /// ASCII is written in double quotes with C escapes, each such byte as three octal digits. Bytes gathered back are UTF-8. A path with
+    /// an escape that makes no sense is left as written.
+    /// </summary>
+    internal static string Unquote(string path)
+    {
+        if (path.Length < 2 || path[0] != '"' || path[^1] != '"')
+        {
+            return path;
+        }
+
+        var bytes = new List<byte>(path.Length);
+        for (var i = 1; i < path.Length - 1; i++)
+        {
+            if (path[i] != '\\')
+            {
+                var width = char.IsHighSurrogate(path[i]) && i + 1 < path.Length - 1 ? 2 : 1;
+                bytes.AddRange(Encoding.UTF8.GetBytes(path, i, width));
+                i += width - 1;
+                continue;
+            }
+
+            if (++i >= path.Length - 1)
+            {
+                return path;
+            }
+
+            switch (path[i])
+            {
+                case 'a': bytes.Add(7); break;
+                case 'b': bytes.Add(8); break;
+                case 't': bytes.Add(9); break;
+                case 'n': bytes.Add(10); break;
+                case 'v': bytes.Add(11); break;
+                case 'f': bytes.Add(12); break;
+                case 'r': bytes.Add(13); break;
+                case '"' or '\\': bytes.Add((byte)path[i]); break;
+                case >= '0' and <= '3' when i + 2 < path.Length - 1 && IsOctal(path[i + 1]) && IsOctal(path[i + 2]):
+                    bytes.Add((byte)(((path[i] - '0') << 6) | ((path[i + 1] - '0') << 3) | (path[i + 2] - '0')));
+                    i += 2;
+                    break;
+                default:
+                    return path;
+            }
+        }
+
+        return Encoding.UTF8.GetString([.. bytes]);
+
+        static bool IsOctal(char c) => c is >= '0' and <= '7';
+    }
 
     /// <summary>What <c>git rev-list --count</c> printed, as a number; null when it printed none.</summary>
     internal static int? Count(string? output) =>

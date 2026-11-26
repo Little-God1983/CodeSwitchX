@@ -581,6 +581,7 @@
              The tab in front has its pill's colours; a screen reader hears its count and whether it is in front. The count keeps a width of
              its own, so the tab beside it does not move when it gains a digit. -->
         <Border DockPanel.Dock="Top" Margin="16,0,16,8" BorderThickness="0,0,0,1" BorderBrush="#40FFFFFF">
+          <StackPanel Orientation="Horizontal">
           <ItemsControl ItemsSource="{Binding Tabs}" Focusable="False">
             <ItemsControl.ItemsPanel>
               <ItemsPanelTemplate>
@@ -651,24 +652,93 @@
               </DataTemplate>
             </ItemsControl.ItemTemplate>
           </ItemsControl>
+          <!-- The Changes tab (#444): the line's changed files. Only where the panel has the line's checkout; no arrow, it is not on GitHub.
+               In front it has the state pill's amber. -->
+          <Border CornerRadius="6,6,0,0" Margin="0,0,4,0" Visibility="{Binding Changes, Converter={StaticResource NullToCollapsed}}">
+            <Border.Style>
+              <Style TargetType="Border">
+                <Setter Property="Background" Value="Transparent" />
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding IsChangesShown}" Value="True">
+                    <Setter Property="Background" Value="{StaticResource AmberPillBack}" />
+                  </DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </Border.Style>
+            <Button Command="{Binding ShowChangesCommand}" AutomationProperties.Name="{Binding Changes.TabAutomationName}">
+              <Button.Style>
+                <Style TargetType="Button" BasedOn="{StaticResource GitHubTabButton}">
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding IsChangesShown}" Value="True">
+                      <Setter Property="Foreground" Value="{StaticResource AmberPillText}" />
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </Button.Style>
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Text="{Binding Changes.TabName}" />
+                <Grid Margin="4,0,0,0">
+                  <TextBlock Text="999+" Visibility="Hidden" Typography.NumeralAlignment="Tabular" />
+                  <TextBlock Text="{Binding Changes.CountText}" Typography.NumeralAlignment="Tabular" />
+                </Grid>
+              </StackPanel>
+            </Button>
+          </Border>
+          </StackPanel>
         </Border>
-        <!-- Always there, so a copy line does not move the rows under the pointer. -->
+        <!-- Always there, so a copy line does not move the rows under the pointer. The Changes tab copies paths, the GitHub tabs links. -->
         <DockPanel DockPanel.Dock="Top" Margin="16,0,16,8">
           <Button DockPanel.Dock="Left" Content="Copy all links" Command="{Binding CopyAllLinksCommand}" Padding="8,2" VerticalAlignment="Top"
-                  AutomationProperties.Name="Copy all links" ToolTip="Puts the link of every row on the clipboard, one to a line" />
+                  AutomationProperties.Name="Copy all links" ToolTip="Puts the link of every row on the clipboard, one to a line"
+                  Visibility="{Binding IsChangesShown, Converter={StaticResource BoolCollapsed}}" />
+          <Button DockPanel.Dock="Left" Content="Copy all paths" Command="{Binding CopyAllPathsCommand}" Padding="8,2" VerticalAlignment="Top"
+                  AutomationProperties.Name="Copy all paths" ToolTip="Puts the full path of every changed file on the clipboard, one to a line"
+                  Visibility="{Binding IsChangesShown, Converter={StaticResource BoolVisible}}" />
           <!-- One line: a second would push the rows down, and back when it goes. -->
           <TextBlock Text="{Binding CopyMessage}" ToolTip="{Binding CopyMessage}" Margin="8,0,0,0" Opacity="0.7" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
         </DockPanel>
         <TextBlock Style="{StaticResource GitHubFailureLine}" Text="{Binding OpenMessage}" />
-        <TextBlock Style="{StaticResource GitHubFailureLine}" Text="{Binding Shown.LoadMessage}" />
-        <TextBlock Style="{StaticResource GitHubFailureLine}" Text="{Binding Shown.CutShortMessage}" />
-        <TextBlock Style="{StaticResource GitHubFailureLine}" Text="{Binding Shown.SkippedMessage}" />
-        <TextBlock Style="{StaticResource GitHubDimLine}" Text="{Binding Shown.LoadingMessage}" />
-        <TextBlock Style="{StaticResource GitHubDimLine}" Text="{Binding Shown.EmptyText}" />
+        <!-- the GitHub list's lines, while a GitHub tab is in front -->
+        <StackPanel DockPanel.Dock="Top" Visibility="{Binding IsChangesShown, Converter={StaticResource BoolCollapsed}}">
+          <TextBlock Style="{StaticResource GitHubFailureLine}" Text="{Binding Shown.LoadMessage}" />
+          <TextBlock Style="{StaticResource GitHubFailureLine}" Text="{Binding Shown.CutShortMessage}" />
+          <TextBlock Style="{StaticResource GitHubFailureLine}" Text="{Binding Shown.SkippedMessage}" />
+          <TextBlock Style="{StaticResource GitHubDimLine}" Text="{Binding Shown.LoadingMessage}" />
+          <TextBlock Style="{StaticResource GitHubDimLine}" Text="{Binding Shown.EmptyText}" />
+        </StackPanel>
+        <!-- in a panel of its own, so the line's style still collapses it while the tab has rows (review of #444) -->
+        <StackPanel DockPanel.Dock="Top" Visibility="{Binding IsChangesShown, Converter={StaticResource BoolVisible}}">
+          <TextBlock Style="{StaticResource GitHubDimLine}" Text="{Binding Changes.EmptyText}" />
+        </StackPanel>
         <!-- the tab in front shows its rows; the other keeps its list, scrolled where it was -->
         <Grid>
           <ItemsControl ItemsSource="{Binding PullRequests.Rows}" Tag="{Binding PullRequests}" Style="{StaticResource GitHubRows}" />
           <ItemsControl ItemsSource="{Binding Issues.Rows}" Tag="{Binding Issues}" Style="{StaticResource GitHubRows}" />
+          <!-- The Changes tab's rows (#444): what happened, the path from the checkout's top (the full one in its tooltip), and two
+               buttons, each a Tab stop: there is no row button to open. -->
+          <ItemsControl ItemsSource="{Binding Changes.Rows}" Tag="{Binding Changes}">
+            <ItemsControl.Style>
+              <Style TargetType="ItemsControl" BasedOn="{StaticResource GitHubRows}">
+                <Setter Property="ItemTemplate">
+                  <Setter.Value>
+                    <DataTemplate>
+                      <DockPanel Margin="8,1,0,1">
+                        <Button DockPanel.Dock="Right" Command="{Binding DataContext.CopyFolderPathCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"
+                                Content="&#xE8C8;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Cursor="Hand" Background="Transparent" BorderThickness="0" Padding="6,2" Margin="2,0,0,0"
+                                VerticalAlignment="Center" ToolTip="Copy folder path" AutomationProperties.Name="{Binding CopyFolderName}" />
+                        <Button DockPanel.Dock="Right" Command="{Binding DataContext.OpenFolderCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"
+                                Content="&#xE838;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Cursor="Hand" Background="Transparent" BorderThickness="0" Padding="6,2" Margin="2,0,0,0"
+                                VerticalAlignment="Center" ToolTip="Open folder" AutomationProperties.Name="{Binding OpenFolderName}" />
+                        <TextBlock DockPanel.Dock="Left" Text="{Binding StateText}" Width="64" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center"
+                                   Foreground="{StaticResource AmberPillText}" />
+                        <TextBlock Text="{Binding DisplayPath}" ToolTip="{Binding FullPath}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                      </DockPanel>
+                    </DataTemplate>
+                  </Setter.Value>
+                </Setter>
+              </Style>
+            </ItemsControl.Style>
+          </ItemsControl>
         </Grid>
       </DockPanel>
     </Border>

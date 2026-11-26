@@ -1,3 +1,5 @@
+using CodeSwitchX.Core.Workspaces;
+
 namespace CodeSwitchX.UI.Yard;
 
 /// <summary>
@@ -10,7 +12,9 @@ namespace CodeSwitchX.UI.Yard;
 /// <param name="GitDir">The checkout's git directory; null when git could not tell, and the folder stands in for it.</param>
 /// <param name="ChangedFiles">Changed files git tracks when the panel opened (#429; the Yard keeps the panel's up to date); null when git could not tell.</param>
 /// <param name="ReadGit">Reads the checkout's git now, not at the next round (#429); the Yard brings the panel up to date with what it finds. Null where nobody can.</param>
-public sealed record PanelCheckout(string Path, string? Branch, Func<bool> ChatIsWorking, YardGitJobs Jobs, string? GitDir = null, int? ChangedFiles = null, Action? ReadGit = null)
+/// <param name="Files">The changed files when the panel opened, for its Changes tab (#444; the Yard keeps them up to date); null when git could not tell.</param>
+public sealed record PanelCheckout(string Path, string? Branch, Func<bool> ChatIsWorking, YardGitJobs Jobs, string? GitDir = null, int? ChangedFiles = null, Action? ReadGit = null,
+    ChangedFileList? Files = null)
 {
     /// <summary>
     /// What the Yard's jobs know the checkout by (#412): its repository's git directory, so two lines of one checkout share one job, and so
