@@ -57,6 +57,14 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     /// <summary>The idle compaction writes, each behind the one before, on the pool only. Under <see cref="_saveGate"/>.</summary>
     private Task _idleCompactionWrites = Task.CompletedTask;
+
+    /// <summary>
+    /// A save of the run under way failed (review of #450): its message stays, and a save behind it that succeeds does not
+    /// put "saved" over it, or the control that jumps back to the file would have no reason on screen. Read and set only
+    /// where a save tells its outcome, which happens one save after another.
+    /// </summary>
+    private bool _idleCompactionSaveFailed;
+
     private readonly Lock _saveGate = new();
     private readonly Dictionary<string, Func<CancellationToken, Task>> _pendingSaves = [];
     private Task _drain = Task.CompletedTask;
@@ -1054,14 +1062,16 @@ public sealed partial class SettingsViewModel : ObservableObject
             var (written, failure) = await write;
             if (failure is ClaudeSettingsException)
             {
+                _idleCompactionSaveFailed = true;
                 LastMessage = failure.Message;
             }
             else if (failure is not null)
             {
+                _idleCompactionSaveFailed = true;
                 _logger.LogError(failure, "Saving idle compaction failed");
                 LastMessage = "Idle compaction could not be saved. The log says why.";
             }
-            else if (written)
+            else if (written && !_idleCompactionSaveFailed)
             {
                 LastMessage = $"Idle compaction saved to {SettingsFile}.";
             }
@@ -1070,6 +1080,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         {
             if (Interlocked.Decrement(ref _idleCompactionSaves) == 0)
             {
+                _idleCompactionSaveFailed = false;
                 ShowIdleCompaction();
             }
         }

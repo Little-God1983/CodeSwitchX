@@ -224,6 +224,8 @@ public partial class SettingsViewModelTests
         {
             _vm.IdleCompaction = false;
             _vm.Refresh();
+
+            _vm.IdleCompaction.ShouldBeFalse("the file does not hold the change yet: read now, the switch would jump back");
         }
         finally
         {
@@ -234,6 +236,40 @@ public partial class SettingsViewModelTests
 
         _vm.IdleCompaction.ShouldBeFalse();
         IdleJson()["idleCompaction"]!.GetValueKind().ShouldBe(JsonValueKind.False);
+    }
+
+    /// <summary>
+    /// The size cannot be saved (<c>env</c> is no object) and the picker goes back; the switch queued behind it is saved. The
+    /// message stays the failure's: "saved" over it would leave the picker's jump back unexplained (review of #450).
+    /// </summary>
+    [Fact]
+    public async Task A_failed_save_keeps_its_message_when_one_queued_behind_it_succeeds()
+    {
+        IdleFile("""{"env":"x"}""");
+        await _vm.LoadAsync(CancellationToken.None);
+
+        _vm.IdleCompactionMinTokens = 150_000;
+        _vm.IdleCompaction = false;
+        await _vm.IdleCompactionSaved;
+
+        _vm.LastMessage.ShouldNotBeNull().ShouldContain("is not an object");
+        IdleJson()["idleCompaction"]!.GetValueKind().ShouldBe(JsonValueKind.False);
+        _vm.IdleCompactionMinTokens.ShouldBe(200_000);
+    }
+
+    /// <summary>A failure of an earlier run does not silence the next run's "saved".</summary>
+    [Fact]
+    public async Task A_save_after_a_failed_run_says_saved_again()
+    {
+        IdleFile("""{"env":"x"}""");
+        await _vm.LoadAsync(CancellationToken.None);
+        _vm.IdleCompactionMinTokens = 150_000;
+        await _vm.IdleCompactionSaved;
+
+        _vm.IdleCompaction = false;
+        await _vm.IdleCompactionSaved;
+
+        _vm.LastMessage.ShouldNotBeNull().ShouldContain("Idle compaction saved");
     }
 
     /// <summary>
