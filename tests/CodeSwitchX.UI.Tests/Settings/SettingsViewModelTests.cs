@@ -23,7 +23,7 @@ using NSubstitute;
 
 namespace CodeSwitchX.UI.Tests.Settings;
 
-public class SettingsViewModelTests : IDisposable
+public partial class SettingsViewModelTests : IDisposable
 {
     private readonly AppPaths _paths = new(Path.Combine(Path.GetTempPath(), "csx-settings-" + Guid.NewGuid().ToString("N")));
     private readonly ClaudeCodePaths _claude;
