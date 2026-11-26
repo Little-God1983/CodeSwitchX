@@ -167,6 +167,46 @@ public partial class SettingsViewModelTests
         File.Exists(_claude.SettingsFile).ShouldBeFalse();
     }
 
+    /// <summary>The switch writes only itself: the size the page still showed does not go over the file's (review of #450).</summary>
+    [Fact]
+    public async Task A_size_changed_in_the_file_meanwhile_survives_a_flip_of_the_switch()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+        IdleFile("""{"env":{"CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS":"300000"}}""");
+
+        _vm.IdleCompaction = false;
+        await _vm.IdleCompactionSaved;
+
+        IdleJson()["env"]![MinTokensKey]!.GetValue<string>().ShouldBe("300000");
+    }
+
+    [Fact]
+    public async Task A_size_that_is_no_choice_survives_a_flip_of_the_switch()
+    {
+        IdleFile("""{"env":{"CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS":"250000"}}""");
+        await _vm.LoadAsync(CancellationToken.None);
+
+        _vm.IdleCompaction = false;
+        await _vm.IdleCompactionSaved;
+
+        IdleJson()["env"]![MinTokensKey]!.GetValue<string>().ShouldBe("250000");
+    }
+
+    /// <summary>Grouped digits: Claude Code reads them in a way the page does not mirror, so it shows no size (review of #450).</summary>
+    [Fact]
+    public async Task A_size_the_page_cannot_be_sure_of_is_shown_as_no_selection()
+    {
+        const string json = """{"env":{"CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS":"150,000"}}""";
+        IdleFile(json);
+
+        await _vm.LoadAsync(CancellationToken.None);
+        await _vm.IdleCompactionSaved;
+
+        _vm.IdleCompactionMinTokens.ShouldBe(0);
+        _vm.IdleCompactionChoices.Select(c => c.Value).ShouldBe([100_000, 150_000, 200_000, 300_000, 400_000]);
+        File.ReadAllText(_claude.SettingsFile).ShouldBe(json);
+    }
+
     [Fact]
     public void Tokens_are_written_with_commas_in_any_locale()
     {

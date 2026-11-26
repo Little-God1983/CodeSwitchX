@@ -204,7 +204,10 @@ public sealed partial class SettingsViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(IdleCompactionSizeEnabled))]
     private bool _idleCompaction = true;
 
-    /// <summary>The chat size, in tokens, from which Claude Code compacts an idle chat (#450): one of <see cref="IdleCompactionChoices"/>.</summary>
+    /// <summary>
+    /// The chat size, in tokens, from which Claude Code compacts an idle chat (#450): one of <see cref="IdleCompactionChoices"/>,
+    /// or 0, no selection, while the file holds a size the page cannot be sure how Claude Code reads.
+    /// </summary>
     [ObservableProperty] private int _idleCompactionMinTokens = IdleCompactionSetting.DefaultMinTokens;
 
     /// <summary>The sizes the Yard page offers (#450): <see cref="IdleCompactionSizes"/>, and the file's own size, in order, when it is none of them.</summary>
@@ -230,8 +233,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>Done once every idle compaction change so far is written, or failed (#450); it never faults. For tests.</summary>
     internal Task IdleCompactionSaved { get; private set; } = Task.CompletedTask;
 
-    private static IReadOnlyList<SettingChoice> IdleCompactionChoicesWith(int minTokens) =>
-        [.. IdleCompactionSizes.Append(minTokens).Distinct().Order().Select(t => new SettingChoice(t, TokensText(t)))];
+    /// <summary>The listed sizes, and <paramref name="minTokens"/> among them when it is none; null adds nothing.</summary>
+    private static IReadOnlyList<SettingChoice> IdleCompactionChoicesWith(int? minTokens) =>
+        [.. IdleCompactionSizes.Concat(minTokens is { } own ? [own] : []).Distinct().Order().Select(t => new SettingChoice(t, TokensText(t)))];
 
     /// <summary>
     /// The sidebar shows only the pages' icons, so a narrow window keeps room for the page (#162); the shell sets it from
@@ -670,7 +674,8 @@ public sealed partial class SettingsViewModel : ObservableObject
             }
 
             IdleCompaction = value.Enabled;
-            IdleCompactionMinTokens = value.MinTokens;
+            // A size the page cannot be sure of is no selection: 0 matches no choice (review of #450).
+            IdleCompactionMinTokens = value.MinTokens ?? 0;
             IdleCompactionProblem = null;
         }
         catch (ClaudeSettingsException ex)
@@ -967,30 +972,31 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     partial void OnYardMaxChatsChanged(int value) => Persist(SettingKeys.YardMaxChats, value);
 
-    partial void OnIdleCompactionChanged(bool value) => SaveIdleCompaction();
+    partial void OnIdleCompactionChanged(bool value) => SaveIdleCompaction(value, null);
 
-    /// <summary>A picker whose items change under it sets its value to 0 for a moment: no size Claude Code takes, so not saved.</summary>
+    /// <summary>
+    /// A picker whose items change under it sets its value to 0 for a moment, and 0 is what the page shows for a size it cannot
+    /// read: no size Claude Code takes, so not saved.
+    /// </summary>
     partial void OnIdleCompactionMinTokensChanged(int value)
     {
         if (value >= IdleCompactionSetting.LowestMinTokens)
         {
-            SaveIdleCompaction();
+            SaveIdleCompaction(null, value);
         }
     }
 
     /// <summary>
-    /// Queues a write of both values as they are now (#450), behind the writes before it, so two quick changes land in order.
-    /// Showing the file is no change.
+    /// Queues a write of the value the user changed, and only that one (#450, review): the other may have changed in the file
+    /// since the page read it. Behind the writes before it, so two quick changes land in order. Showing the file is no change.
     /// </summary>
-    private void SaveIdleCompaction()
+    private void SaveIdleCompaction(bool? enabled, int? minTokens)
     {
         if (_showingIdleCompaction || _loading)
         {
             return;
         }
 
-        var enabled = IdleCompaction;
-        var minTokens = IdleCompactionMinTokens;
         IdleCompactionSaved = SaveIdleCompactionAsync(IdleCompactionSaved, enabled, minTokens);
     }
 
@@ -998,12 +1004,12 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// Off the UI thread, as the hook install is: the file replace is retried for about half a second while another process
     /// holds settings.json. A failure says why and shows the file again, so the controls never claim what it does not hold.
     /// </summary>
-    private async Task SaveIdleCompactionAsync(Task before, bool enabled, int minTokens)
+    private async Task SaveIdleCompactionAsync(Task before, bool? enabled, int? minTokens)
     {
         await before;
         try
         {
-            if (await Task.Run(() => _idleCompactionSetting.Write(new(enabled, minTokens))))
+            if (await Task.Run(() => _idleCompactionSetting.Write(enabled, minTokens)))
             {
                 LastMessage = $"Idle compaction saved to {SettingsFile}.";
             }

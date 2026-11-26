@@ -64,7 +64,6 @@ public class IdleCompactionSettingTests : IDisposable
 
     [Theory]
     [InlineData("\"150000\"", 150_000)]
-    [InlineData("150000", 150_000)]
     [InlineData("\"250000\"", 250_000)]
     public void Read_takes_the_size_from_env(string json, int tokens)
     {
@@ -73,19 +72,40 @@ public class IdleCompactionSettingTests : IDisposable
         _setting.Read().MinTokens.ShouldBe(tokens);
     }
 
+    /// <summary>Claude Code 2.1.332 takes a size below 1 as unset and raises any other below 100,000 (review of #450).</summary>
     [Theory]
     [InlineData("\"50000\"", 100_000)]
-    [InlineData("\"0\"", 100_000)]
-    [InlineData("\"abc\"", 200_000)]
-    [InlineData("\"\"", 200_000)]
-    [InlineData("\"1.5\"", 200_000)]
-    [InlineData("true", 200_000)]
+    [InlineData("\"0\"", 200_000)]
+    [InlineData("\"-5\"", 200_000)]
+    [InlineData("\" 150000 \"", 150_000)]
+    [InlineData("\"+150000\"", 150_000)]
     [InlineData("\"99999999999\"", int.MaxValue)]
+    [InlineData("\"99999999999999999999999\"", int.MaxValue)]
     public void Read_treats_an_odd_size_as_Claude_Code_does(string json, int tokens)
     {
         WriteSettings("""{"env":{"CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS":""" + json + "}}");
 
         _setting.Read().MinTokens.ShouldBe(tokens);
+    }
+
+    /// <summary>
+    /// Claude Code reads some of these (grouped digits, an exponent) in ways this app does not mirror: no size is shown rather
+    /// than a guess (review of #450).
+    /// </summary>
+    [Theory]
+    [InlineData("\"abc\"")]
+    [InlineData("\"\"")]
+    [InlineData("\"1.5\"")]
+    [InlineData("\"150,000\"")]
+    [InlineData("\"1.5e5\"")]
+    [InlineData("true")]
+    [InlineData("150000")]
+    [InlineData("null")]
+    public void Read_of_a_size_it_cannot_be_sure_of_is_no_size(string json)
+    {
+        WriteSettings("""{"env":{"CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS":""" + json + "}}");
+
+        _setting.Read().MinTokens.ShouldBeNull();
     }
 
     [Fact]
@@ -117,7 +137,7 @@ public class IdleCompactionSettingTests : IDisposable
     {
         WriteSettings("""{"model":"x","hooks":{"Stop":[]}}""");
 
-        var written = _setting.Write(new IdleCompaction(false, 200_000));
+        var written = _setting.Write(false, 200_000);
 
         written.ShouldBeTrue();
         var settings = Settings();
@@ -133,7 +153,7 @@ public class IdleCompactionSettingTests : IDisposable
     {
         WriteSettings("""{"idleCompaction":false,"model":"x"}""");
 
-        var written = _setting.Write(new IdleCompaction(true, 200_000));
+        var written = _setting.Write(true, 200_000);
 
         written.ShouldBeTrue();
         var settings = Settings();
@@ -146,7 +166,7 @@ public class IdleCompactionSettingTests : IDisposable
     {
         WriteSettings("""{"env":{"FOO":"bar"}}""");
 
-        _setting.Write(new IdleCompaction(true, 100_000));
+        _setting.Write(true, 100_000);
 
         var env = Settings()["env"]!.AsObject();
         env["CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS"]!.GetValueKind().ShouldBe(JsonValueKind.String);
@@ -159,7 +179,7 @@ public class IdleCompactionSettingTests : IDisposable
     {
         WriteSettings("{}");
 
-        _setting.Write(new IdleCompaction(true, 150_000));
+        _setting.Write(true, 150_000);
 
         Settings()["env"]!["CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS"]!.GetValue<string>().ShouldBe("150000");
     }
@@ -169,7 +189,7 @@ public class IdleCompactionSettingTests : IDisposable
     {
         WriteSettings("""{"env":{"CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS":"100000"}}""");
 
-        _setting.Write(new IdleCompaction(true, 200_000));
+        _setting.Write(true, 200_000);
 
         Settings().ContainsKey("env").ShouldBeFalse();
     }
@@ -179,7 +199,7 @@ public class IdleCompactionSettingTests : IDisposable
     {
         WriteSettings("""{"env":{"FOO":"bar","CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS":"100000"}}""");
 
-        _setting.Write(new IdleCompaction(true, 200_000));
+        _setting.Write(true, 200_000);
 
         Settings()["env"]!.AsObject().Select(kv => kv.Key).ShouldBe(["FOO"]);
     }
@@ -190,7 +210,7 @@ public class IdleCompactionSettingTests : IDisposable
         // 50,000 counts as 100,000: what the file says already, so the entry is not rewritten.
         WriteSettings("""{"idleCompaction":true,"env":{"CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS":"50000"}}""");
 
-        _setting.Write(new IdleCompaction(false, 100_000));
+        _setting.Write(false, 100_000);
 
         var settings = Settings();
         settings["idleCompaction"]!.GetValueKind().ShouldBe(JsonValueKind.False);
@@ -204,7 +224,7 @@ public class IdleCompactionSettingTests : IDisposable
         WriteSettings(json);
         var writtenAt = File.GetLastWriteTimeUtc(_paths.SettingsFile);
 
-        var written = _setting.Write(new IdleCompaction(false, 200_000));
+        var written = _setting.Write(false, 200_000);
 
         written.ShouldBeFalse();
         File.ReadAllText(_paths.SettingsFile).ShouldBe(json);
@@ -215,7 +235,7 @@ public class IdleCompactionSettingTests : IDisposable
     [Fact]
     public void Write_of_the_defaults_without_a_file_creates_none()
     {
-        var written = _setting.Write(new IdleCompaction(true, 200_000));
+        var written = _setting.Write(true, 200_000);
 
         written.ShouldBeFalse();
         File.Exists(_paths.SettingsFile).ShouldBeFalse();
@@ -224,7 +244,7 @@ public class IdleCompactionSettingTests : IDisposable
     [Fact]
     public void Write_off_without_a_file_creates_it()
     {
-        var written = _setting.Write(new IdleCompaction(false, 200_000));
+        var written = _setting.Write(false, 200_000);
 
         written.ShouldBeTrue();
         _setting.Read().ShouldBe(new IdleCompaction(false, 200_000));
@@ -236,7 +256,7 @@ public class IdleCompactionSettingTests : IDisposable
         const string json = """{"env":"x"}""";
         WriteSettings(json);
 
-        Should.Throw<ClaudeSettingsException>(() => _setting.Write(new IdleCompaction(true, 100_000)));
+        Should.Throw<ClaudeSettingsException>(() => _setting.Write(true, 100_000));
 
         File.ReadAllText(_paths.SettingsFile).ShouldBe(json);
     }
@@ -244,7 +264,7 @@ public class IdleCompactionSettingTests : IDisposable
     [Fact]
     public void Write_below_the_floor_throws()
     {
-        Should.Throw<ArgumentOutOfRangeException>(() => _setting.Write(new IdleCompaction(true, 99_999)));
+        Should.Throw<ArgumentOutOfRangeException>(() => _setting.Write(true, 99_999));
     }
 
     [Fact]
@@ -252,9 +272,54 @@ public class IdleCompactionSettingTests : IDisposable
     {
         WriteSettings("{}");
 
-        _setting.Write(new IdleCompaction(false, 300_000));
+        _setting.Write(false, 300_000);
 
         _setting.Read().ShouldBe(new IdleCompaction(false, 300_000));
+    }
+
+    /// <summary>The switch alone is written: a size changed in the file since the page read it stays (review of #450).</summary>
+    [Fact]
+    public void Write_of_the_switch_alone_leaves_a_size_changed_meanwhile()
+    {
+        WriteSettings("""{"env":{"CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS":"300000"}}""");
+
+        _setting.Write(false, null);
+
+        var settings = Settings();
+        settings["env"]!["CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS"]!.GetValue<string>().ShouldBe("300000");
+        settings["idleCompaction"]!.GetValueKind().ShouldBe(JsonValueKind.False);
+    }
+
+    [Fact]
+    public void Write_of_the_size_alone_leaves_the_switch()
+    {
+        WriteSettings("""{"idleCompaction":false}""");
+
+        _setting.Write(null, 150_000);
+
+        var settings = Settings();
+        settings["idleCompaction"]!.GetValueKind().ShouldBe(JsonValueKind.False);
+        settings["env"]!["CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS"]!.GetValue<string>().ShouldBe("150000");
+    }
+
+    [Fact]
+    public void Write_of_a_size_over_one_it_could_not_read_writes_it()
+    {
+        WriteSettings("""{"env":{"CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS":"150,000"}}""");
+
+        _setting.Write(null, 150_000);
+
+        Settings()["env"]!["CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS"]!.GetValue<string>().ShouldBe("150000");
+    }
+
+    [Fact]
+    public void Write_of_the_switch_leaves_a_size_it_could_not_read()
+    {
+        WriteSettings("""{"env":{"CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS":"150,000"}}""");
+
+        _setting.Write(false, null);
+
+        Settings()["env"]!["CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS"]!.GetValue<string>().ShouldBe("150,000");
     }
 
     /// <summary>
@@ -271,7 +336,7 @@ public class IdleCompactionSettingTests : IDisposable
         var held = new FileStream(_paths.SettingsFile, FileMode.Open, FileAccess.Read, FileShare.Read);
         try
         {
-            flip = Task.Run(() => _setting.Write(new IdleCompaction(false, 200_000)), TestContext.Current.CancellationToken);
+            flip = Task.Run(() => _setting.Write(false, null), TestContext.Current.CancellationToken);
             install = Task.Run(() => installer.Install(HookExe), TestContext.Current.CancellationToken);
             await Task.Delay(TimeSpan.FromMilliseconds(150), TestContext.Current.CancellationToken);
         }

@@ -7,8 +7,11 @@ using Microsoft.Extensions.Logging;
 namespace CodeSwitchX.Ingest.ClaudeSettings;
 
 /// <param name="Enabled">Whether Claude Code compacts an idle chat before its cache runs out.</param>
-/// <param name="MinTokens">The context size, in tokens, from which it does.</param>
-public sealed record IdleCompaction(bool Enabled, int MinTokens);
+/// <param name="MinTokens">
+/// The context size, in tokens, from which it does; null when the file holds a size this app cannot be sure how Claude Code
+/// reads (review of #450).
+/// </param>
+public sealed record IdleCompaction(bool Enabled, int? MinTokens);
 
 /// <summary>
 /// Claude Code's own compaction of an idle chat, as its user-level settings.json holds it: <c>idleCompaction</c> and the size
@@ -41,31 +44,38 @@ public sealed class IdleCompactionSetting
     public IdleCompaction Read() => Of(_file.Load(Touch));
 
     /// <summary>
-    /// Writes what differs from <see cref="Read"/>, and nothing else: a value the file holds in a form of its own stays as it
-    /// is until it is changed. Whether the file was written. Throws <see cref="ClaudeSettingsException"/>.
+    /// Writes the given values where they differ from <see cref="Read"/>; null leaves that one alone, so a value changed in the
+    /// file meanwhile is not overwritten by the other control (review of #450). A value the file holds in a form of its own
+    /// stays as it is until it is changed. Whether the file was written. Throws <see cref="ClaudeSettingsException"/>.
     /// </summary>
-    public bool Write(IdleCompaction value)
+    public bool Write(bool? enabled, int? minTokens)
     {
-        ArgumentOutOfRangeException.ThrowIfLessThan(value.MinTokens, LowestMinTokens);
+        if (minTokens is { } tokens)
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(tokens, LowestMinTokens, nameof(minTokens));
+        }
 
         // One writer of settings.json at a time: the hook installer writes it too (review of #450).
-        return _file.Locked(() => WriteAlone(value));
+        return _file.Locked(() => WriteAlone(enabled, minTokens));
     }
 
-    private bool WriteAlone(IdleCompaction value)
+    private bool WriteAlone(bool? enabled, int? minTokens)
     {
         var settings = _file.Load(Touch);
         var before = ClaudeSettingsFile.TextOf(settings);
         var now = Of(settings);
+        List<string> written = [];
 
-        if (value.MinTokens != now.MinTokens)
+        // A size the file holds in a form this app cannot be sure of reads as null, which differs from any size given.
+        if (minTokens is { } tokens && tokens != now.MinTokens)
         {
-            SetMinTokens(settings, value.MinTokens);
+            SetMinTokens(settings, tokens);
+            written.Add(string.Create(CultureInfo.InvariantCulture, $"from {tokens} tokens"));
         }
 
-        if (value.Enabled != now.Enabled)
+        if (enabled is { } on && on != now.Enabled)
         {
-            if (value.Enabled)
+            if (on)
             {
                 settings.Remove(Key);
             }
@@ -73,6 +83,8 @@ public sealed class IdleCompactionSetting
             {
                 settings[Key] = false;
             }
+
+            written.Add(on ? "on" : "off");
         }
 
         // Nothing changed: no backup, and no file created where there was none.
@@ -82,7 +94,7 @@ public sealed class IdleCompactionSetting
         }
 
         _file.Save(settings, before);
-        _logger.LogInformation("Idle compaction in {File}: {Enabled}, from {MinTokens} tokens", _paths.SettingsFile, value.Enabled, value.MinTokens);
+        _logger.LogInformation("Idle compaction in {File}: {Written}", _paths.SettingsFile, string.Join(", ", written));
         return true;
     }
 
@@ -122,42 +134,48 @@ public sealed class IdleCompactionSetting
         env[EnvKey] = minTokens.ToString(CultureInfo.InvariantCulture);
     }
 
-    /// <summary>Claude Code's reading: off only for the boolean false; the size an integer, raised to the lowest.</summary>
+    /// <summary>Claude Code's reading: off only for the boolean false; the size a plain integer, raised to the lowest.</summary>
     private static IdleCompaction Of(JsonObject settings)
     {
         var enabled = settings[Key] is not JsonValue flag || flag.GetValueKind() != JsonValueKind.False;
         return new IdleCompaction(enabled, MinTokensOf(settings));
     }
 
-    private static int MinTokensOf(JsonObject settings)
+    /// <summary>
+    /// The size as Claude Code 2.1.332 reads a plain integer (review of #450): the entry trimmed, an optional sign and digits;
+    /// below 1 it counts as unset, anything else is raised to <see cref="LowestMinTokens"/>. Any other form (grouped digits,
+    /// an exponent, not a string) is null: Claude Code accepts some of them, and this does not guess how.
+    /// </summary>
+    private static int? MinTokensOf(JsonObject settings)
     {
-        if (settings[Env] is not JsonObject env || env[EnvKey] is not JsonValue entry)
+        if (settings[Env] is not JsonObject env || !env.TryGetPropertyValue(EnvKey, out var entry))
         {
             return DefaultMinTokens;
         }
 
-        long tokens;
-        switch (entry.GetValueKind())
+        if (entry is not JsonValue value || value.GetValueKind() != JsonValueKind.String)
         {
-            case JsonValueKind.String:
-                if (!long.TryParse(entry.GetValue<string>(), NumberStyles.None, CultureInfo.InvariantCulture, out tokens))
-                {
-                    return DefaultMinTokens;
-                }
-
-                break;
-            case JsonValueKind.Number:
-                if (!entry.TryGetValue(out tokens))
-                {
-                    return DefaultMinTokens;
-                }
-
-                break;
-            default:
-                return DefaultMinTokens;
+            return null;
         }
 
-        return (int)Math.Clamp(tokens, LowestMinTokens, int.MaxValue);
+        var text = value.GetValue<string>().Trim();
+        var negative = text.StartsWith('-');
+        var digits = negative || text.StartsWith('+') ? text[1..] : text;
+        if (digits.Length == 0 || !digits.All(char.IsAsciiDigit))
+        {
+            return null;
+        }
+
+        digits = digits.TrimStart('0');
+        if (digits.Length == 0 || negative)
+        {
+            return DefaultMinTokens; // zero or below: unset
+        }
+
+        // More digits than int.MaxValue has is above it, whatever they are; a long holds any ten.
+        return digits.Length > 10
+            ? int.MaxValue
+            : (int)Math.Clamp(long.Parse(digits, NumberStyles.None, CultureInfo.InvariantCulture), LowestMinTokens, int.MaxValue);
     }
 
     /// <summary>The root and <c>env</c>, all this reads or edits, so a repeated key there is refused when the file is loaded.</summary>
