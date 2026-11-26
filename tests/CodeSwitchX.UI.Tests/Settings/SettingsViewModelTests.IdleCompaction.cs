@@ -301,6 +301,42 @@ public partial class SettingsViewModelTests
     }
 
     /// <summary>
+    /// The app's exit blocks the UI thread while it flushes (App.OnExit): the flush waits for the write, which runs on the
+    /// pool, and not for what the save does on the UI thread afterwards, or the exit would stall until its time is up.
+    /// </summary>
+    [Fact]
+    public async Task Flushing_idle_compaction_does_not_wait_for_a_blocked_UI_thread()
+    {
+        IdleFile("""{"model":"x"}""");
+        await _vm.LoadAsync(CancellationToken.None);
+        var context = SynchronizationContext.Current;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        Task flush;
+        SynchronizationContext.SetSynchronizationContext(new BlockedContext());
+        try
+        {
+            _vm.IdleCompaction = false;
+            flush = _vm.FlushSavesAsync(timeout.Token);
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(context);
+        }
+
+        await flush;
+
+        IdleJson()["idleCompaction"]!.GetValueKind().ShouldBe(JsonValueKind.False);
+    }
+
+    /// <summary>A UI thread that runs nothing posted to it, as one blocked in the app's exit.</summary>
+    private sealed class BlockedContext : SynchronizationContext
+    {
+        public override void Post(SendOrPostCallback d, object? state)
+        {
+        }
+    }
+
+    /// <summary>
     /// settings.json open for reading by "another process": a write retries its replace for about half a second, so a save
     /// stays under way until the stream is disposed. Dispose it in a finally, or the temp folder cannot be deleted.
     /// </summary>

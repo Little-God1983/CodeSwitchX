@@ -54,6 +54,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// may not hold them yet. Interlocked: the count drops after an await, on the UI thread in the app, on a pool thread in tests.
     /// </summary>
     private int _idleCompactionSaves;
+
+    /// <summary>The idle compaction writes, each behind the one before, on the pool only. Under <see cref="_saveGate"/>.</summary>
+    private Task _idleCompactionWrites = Task.CompletedTask;
     private readonly Lock _saveGate = new();
     private readonly Dictionary<string, Func<CancellationToken, Task>> _pendingSaves = [];
     private Task _drain = Task.CompletedTask;
@@ -1010,33 +1013,58 @@ public sealed partial class SettingsViewModel : ObservableObject
         }
 
         Interlocked.Increment(ref _idleCompactionSaves);
-        IdleCompactionSaved = SaveIdleCompactionAsync(IdleCompactionSaved, enabled, minTokens);
+        Task<(bool Written, Exception? Failure)> write;
+        lock (_saveGate)
+        {
+            write = WriteIdleCompactionAsync(_idleCompactionWrites, enabled, minTokens);
+            _idleCompactionWrites = write;
+        }
+
+        IdleCompactionSaved = ShowIdleCompactionSavedAsync(IdleCompactionSaved, write);
     }
 
     /// <summary>
-    /// Off the UI thread, as the hook install is: the file replace is retried for about half a second while another process
-    /// holds settings.json. A failure says why. The last save of a run shows the file, after success as after failure, so the
-    /// controls never claim what it does not hold, and a failed save does not reset them under one still queued (review of
-    /// #450). It never faults, so the save behind it always runs.
+    /// The write itself, behind the one before it and off the UI thread from start to end, as the hook install is: the file
+    /// replace is retried for about half a second while another process holds settings.json. It never needs the UI thread,
+    /// which the app's exit blocks while it waits for this, and never faults, so the write behind it always runs.
     /// </summary>
-    private async Task SaveIdleCompactionAsync(Task before, bool? enabled, int? minTokens)
+    private async Task<(bool Written, Exception? Failure)> WriteIdleCompactionAsync(Task before, bool? enabled, int? minTokens)
+    {
+        await before.ConfigureAwait(false);
+        try
+        {
+            return (await Task.Run(() => _idleCompactionSetting.Write(enabled, minTokens)).ConfigureAwait(false), null);
+        }
+        catch (Exception ex)
+        {
+            return (false, ex);
+        }
+    }
+
+    /// <summary>
+    /// What a write came to, told on the UI thread, in the order the changes were made. A failure says why. The last save of
+    /// a run shows the file, after success as after failure, so the controls never claim what it does not hold, and a failed
+    /// save does not reset them under one still queued (review of #450). It never faults.
+    /// </summary>
+    private async Task ShowIdleCompactionSavedAsync(Task before, Task<(bool Written, Exception? Failure)> write)
     {
         try
         {
             await before;
-            if (await Task.Run(() => _idleCompactionSetting.Write(enabled, minTokens)))
+            var (written, failure) = await write;
+            if (failure is ClaudeSettingsException)
+            {
+                LastMessage = failure.Message;
+            }
+            else if (failure is not null)
+            {
+                _logger.LogError(failure, "Saving idle compaction failed");
+                LastMessage = "Idle compaction could not be saved. The log says why.";
+            }
+            else if (written)
             {
                 LastMessage = $"Idle compaction saved to {SettingsFile}.";
             }
-        }
-        catch (ClaudeSettingsException ex)
-        {
-            LastMessage = ex.Message;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Saving idle compaction failed");
-            LastMessage = "Idle compaction could not be saved. The log says why.";
         }
         finally
         {
@@ -1226,17 +1254,19 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>
     /// Waits for the saves queued so far. The app's exit calls this before the host stops, so a value changed right
     /// before the exit is in the database at the next start, the way the view and the writer already had it. The idle
-    /// compaction saves too, so a switch flipped right before the exit is in Claude Code's settings.json (review of #450).
+    /// compaction writes too, so a switch flipped right before the exit is in Claude Code's settings.json (review of #450):
+    /// the writes, not <see cref="IdleCompactionSaved"/>, whose last step needs the UI thread the exit is blocking.
     /// </summary>
     public async Task FlushSavesAsync(CancellationToken ct)
     {
         Task drain;
+        Task idleCompaction;
         lock (_saveGate)
         {
             drain = _drain;
+            idleCompaction = _idleCompactionWrites;
         }
 
-        var idleCompaction = IdleCompactionSaved;
         await drain.WaitAsync(ct).ConfigureAwait(false);
         await idleCompaction.WaitAsync(ct).ConfigureAwait(false);
     }
