@@ -48,6 +48,12 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     /// <summary>Set while the page shows what settings.json says, so showing it is not taken for a change to save (#450).</summary>
     private bool _showingIdleCompaction;
+
+    /// <summary>
+    /// Idle compaction saves queued or running (review of #450). While any is, the page is not shown from the file, which
+    /// may not hold them yet. Interlocked: the count drops after an await, on the UI thread in the app, on a pool thread in tests.
+    /// </summary>
+    private int _idleCompactionSaves;
     private readonly Lock _saveGate = new();
     private readonly Dictionary<string, Func<CancellationToken, Task>> _pendingSaves = [];
     private Task _drain = Task.CompletedTask;
@@ -658,10 +664,16 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     /// <summary>
     /// What settings.json says now (#450), read on the calling thread as the hook status is. Unreadable, the card is disabled
-    /// and keeps what it showed; nothing is written until the user changes something.
+    /// and keeps what it showed; nothing is written until the user changes something. Not while a save is queued or running:
+    /// the last of them shows the file once it is done (review of #450).
     /// </summary>
     private void ShowIdleCompaction()
     {
+        if (Volatile.Read(ref _idleCompactionSaves) > 0)
+        {
+            return;
+        }
+
         _showingIdleCompaction = true;
         try
         {
@@ -997,18 +1009,21 @@ public sealed partial class SettingsViewModel : ObservableObject
             return;
         }
 
+        Interlocked.Increment(ref _idleCompactionSaves);
         IdleCompactionSaved = SaveIdleCompactionAsync(IdleCompactionSaved, enabled, minTokens);
     }
 
     /// <summary>
     /// Off the UI thread, as the hook install is: the file replace is retried for about half a second while another process
-    /// holds settings.json. A failure says why and shows the file again, so the controls never claim what it does not hold.
+    /// holds settings.json. A failure says why. The last save of a run shows the file, after success as after failure, so the
+    /// controls never claim what it does not hold, and a failed save does not reset them under one still queued (review of
+    /// #450). It never faults, so the save behind it always runs.
     /// </summary>
     private async Task SaveIdleCompactionAsync(Task before, bool? enabled, int? minTokens)
     {
-        await before;
         try
         {
+            await before;
             if (await Task.Run(() => _idleCompactionSetting.Write(enabled, minTokens)))
             {
                 LastMessage = $"Idle compaction saved to {SettingsFile}.";
@@ -1017,7 +1032,18 @@ public sealed partial class SettingsViewModel : ObservableObject
         catch (ClaudeSettingsException ex)
         {
             LastMessage = ex.Message;
-            ShowIdleCompaction();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Saving idle compaction failed");
+            LastMessage = "Idle compaction could not be saved. The log says why.";
+        }
+        finally
+        {
+            if (Interlocked.Decrement(ref _idleCompactionSaves) == 0)
+            {
+                ShowIdleCompaction();
+            }
         }
     }
 
@@ -1199,7 +1225,8 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     /// <summary>
     /// Waits for the saves queued so far. The app's exit calls this before the host stops, so a value changed right
-    /// before the exit is in the database at the next start, the way the view and the writer already had it.
+    /// before the exit is in the database at the next start, the way the view and the writer already had it. The idle
+    /// compaction saves too, so a switch flipped right before the exit is in Claude Code's settings.json (review of #450).
     /// </summary>
     public async Task FlushSavesAsync(CancellationToken ct)
     {
@@ -1209,7 +1236,9 @@ public sealed partial class SettingsViewModel : ObservableObject
             drain = _drain;
         }
 
+        var idleCompaction = IdleCompactionSaved;
         await drain.WaitAsync(ct).ConfigureAwait(false);
+        await idleCompaction.WaitAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>

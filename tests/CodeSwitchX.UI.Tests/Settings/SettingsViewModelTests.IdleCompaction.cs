@@ -1,7 +1,9 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using CodeSwitchX.Ingest.ClaudeSettings;
 using CodeSwitchX.UI.Settings;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace CodeSwitchX.UI.Tests.Settings;
 
@@ -178,6 +180,7 @@ public partial class SettingsViewModelTests
         await _vm.IdleCompactionSaved;
 
         IdleJson()["env"]![MinTokensKey]!.GetValue<string>().ShouldBe("300000");
+        _vm.IdleCompactionMinTokens.ShouldBe(300_000);
     }
 
     [Fact]
@@ -206,6 +209,102 @@ public partial class SettingsViewModelTests
         _vm.IdleCompactionChoices.Select(c => c.Value).ShouldBe([100_000, 150_000, 200_000, 300_000, 400_000]);
         File.ReadAllText(_claude.SettingsFile).ShouldBe(json);
     }
+
+    /// <summary>
+    /// Held by another process, the write waits; a Refresh meanwhile would read the old file and show it. The page follows
+    /// the file once its saves are done, not before (review of #450).
+    /// </summary>
+    [Fact]
+    public async Task A_refresh_while_a_save_is_under_way_does_not_show_the_old_file()
+    {
+        IdleFile("""{"model":"x"}""");
+        await _vm.LoadAsync(CancellationToken.None);
+        var held = HoldSettingsFile();
+        try
+        {
+            _vm.IdleCompaction = false;
+            _vm.Refresh();
+        }
+        finally
+        {
+            held.Dispose();
+        }
+
+        await _vm.IdleCompactionSaved;
+
+        _vm.IdleCompaction.ShouldBeFalse();
+        IdleJson()["idleCompaction"]!.GetValueKind().ShouldBe(JsonValueKind.False);
+    }
+
+    /// <summary>
+    /// Three saves queued while the file is held: the second fails (a size cannot go into an <c>env</c> that is no object),
+    /// the third still lands, and only then does the page show the file (review of #450).
+    /// </summary>
+    [Fact]
+    public async Task After_a_save_that_failed_a_queued_one_still_lands_and_the_page_shows_the_file()
+    {
+        IdleFile("""{"env":"x"}""");
+        await _vm.LoadAsync(CancellationToken.None);
+        var held = HoldSettingsFile();
+        try
+        {
+            _vm.IdleCompaction = false;
+            _vm.IdleCompactionMinTokens = 150_000;
+            _vm.IdleCompaction = true;
+        }
+        finally
+        {
+            held.Dispose();
+        }
+
+        await _vm.IdleCompactionSaved;
+
+        var file = new IdleCompactionSetting(_claude, NullLogger<IdleCompactionSetting>.Instance).Read();
+        file.ShouldBe(new IdleCompaction(true, 200_000));
+        _vm.IdleCompaction.ShouldBe(file.Enabled);
+        _vm.IdleCompactionMinTokens.ShouldBe(file.MinTokens!.Value);
+    }
+
+    [Fact]
+    public async Task The_problem_line_goes_once_the_file_can_be_read_again()
+    {
+        IdleFile("not json");
+        await _vm.LoadAsync(CancellationToken.None);
+        IdleFile("{}");
+
+        _vm.Refresh();
+
+        _vm.IdleCompactionProblem.ShouldBeNull();
+    }
+
+    /// <summary>The exit flushes the saves: a switch flipped right before it is in the file (review of #450).</summary>
+    [Fact]
+    public async Task Flushing_the_saves_waits_for_idle_compaction()
+    {
+        IdleFile("""{"model":"x"}""");
+        await _vm.LoadAsync(CancellationToken.None);
+        Task flush;
+        var held = HoldSettingsFile();
+        try
+        {
+            _vm.IdleCompaction = false;
+            flush = FlushAsync();
+        }
+        finally
+        {
+            held.Dispose();
+        }
+
+        await flush;
+
+        IdleJson()["idleCompaction"]!.GetValueKind().ShouldBe(JsonValueKind.False);
+    }
+
+    /// <summary>
+    /// settings.json open for reading by "another process": a write retries its replace for about half a second, so a save
+    /// stays under way until the stream is disposed. Dispose it in a finally, or the temp folder cannot be deleted.
+    /// </summary>
+    private FileStream HoldSettingsFile() => new(_claude.SettingsFile, FileMode.Open, FileAccess.Read, FileShare.Read);
 
     [Fact]
     public void Tokens_are_written_with_commas_in_any_locale()
