@@ -129,8 +129,8 @@ public partial class GitHubListViewModelTests
             Directory.CreateDirectory(Path.Combine(top, "docs", "new"));
             var model = await OpenWithChanges(Files(Edited("src/a.cs", top), Edited("docs/new/", top)), path: top, start: Started);
 
-            model.OpenFolderCommand.Execute(model.Changes!.Rows.Single(r => !r.File.IsFolder));
-            model.OpenFolderCommand.Execute(model.Changes.Rows.Single(r => r.File.IsFolder));
+            await model.OpenFolderCommand.ExecuteAsync(model.Changes!.Rows.Single(r => !r.File.IsFolder));
+            await model.OpenFolderCommand.ExecuteAsync(model.Changes.Rows.Single(r => r.File.IsFolder));
 
             _started.Select(s => (s.FileName, s.Arguments)).ShouldBe(
             [
@@ -154,7 +154,7 @@ public partial class GitHubListViewModelTests
             Directory.CreateDirectory(Path.Combine(top, "sub"));
             var model = await OpenWithChanges(Files(Edited("sub/gone/x.cs", top)), path: top, start: Started);
 
-            model.OpenFolderCommand.Execute(model.Changes!.Rows[0]);
+            await model.OpenFolderCommand.ExecuteAsync(model.Changes!.Rows[0]);
 
             var start = _started.ShouldHaveSingleItem();
             start.FileName.ShouldBe("explorer.exe");
@@ -174,7 +174,7 @@ public partial class GitHubListViewModelTests
         {
             var model = await OpenWithChanges(Files(Edited("a.cs", top)), path: top, start: _ => false);
 
-            model.OpenFolderCommand.Execute(model.Changes!.Rows[0]);
+            await model.OpenFolderCommand.ExecuteAsync(model.Changes!.Rows[0]);
 
             model.OpenMessage.ShouldBe($"Explorer did not open {top}.");
         }
@@ -185,10 +185,86 @@ public partial class GitHubListViewModelTests
 
         var gone = await OpenWithChanges(Files(Edited("x/y.cs", @"Q:\csx-no-such-drive\app")), path: @"Q:\csx-no-such-drive\app", start: Started);
 
-        gone.OpenFolderCommand.Execute(gone.Changes!.Rows[0]);
+        await gone.OpenFolderCommand.ExecuteAsync(gone.Changes!.Rows[0]);
 
         gone.OpenMessage.ShouldBe("Can't open a folder for x/y.cs: it is gone.");
         _started.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Open_folder_selects_a_changed_submodule_in_its_parent()
+    {
+        // #446: a submodule is a folder git lists like a file ("1 .M S..."); it is selected, not passed over for its parent.
+        var top = TempCheckout();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(top, "libs", "sub"));
+            var model = await OpenWithChanges(Files(Edited("libs/sub", top)), path: top, start: Started);
+
+            await model.OpenFolderCommand.ExecuteAsync(model.Changes!.Rows[0]);
+
+            _started.ShouldHaveSingleItem().Arguments.ShouldBe($"/select,\"{Path.Combine(top, "libs", "sub")}\"");
+        }
+        finally
+        {
+            Directory.Delete(top, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Open_folder_looks_at_the_disk_off_the_calling_thread()
+    {
+        // #446: a checkout on an offline share blocks a look at the disk for about 20 s, which must not hold up the window.
+        var top = TempCheckout();
+        try
+        {
+            File.WriteAllText(Path.Combine(top, "a.cs"), "x");
+            var caller = Environment.CurrentManagedThreadId;
+            int? starter = null;
+            var model = await OpenWithChanges(Files(Edited("a.cs", top)), path: top, start: info =>
+            {
+                starter = Environment.CurrentManagedThreadId;
+                return Started(info);
+            });
+
+            await model.OpenFolderCommand.ExecuteAsync(model.Changes!.Rows[0]);
+
+            starter.ShouldNotBeNull().ShouldNotBe(caller);
+            _started.ShouldHaveSingleItem();
+        }
+        finally
+        {
+            Directory.Delete(top, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Switching_tabs_clears_the_failure_line()
+    {
+        // #446: a failure says what went wrong on the tab it happened on.
+        var model = await OpenWithChanges(Files(Edited("x/y.cs", @"Q:\csx-no-such-drive\app")), path: @"Q:\csx-no-such-drive\app", start: Started);
+        await model.OpenFolderCommand.ExecuteAsync(model.Changes!.Rows[0]);
+        model.OpenMessage.ShouldNotBeNull();
+
+        model.ShowCommand.Execute(GitHubItemKind.Issue);
+
+        model.OpenMessage.ShouldBeNull();
+
+        model.OpenMessage = "Couldn't open the row.";
+        model.ShowChangesCommand.Execute(null);
+
+        model.OpenMessage.ShouldBeNull();
+    }
+
+    [Theory]
+    [InlineData(1, "Changes, 1 file, shown")]
+    [InlineData(2, "Changes, 2 files, shown")]
+    [InlineData(0, "Changes, 0 files, shown")]
+    public async Task The_tab_s_name_for_a_screen_reader_counts_files_rightly(int count, string expected)
+    {
+        var model = await OpenWithChanges(Files([.. Enumerable.Range(0, count).Select(i => Edited($"f{i}.cs"))]));
+
+        model.Changes!.TabAutomationName.ShouldBe(expected);
     }
 
     [Fact]
@@ -255,7 +331,7 @@ public partial class GitHubListViewModelTests
             shown.ShouldContain("Copy the folder path of src/a.cs");
             shown.ShouldContain("Copy all paths");
             shown.ShouldNotContain("Copy all links", "the links are the GitHub tabs' to copy");
-            shown.ShouldContain("Changes, 1 files, shown");
+            shown.ShouldContain("Changes, 1 file, shown");
             Descendants(panel).OfType<TextBlock>().Where(Shown).Select(t => t.Text).ShouldContain("src/a.cs");
             Descendants(panel).OfType<TextBlock>().Where(Shown).Select(t => t.Text).ShouldContain("edited");
 

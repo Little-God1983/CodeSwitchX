@@ -195,6 +195,8 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
         Shown = ListOf(kind);
         // Picking the list that was in front before Changes sets no new Shown: this is what brings it back to the front.
         IsChangesShown = false;
+        // A failure line belongs to the tab it happened on (#446).
+        OpenMessage = null;
         // Even before LoadAsync has run: the Yard starts it on the pool, and a quick click can come first (review of #406).
         if (!Shown.HasStarted)
         {
@@ -215,6 +217,8 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
         }
 
         IsChangesShown = true;
+        // A failure line belongs to the tab it happened on (#446).
+        OpenMessage = null;
         _checkout?.ReadGit?.Invoke();
     }
 
@@ -226,22 +230,29 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Explorer on the row's folder (#444), the file selected in it. A file deleted, or a folder gone with it, opens the nearest folder above
-    /// that is there; the panel says so when none is, or Explorer did not start.
+    /// Explorer on the row's folder (#444), the file selected in it; a changed submodule, a folder git lists like a file, is selected too
+    /// (#446). A file deleted, or a folder gone with it, opens the nearest folder above that is there; the panel says so when none is, or
+    /// Explorer did not start. The disk is looked at off the UI thread (#446): a checkout on an offline share blocks a look for about 20 s.
     /// </summary>
     [RelayCommand]
-    private void OpenFolder(ChangedFileRow row)
+    private async Task OpenFolderAsync(ChangedFileRow row)
+    {
+        var message = await Task.Run(() => OpenFolderOf(row)).ConfigureAwait(false);
+        _ui.Post(() => OpenMessage = message);
+    }
+
+    /// <summary>Starts Explorer for the row; why it could not, or null when it did.</summary>
+    private string? OpenFolderOf(ChangedFileRow row)
     {
         var file = row.File;
-        var selects = !file.IsFolder && File.Exists(file.FullPath);
+        var selects = !file.IsFolder && (File.Exists(file.FullPath) || Directory.Exists(file.FullPath));
         if ((selects ? row.FolderPath : NearestFolder(row.FolderPath)) is not { } folder)
         {
-            OpenMessage = $"Can't open a folder for {file.Path}: it is gone.";
-            return;
+            return $"Can't open a folder for {file.Path}: it is gone.";
         }
 
         var start = new ProcessStartInfo("explorer.exe", selects ? $"/select,\"{file.FullPath}\"" : $"\"{folder}\"");
-        OpenMessage = _start(start) ? null : $"Explorer did not open {folder}.";
+        return _start(start) ? null : $"Explorer did not open {folder}.";
     }
 
     /// <summary>The folder, or the nearest one above it that is there; null when none is.</summary>

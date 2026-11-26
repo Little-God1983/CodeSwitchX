@@ -22,7 +22,11 @@ internal sealed class GitHubPanelFocus
     private readonly UIElement _root;
     private readonly UIElement _panel;
     private readonly Action _closePreview;
-    private (WorkspaceTileViewModel? Tile, string? Line, GitHubRepo Repo, GitHubItemKind? Kind)? _opener;
+    // Changes: the line's "N changed" pill opened it (#446), which shows the line's data as the line's own button does.
+    private (WorkspaceTileViewModel? Tile, string? Line, GitHubRepo Repo, GitHubItemKind? Kind, bool Changes)? _opener;
+
+    /// <summary>The name of the "N changed" pill's button in the app's markup (#446): it shows the line, and is not the line's own button.</summary>
+    internal const string ChangesPillName = "ChangesPill";
     // The pull request whose merge strip had the keyboard last (#408): a strip's button closes the strip under itself.
     private int? _stripRow;
 
@@ -49,12 +53,12 @@ internal sealed class GitHubPanelFocus
         if (e.OriginalSource is Button { DataContext: GitHubPill pill } button)
         {
             // The outermost tile context: the tile, not a part of it.
-            _opener = (ContextsAbove<WorkspaceTileViewModel>(button).LastOrDefault(), ContextsAbove<GitLine>(button).FirstOrDefault()?.Path, pill.Activity.Repo, pill.Kind);
+            _opener = (ContextsAbove<WorkspaceTileViewModel>(button).LastOrDefault(), ContextsAbove<GitLine>(button).FirstOrDefault()?.Path, pill.Activity.Repo, pill.Kind, false);
         }
         else if (e.OriginalSource is Button { DataContext: GitLine { GitHub: { } activity } line } lineButton)
         {
-            // A repository line (#406): no kind, the line itself is what the keyboard goes back to.
-            _opener = (ContextsAbove<WorkspaceTileViewModel>(lineButton).LastOrDefault(), line.Path, activity.Repo, null);
+            // A repository line (#406): no kind, the line itself is what the keyboard goes back to; or the line's "N changed" pill (#446).
+            _opener = (ContextsAbove<WorkspaceTileViewModel>(lineButton).LastOrDefault(), line.Path, activity.Repo, null, lineButton.Name == ChangesPillName);
         }
     }
 
@@ -141,13 +145,17 @@ internal sealed class GitHubPanelFocus
         }
 
         // A line that opened it gets it back (#406). A pill: that pill of that line, else the line's other pill, else the repository's
-        // pill on another line, else the line itself. Else wherever the tile starts.
-        var lineButton = Descendants(tile).OfType<Button>().FirstOrDefault(button => button.IsVisible && button.DataContext is GitLine { GitHub: { } activity } line && activity.Repo == open.Repo && line.Path == open.Line);
+        // pill on another line, else the line itself. The "N changed" pill (#446): that pill, else its line, as the files may be committed
+        // meanwhile. Else wherever the tile starts.
+        var lineButtons = Descendants(tile).OfType<Button>()
+            .Where(button => button.IsVisible && button.DataContext is GitLine { GitHub: { } activity } line && activity.Repo == open.Repo && line.Path == open.Line).ToList();
+        var lineButton = lineButtons.FirstOrDefault(button => button.Name != ChangesPillName);
+        var changesPill = open.Changes ? lineButtons.FirstOrDefault(button => button.Name == ChangesPillName) : null;
         var pillButton = open.Kind is null ? null : Descendants(tile).OfType<Button>().Where(button => button.IsVisible && button.DataContext is GitHubPill pill && pill.Activity.Repo == open.Repo)
             .OrderBy(button => ContextsAbove<GitLine>(button).FirstOrDefault()?.Path != open.Line)
             .ThenBy(button => ((GitHubPill)button.DataContext).Kind != open.Kind)
             .FirstOrDefault();
-        var target = open.Kind is null ? lineButton : pillButton ?? lineButton;
+        var target = open.Kind is null ? changesPill ?? lineButton : pillButton ?? lineButton;
         if (target is not null)
         {
             Keyboard.Focus(target);

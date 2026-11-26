@@ -35,7 +35,7 @@ public sealed partial class ChangesTabViewModel : ObservableObject
     public string CountText => IsUnknown ? string.Empty : Rows.Count.ToString(CultureInfo.InvariantCulture);
 
     public string TabAutomationName => string.Create(CultureInfo.InvariantCulture,
-        $"{TabName}, {(IsUnknown ? "not known" : $"{Rows.Count} files")}, {(IsShown ? "shown" : "not shown")}");
+        $"{TabName}, {(IsUnknown ? "not known" : Rows.Count == 1 ? "1 file" : $"{Rows.Count} files")}, {(IsShown ? "shown" : "not shown")}");
 
     /// <summary>The tab's line when it has no rows; null when it has some.</summary>
     public string? EmptyText => IsUnknown ? "Git could not tell what changed." : Rows.Count == 0 ? "No changed files." : null;
