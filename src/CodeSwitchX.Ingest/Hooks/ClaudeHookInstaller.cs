@@ -1,7 +1,6 @@
-using System.Text.Encodings.Web;
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeSwitchX.Core;
+using CodeSwitchX.Ingest.ClaudeSettings;
 using Microsoft.Extensions.Logging;
 
 namespace CodeSwitchX.Ingest.Hooks;
@@ -16,9 +15,7 @@ public sealed class ClaudeHookInstaller
     public const int TimeoutSeconds = 5;
 
     /// <summary>How many <c>settings.json.csx-backup-*</c> files stay next to settings.json; older ones go when a save makes a new one.</summary>
-    public const int BackupsKept = 5;
-    private const string TempSuffix = ".csx-tmp";
-    private const string BackupSuffix = ".csx-backup-";
+    public const int BackupsKept = ClaudeSettingsFile.BackupsKept;
 
     /// <summary>
     /// The spec's eight events, StopFailure (a turn that ends on an API error) and PermissionRequest, which fires the moment a
@@ -56,19 +53,13 @@ public sealed class ClaudeHookInstaller
     /// </summary>
     private static readonly HeldEntry[] HeldEntries = [new(AskArgument, AskEvent, AskMatcher), new(PermitArgument, PermitEvent, null)];
 
-    private static readonly JsonSerializerOptions WriteOptions = new()
-    {
-        WriteIndented = true,
-        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-    };
-
     private readonly ClaudeCodePaths _paths;
-    private readonly ILogger<ClaudeHookInstaller> _logger;
+    private readonly ClaudeSettingsFile _file;
 
     public ClaudeHookInstaller(ClaudeCodePaths paths, ILogger<ClaudeHookInstaller> logger)
     {
         _paths = paths;
-        _logger = logger;
+        _file = new ClaudeSettingsFile(paths, logger);
     }
 
     public HookInstallStatus GetStatus(string relayExecutable)
@@ -128,7 +119,7 @@ public sealed class ClaudeHookInstaller
         }
 
         var settings = Load();
-        var before = settings.ToJsonString(WriteOptions);
+        var before = ClaudeSettingsFile.TextOf(settings);
 
         var hooks = settings["hooks"] as JsonObject;
         if (hooks is null)
@@ -270,7 +261,7 @@ public sealed class ClaudeHookInstaller
     public HookInstallResult Uninstall()
     {
         var settings = Load();
-        var before = settings.ToJsonString(WriteOptions);
+        var before = ClaudeSettingsFile.TextOf(settings);
 
         if (settings["hooks"] is not JsonObject hooks || RemoveOurs(hooks) == 0)
         {
@@ -370,56 +361,14 @@ public sealed class ClaudeHookInstaller
 
     private JsonObject Load()
     {
-        if (!File.Exists(_paths.SettingsFile))
-        {
-            return [];
-        }
-
-        string text;
         try
         {
-            text = File.ReadAllText(_paths.SettingsFile);
+            return _file.Load(ReadHookEntries);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (ClaudeSettingsException ex)
         {
-            throw new HookInstallException($"Cannot read {_paths.SettingsFile}: {ex.Message}", ex);
+            throw new HookInstallException(ex.Message, ex);
         }
-
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            throw new HookInstallException($"{_paths.SettingsFile} is empty; refusing to overwrite it. Fix or delete the file and retry.");
-        }
-
-        JsonObject settings;
-        try
-        {
-            settings = JsonNode.Parse(text, documentOptions: new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true }) as JsonObject
-                ?? throw new HookInstallException($"{_paths.SettingsFile} does not contain a JSON object.");
-        }
-        catch (JsonException ex)
-        {
-            throw new HookInstallException($"{_paths.SettingsFile} is not valid JSON: {ex.Message}", ex);
-        }
-
-        try
-        {
-            ReadHookEntries(settings);
-            _ = settings.ToJsonString(WriteOptions);
-        }
-        catch (ArgumentException ex)
-        {
-            // Claude Code keeps the last of a repeated key. Only the parts the installer reads must not repeat one; the rest
-            // is never read and is written back as it was.
-            throw new HookInstallException($"{_paths.SettingsFile} repeats a key where CodeSwitchX edits it: {ex.Message}", ex);
-        }
-        catch (InvalidOperationException ex)
-        {
-            // A lone surrogate escape (half an emoji) anywhere in the file, in a key or a value: the key throws when its object
-            // is first read, the value when the file is written back; either failed the status and with it the start.
-            throw new HookInstallException($"{_paths.SettingsFile} holds an escape sequence that cannot be read: {ex.Message}", ex);
-        }
-
-        return settings;
     }
 
     /// <summary>
@@ -447,87 +396,14 @@ public sealed class ClaudeHookInstaller
 
     private HookInstallResult Save(JsonObject settings, string before)
     {
-        var after = settings.ToJsonString(WriteOptions);
-        if (after == before && File.Exists(_paths.SettingsFile))
-        {
-            return new HookInstallResult(false, null);
-        }
-
-        // A linked settings.json (dotfiles setups) is written where it points, so the link stays and its repository sees the change.
-        var target = LinkTarget(_paths.SettingsFile);
-        string? backup = null;
         try
         {
-            Directory.CreateDirectory(_paths.ClaudeDirectory);
-            if (File.Exists(_paths.SettingsFile))
-            {
-                backup = $"{_paths.SettingsFile}{BackupSuffix}{DateTime.UtcNow:yyyyMMdd-HHmmss-fff}";
-                File.Copy(_paths.SettingsFile, backup, overwrite: true);
-            }
-
-            AtomicFile.Replace(target, after + Environment.NewLine, TempSuffix);
+            var saved = _file.Save(settings, before);
+            return new HookInstallResult(saved.Changed, saved.BackupFile);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (ClaudeSettingsException ex)
         {
-            // Read-only, locked by an editor or by Claude Code writing it: settings.json itself is unchanged, so the backup of
-            // it is not kept either (the temporary file is already gone).
-            if (backup is not null)
-            {
-                TryDelete(backup);
-            }
-
-            throw new HookInstallException($"Cannot write {_paths.SettingsFile}: {ex.Message}", ex);
-        }
-
-        PruneBackups();
-        _logger.LogInformation("Updated {File} (backup: {Backup})", _paths.SettingsFile, backup ?? "none");
-        return new HookInstallResult(true, backup);
-    }
-
-    /// <summary>The file a symbolic link finally points to, or the path itself.</summary>
-    private static string LinkTarget(string file)
-    {
-        try
-        {
-            return new FileInfo(file).ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? file;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return file;
-        }
-    }
-
-    /// <summary>The newest <see cref="BackupsKept"/> backups stay; their names carry the time, so they sort by age.</summary>
-    private void PruneBackups()
-    {
-        string[] backups;
-        try
-        {
-            backups = Directory.GetFiles(_paths.ClaudeDirectory, Path.GetFileName(_paths.SettingsFile) + BackupSuffix + "*");
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return;
-        }
-
-        foreach (var old in backups.OrderByDescending(f => f, StringComparer.Ordinal).Skip(BackupsKept))
-        {
-            TryDelete(old);
-        }
-    }
-
-    private static void TryDelete(string file)
-    {
-        try
-        {
-            if (File.Exists(file))
-            {
-                File.SetAttributes(file, FileAttributes.Normal); // a backup copies the read-only flag of settings.json
-                File.Delete(file);
-            }
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
+            throw new HookInstallException(ex.Message, ex);
         }
     }
 }
