@@ -35,6 +35,69 @@ public class GitInspectorRealGitTests : RealGitRepos
             .ShouldBe(BehindAnswer.Of(new GitBehind(1, WentApart: true)), "beside the squashed commit of its own");
     }
 
+    /// <summary>A commit in <see cref="RealGitRepos.Work"/> that changes the given files and has the given subject.</summary>
+    private async Task CommitFiles(string subject, params string[] files)
+    {
+        foreach (var file in files)
+        {
+            await File.WriteAllTextAsync(Path.Combine(Work, file), subject, TestContext.Current.CancellationToken);
+            await Git(Work, "add", file);
+        }
+
+        await Git(Work, "commit", "-q", "-m", subject);
+    }
+
+    /// <summary>A stable build made from a commit in the checkout, followed by the build script's bump commit (#452): its short hash.</summary>
+    private async Task<string> BuildAndBump()
+    {
+        await Arrange();
+        await Commit(Work, "c.txt", "built");
+        var builtFrom = await Git(Work, "rev-parse", "--short", "HEAD");
+        await CommitFiles("chore: bump version to 1.0.0.2", "Directory.Build.props");
+        return builtFrom;
+    }
+
+    [Fact]
+    public async Task A_build_followed_only_by_its_bump_commit_is_up_to_date()
+    {
+        var builtFrom = await BuildAndBump();
+
+        (await new GitInspector().SinceBuildAsync(Work, builtFrom, await Git(Work, "rev-parse", "HEAD"), TestContext.Current.CancellationToken))
+            .ShouldBe(SinceBuildAnswer.UpToDate);
+    }
+
+    [Fact]
+    public async Task Each_other_commit_on_the_branch_counts()
+    {
+        var builtFrom = await BuildAndBump();
+        await Commit(Work, "a.txt", "two");
+        // A bump's subject, but more than the version changed: real news.
+        await CommitFiles("chore: bump version to 1.0.0.3", "Directory.Build.props", "b.txt");
+
+        (await new GitInspector().SinceBuildAsync(Work, builtFrom, await Git(Work, "rev-parse", "HEAD"), TestContext.Current.CancellationToken))
+            .ShouldBe(SinceBuildAnswer.Outdated(2));
+    }
+
+    [Fact]
+    public async Task A_head_on_GitHub_the_clone_never_fetched_is_outdated_by_an_unknown_count()
+    {
+        // The everyday case right after a merge on GitHub.
+        var builtFrom = await BuildAndBump();
+        await PushToMain(1);
+
+        (await new GitInspector().SinceBuildAsync(Work, builtFrom, await Git(Other, "rev-parse", "HEAD"), TestContext.Current.CancellationToken))
+            .ShouldBe(SinceBuildAnswer.Outdated(null));
+    }
+
+    [Fact]
+    public async Task The_build_commit_itself_is_up_to_date()
+    {
+        var builtFrom = await BuildAndBump();
+
+        (await new GitInspector().SinceBuildAsync(Work, builtFrom, await Git(Work, "rev-parse", "HEAD~1"), TestContext.Current.CancellationToken))
+            .ShouldBe(SinceBuildAnswer.UpToDate);
+    }
+
     [Fact]
     public async Task A_line_on_a_subfolder_gets_the_paths_from_the_checkouts_top()
     {

@@ -277,4 +277,56 @@ public partial class YardViewModelTests
         yard.FindTile(listed.Id)!.GitLines[0].StableBuild.ShouldNotBeNull("the line was carried over, so its folder was not looked at again")
             .ShortcutName.ShouldBe("Llm.lnk");
     }
+
+    /// <summary>A repository with the stable-build scripts whose install marker would be in the test's folder (#452); the marker's path.</summary>
+    private string StableRepo(string name)
+    {
+        var root = Repo(name);
+        Directory.CreateDirectory(Path.Combine(root, "scripts"));
+        File.WriteAllText(Path.Combine(root, "scripts", "build.ps1"), "# build");
+        var installRoot = Path.Combine(_tempRoot, "stable");
+        File.WriteAllText(Path.Combine(root, "scripts", "_common.ps1"),
+            $"$script:ShortcutName = 'App.lnk'\n$script:DefaultInstallRoot = '{installRoot}'\n$script:AppName = 'App'\n$script:InstallMarkerName = 'app-install.json'\n");
+        Directory.CreateDirectory(Path.Combine(installRoot, "App"));
+        return Path.Combine(installRoot, "App", "app-install.json");
+    }
+
+    [Fact]
+    public async Task A_repository_with_scripts_and_no_marker_shows_no_stable_build()
+    {
+        StableRepo("app");
+        var app = new Workspace { Name = "App", RootPath = Path.Combine(_tempRoot, "app"), TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([app]));
+        var yard = Yard((_, _, _) => Task.FromResult<string?>(string.Empty));
+        await yard.InitializeAsync(CancellationToken.None);
+
+        await yard.RefreshGitAsync(CancellationToken.None);
+
+        yard.FindTile(app.Id)!.GitLines.ShouldHaveSingleItem().Stable.ShouldBe(new StableBuildStatus(StableFreshness.NoBuild));
+    }
+
+    [Fact]
+    public async Task Without_GitHub_the_version_shows_and_nothing_is_compared()
+    {
+        var marker = StableRepo("app");
+        File.WriteAllText(marker, """{"version":"1.0.0.5","complete":true,"commit":"715bed9"}""");
+        var app = new Workspace { Name = "App", RootPath = Path.Combine(_tempRoot, "app"), TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([app]));
+        var asked = new List<string>();
+        var yard = Yard((_, args, _) =>
+        {
+            lock (asked)
+            {
+                asked.Add(args);
+            }
+
+            return Task.FromResult<string?>(string.Empty);
+        });
+        await yard.InitializeAsync(CancellationToken.None);
+
+        await yard.RefreshGitAsync(CancellationToken.None);
+
+        yard.FindTile(app.Id)!.GitLines.ShouldHaveSingleItem().Stable.ShouldBe(new StableBuildStatus(StableFreshness.Unknown, "1.0.0.5", BuiltFrom: "715bed9"));
+        asked.ShouldNotContain(a => a.StartsWith("rev-list", StringComparison.Ordinal) || a.StartsWith("log", StringComparison.Ordinal), "no GitHub head to compare with");
+    }
 }

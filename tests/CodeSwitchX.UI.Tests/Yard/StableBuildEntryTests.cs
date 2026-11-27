@@ -114,6 +114,90 @@ public class StableBuildEntryTests : IDisposable
         _tile.StableBuildEntries().ShouldBeEmpty();
     }
 
+    /// <summary>A line with the stable-build scripts of an app installed at <paramref name="marker"/>, and its build's status (#452).</summary>
+    private static GitLine StableLine(string path, string marker, StableBuildStatus stable, string? folder = null) =>
+        Line(path, folder: folder) with { StableBuild = new StableBuildRepo(path, Path.GetFileName(path) + ".lnk", MarkerPath: marker), Stable = stable };
+
+    private static readonly StableBuildStatus UpToDate = new(StableFreshness.UpToDate, "1.0.0.5", 0, "main", "715bed9", new string('a', 40));
+
+    [Fact]
+    public void A_tile_without_scripts_has_no_stable_rows()
+    {
+        _tile.ShowGit([Line(@"c:\repo\app", scripts: false)]);
+
+        _tile.StableRows.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void One_app_gets_one_row_titled_by_its_version()
+    {
+        _tile.ShowGit([StableLine(@"c:\repo\app", @"E:\Stable\App\app-install.json", UpToDate)]);
+
+        var row = _tile.StableRows.ShouldHaveSingleItem();
+        row.Title.ShouldBe("Stable 1.0.0.5");
+        row.Status.ShouldBe(UpToDate);
+    }
+
+    [Fact]
+    public void Lines_of_one_install_give_one_row()
+    {
+        // A checkout and its worktree: one app, one installed build.
+        _tile.ShowGit(
+        [
+            StableLine(@"c:\repo\app", @"E:\Stable\App\app-install.json", UpToDate, "app"),
+            StableLine(@"c:\repo\app-wt", @"e:\stable\app\APP-INSTALL.json", UpToDate, "app-wt"),
+        ]);
+
+        _tile.StableRows.ShouldHaveSingleItem().Title.ShouldBe("Stable 1.0.0.5");
+    }
+
+    [Fact]
+    public void Several_apps_carry_their_names()
+    {
+        _tile.ShowGit(
+        [
+            StableLine(@"c:\repo\app", @"E:\Stable\App\app-install.json", UpToDate, "App"),
+            StableLine(@"c:\repo\shop", @"E:\Stable\Shop\shop-install.json", UpToDate with { Version = "2.0.0.1" }, "Shop"),
+            StableLine(@"c:\repo\cart", @"E:\Stable\Cart\cart-install.json", new StableBuildStatus(StableFreshness.NoBuild)),
+        ]);
+
+        _tile.StableRows.Select(r => r.Title).ShouldBe(["App · Stable 1.0.0.5", "Shop · Stable 2.0.0.1", "cart"]);
+    }
+
+    [Fact]
+    public void A_lone_app_with_no_build_has_no_title()
+    {
+        _tile.ShowGit([StableLine(@"c:\repo\app", @"E:\Stable\App\app-install.json", new StableBuildStatus(StableFreshness.NoBuild))]);
+
+        var row = _tile.StableRows.ShouldHaveSingleItem();
+        row.Title.ShouldBeNull();
+        row.Status.Label.ShouldBe("no stable build");
+    }
+
+    [Fact]
+    public void A_line_without_a_status_or_a_marker_path_has_no_row()
+    {
+        _tile.ShowGit(
+        [
+            Line(@"c:\repo\app"),
+            StableLine(@"c:\repo\shop", @"E:\Stable\Shop\shop-install.json", UpToDate) with { StableBuild = new StableBuildRepo(@"c:\repo\shop", "shop.lnk") },
+        ]);
+
+        _tile.StableRows.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void The_same_lines_again_keep_the_same_rows_list()
+    {
+        _tile.ShowGit([StableLine(@"c:\repo\app", @"E:\Stable\App\app-install.json", UpToDate)]);
+        var rows = _tile.StableRows;
+
+        // An equal line in a new list, as every round makes; GitLines changes when anything else on the line does.
+        _tile.ShowGit([StableLine(@"c:\repo\app", @"E:\Stable\App\app-install.json", UpToDate) with { DirtyCount = 2 }]);
+
+        _tile.StableRows.ShouldBeSameAs(rows, "a new list would rebuild the row and close its tooltip");
+    }
+
     [Fact]
     public void One_repository_gets_the_plain_headers()
     {
