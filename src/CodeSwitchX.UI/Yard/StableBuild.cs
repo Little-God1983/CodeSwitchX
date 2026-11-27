@@ -275,6 +275,52 @@ public readonly record struct StableBuildRead(bool Known, StableBuildInstall? In
     public static readonly StableBuildRead NoBuild = new(true, null);
 }
 
+/// <summary>Where the installed stable build stands against GitHub's default branch (#452).</summary>
+public enum StableFreshness
+{
+    /// <summary>The repository has the scripts, and no build is installed (no marker, or one the build did not finish).</summary>
+    NoBuild,
+
+    /// <summary>Not compared: GitHub not read, no commit in the marker, or git could not tell.</summary>
+    Unknown,
+
+    /// <summary>The default branch has nothing after the build's commit but the build script's bump commits.</summary>
+    UpToDate,
+
+    /// <summary>The default branch has commits the build was not made from.</summary>
+    Outdated,
+}
+
+/// <summary>A line's stable build (#452): its version, and whether GitHub's default branch moved on since it was made.</summary>
+/// <param name="Version">The installed version; null for no build.</param>
+/// <param name="NewerCommits">How many commits the default branch has since the build; null when not known.</param>
+/// <param name="Branch">GitHub's default branch the build was compared with.</param>
+/// <param name="BuiltFrom">The commit the build was made from, as its marker has it; null when it names none.</param>
+/// <param name="ComparedWith">GitHub's head, the full hash, that git compared the build with; null when it was not compared.</param>
+public sealed record StableBuildStatus(StableFreshness Freshness, string? Version = null, int? NewerCommits = null, string? Branch = null, string? BuiltFrom = null, string? ComparedWith = null)
+{
+    /// <summary>The pill's word; null where nothing is known, so no pill rather than a guess.</summary>
+    public string? Label => Freshness switch
+    {
+        StableFreshness.UpToDate => "up to date",
+        StableFreshness.Outdated => "outdated",
+        StableFreshness.NoBuild => "no stable build",
+        _ => null,
+    };
+
+    /// <summary>"Stable 0.1.0.45"; null without a version.</summary>
+    public string? VersionText => Version is null ? null : $"Stable {Version}";
+
+    public string ToolTip => Freshness switch
+    {
+        StableFreshness.UpToDate => $"{Version} was built from {Branch} as it is on GitHub now.",
+        StableFreshness.Outdated when NewerCommits is { } n => $"{GitLine.CommitsText(n)} on {Branch} since {Version}.",
+        StableFreshness.Outdated => $"{Branch} on GitHub has commits newer than {Version}.",
+        StableFreshness.NoBuild => "No stable build installed yet.",
+        _ => $"{Version} - not compared with GitHub yet.",
+    };
+}
+
 /// <summary>Whether a line's git state lets a stable build start (#423): the user's precheck, before the script's own stricter ones.</summary>
 public static class StableBuildCheck
 {

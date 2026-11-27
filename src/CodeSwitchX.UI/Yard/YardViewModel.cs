@@ -971,6 +971,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         var comparedWith = await CompareAsync(found, previous, ct).ConfigureAwait(false);
         var lines = comparedWith.Select(c => c.Line).ToList();
         var given = comparedWith.Select(c => c.OnGitHub).ToList();
+        var stableGiven = comparedWith.Select(c => c.StableAgainst).ToList();
         paths.AddRange(lines.Where(HasRepository).Select(l => l.Path).OfType<string>());
         // A line carried over is the one shown before, its folder not looked at: asking git again for it would carry it over again.
         var compared = lines.Select(l => !previous.Any(p => ReferenceEquals(p, l))).ToList();
@@ -986,8 +987,11 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
                 // saw no line to ask about, as the line was not on the branch yet. This tile is read again now, not at the next round, up to 30 s on.
                 // Only for a line git compared this round, and against another commit than GitHub has now: a line git gave no answer for
                 // was given the commit it has now, so this never asks round after round.
-                // Only for a line shown from this read.
-                if (shown.Select((l, i) => applied[i] && compared[i] && GitLine.ComparedHead(l, l.GitHub)?.Sha != given[i]).Any(again => again) && !_disposed)
+                // Only for a line shown from this read. The same for its stable build (#452), against the head of GitHub's default branch the
+                // round looked at: a build git could not compare was looked at against the head there is now, so this never asks round after round.
+                if (shown.Select((l, i) => applied[i] && compared[i]
+                        && (GitLine.ComparedHead(l, l.GitHub)?.Sha != given[i] || (l.StableIsOutOfDate && l.GitHub?.DefaultHead?.Sha != stableGiven[i])))
+                        .Any(again => again) && !_disposed)
                 {
                     // After a read of the tile under way, which may be the very one that found the line out of date (#433).
                     RefreshGitOf(tile, after: true);
@@ -1029,41 +1033,91 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// default one, or another, #428), by git and without a fetch, and only when one of the two commits changed since the folder's line in
     /// <paramref name="previous"/> was compared. A line carried over from <paramref name="previous"/> is left as it is: its folder could
     /// not be looked at this round (an offline share blocks every look for about 20 s). Each comes with GitHub's commit it was compared
-    /// with (#433): null where there was none, and for a line carried over.
+    /// with (#433): null where there was none, and for a line carried over. And each with its stable build's status (#452), worked out
+    /// against the head of GitHub's default branch that comes with it (null where none was read, and for a line carried over).
     /// </summary>
-    private async Task<(GitLine Line, string? OnGitHub)[]> CompareAsync(IReadOnlyList<GitLine> lines, IReadOnlyList<GitLine> previous, CancellationToken ct)
+    private async Task<(GitLine Line, string? OnGitHub, string? StableAgainst)[]> CompareAsync(IReadOnlyList<GitLine> lines, IReadOnlyList<GitLine> previous, CancellationToken ct)
     {
-        if (_gitHub is null)
-        {
-            return [.. lines.Select(l => (l, (string?)null))];
-        }
-
         return await Task.WhenAll(lines.Select(async line =>
         {
             if (previous.Any(p => ReferenceEquals(p, line)))
             {
-                return (line, (string?)null);
+                return (line, (string?)null, (string?)null);
             }
 
-            var activity = line.Path is { } folder ? _gitHub.ForFolder(folder) : null;
-            if (line.Path is not { } path || GitLine.ComparedHead(line, activity) is not { } onGitHub)
-            {
-                return (line is { Behind: null, BehindAgainst: null } ? line : line with { Behind = null, BehindAgainst = null }, (string?)null);
-            }
-
-            var key = YardGitJobs.Key(path);
-            var before = previous.FirstOrDefault(p => p.Path is { } shown && YardGitJobs.Key(shown) == key);
-            if (line.IsAnsweredBy(before, onGitHub.Sha))
-            {
-                return (line with { Behind = before.Behind, BehindAgainst = onGitHub.Sha }, onGitHub.Sha);
-            }
-
-            // A branch other than the default one is rewritten as a matter of course (#428): where it went apart from GitHub, only commits
-            // it never held are behind (#435).
-            var ownBranch = line.Branch != activity?.DefaultBranch ? line.Branch : null;
-            var answer = await _git.BehindAsync(path, line.Head, onGitHub.Sha, onGitHub.Commits, ownBranch, ct).ConfigureAwait(false);
-            return (line.WithBehind(answer, before, onGitHub.Sha), onGitHub.Sha);
+            var activity = line.Path is { } folder ? _gitHub?.ForFolder(folder) : null;
+            var key = line.Path is { } shownAt ? YardGitJobs.Key(shownAt) : null;
+            var before = key is null ? null : previous.FirstOrDefault(p => p.Path is { } shown && YardGitJobs.Key(shown) == key);
+            var stable = await StableStatusAsync(line, activity, before, ct).ConfigureAwait(false);
+            var (compared, onGitHub) = await BehindOfAsync(line, activity, before, ct).ConfigureAwait(false);
+            return (compared with { Stable = stable }, onGitHub, activity?.DefaultHead?.Sha);
         })).ConfigureAwait(false);
+    }
+
+    /// <summary>The line with how far it is behind GitHub (#426), and GitHub's commit it was compared with; see <see cref="CompareAsync"/>.</summary>
+    /// <param name="before">The folder's line as last shown.</param>
+    private async Task<(GitLine Line, string? OnGitHub)> BehindOfAsync(GitLine line, RepoActivity? activity, GitLine? before, CancellationToken ct)
+    {
+        if (line.Path is not { } path || GitLine.ComparedHead(line, activity) is not { } onGitHub)
+        {
+            return (line is { Behind: null, BehindAgainst: null } ? line : line with { Behind = null, BehindAgainst = null }, null);
+        }
+
+        if (line.IsAnsweredBy(before, onGitHub.Sha))
+        {
+            return (line with { Behind = before.Behind, BehindAgainst = onGitHub.Sha }, onGitHub.Sha);
+        }
+
+        // A branch other than the default one is rewritten as a matter of course (#428): where it went apart from GitHub, only commits
+        // it never held are behind (#435).
+        var ownBranch = line.Branch != activity?.DefaultBranch ? line.Branch : null;
+        var answer = await _git.BehindAsync(path, line.Head, onGitHub.Sha, onGitHub.Commits, ownBranch, ct).ConfigureAwait(false);
+        return (line.WithBehind(answer, before, onGitHub.Sha), onGitHub.Sha);
+    }
+
+    /// <summary>
+    /// The installed stable build of the line's scripts and whether GitHub's default branch moved on since it was made (#452); null for a
+    /// line without scripts or a marker path. Always the default branch GitHub names: never the checked-out branch, nor the one the script
+    /// builds from. A marker held for a moment keeps what <paramref name="before"/> showed; the same build against the same head is not
+    /// given to git again; an answer git did not give keeps what <paramref name="before"/> knew of the same two commits, else not compared.
+    /// </summary>
+    /// <param name="before">The folder's line as last shown.</param>
+    private async Task<StableBuildStatus?> StableStatusAsync(GitLine line, RepoActivity? activity, GitLine? before, CancellationToken ct)
+    {
+        if (line.StableBuild is not { MarkerPath: { } marker } scripts)
+        {
+            return null;
+        }
+
+        var read = StableBuildInstall.Read(marker);
+        if (!read.Known)
+        {
+            return before?.Stable;
+        }
+
+        if (read.Install is not { } install)
+        {
+            return new StableBuildStatus(StableFreshness.NoBuild);
+        }
+
+        var notCompared = new StableBuildStatus(StableFreshness.Unknown, install.Version, BuiltFrom: install.Commit);
+        if (install.Commit is not { } commit || activity is not { DefaultBranch: { } branch, DefaultHead: { } head })
+        {
+            return notCompared;
+        }
+
+        if (before?.Stable is { Freshness: not StableFreshness.Unknown } shown && shown.Version == install.Version && shown.BuiltFrom == commit && shown.ComparedWith == head.Sha)
+        {
+            return shown;
+        }
+
+        var answer = await _git.SinceBuildAsync(scripts.RepoPath, commit, head.Sha, ct).ConfigureAwait(false);
+        if (answer.Known)
+        {
+            return new StableBuildStatus(answer.Newer ? StableFreshness.Outdated : StableFreshness.UpToDate, install.Version, answer.NewerCommits, branch, commit, head.Sha);
+        }
+
+        return before?.Stable is { } kept && kept.BuiltFrom == commit && kept.ComparedWith == head.Sha ? kept : notCompared;
     }
 
     /// <summary>The line's folder is in a repository of its own, whatever its branch: a git above the user profile is not this folder's repository, and its origin is not the folder's.</summary>
@@ -1202,7 +1256,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         foreach (var tile in Tiles)
         {
             var lines = tile.GitLines.Select(WithGitHub).ToList();
-            moved |= lines.Any(l => l.BehindIsOutOfDate);
+            moved |= lines.Any(l => l.BehindIsOutOfDate || l.StableIsOutOfDate);
             tile.ShowGit(lines);
         }
 

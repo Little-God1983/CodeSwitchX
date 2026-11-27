@@ -22,9 +22,17 @@ namespace CodeSwitchX.UI.Yard;
 /// <param name="Behind">The line lacks commits GitHub has on its branch (#426, #428), as of the last read of GitHub; null when it is not behind, its branch is not on GitHub, or nothing is known.</param>
 /// <param name="TrackedChanges">Of <paramref name="DirtyCount"/>, the files git tracks: what a pull stops at (#429). Null when git could not tell.</param>
 /// <param name="ChangedFiles">The files <paramref name="DirtyCount"/> counts, for the panel's Changes tab (#444). Null when git could not tell.</param>
+/// <param name="Stable">The installed stable build of <paramref name="StableBuild"/>'s app and whether it is behind GitHub's default branch (#452); null without scripts or a marker path.</param>
 public sealed record GitLine(string? Folder, string? Branch, int? DirtyCount, string? Path = null, GitHubPill? Issues = null, GitHubPill? PullRequests = null, bool IsRepository = false, RepoActivity? GitHub = null, string? GitDir = null,
-    StableBuildRepo? StableBuild = null, string? Head = null, GitBehind? Behind = null, string? BehindAgainst = null, int? TrackedChanges = null, ChangedFileList? ChangedFiles = null)
+    StableBuildRepo? StableBuild = null, string? Head = null, GitBehind? Behind = null, string? BehindAgainst = null, int? TrackedChanges = null, ChangedFileList? ChangedFiles = null,
+    StableBuildStatus? Stable = null)
 {
+    /// <summary>
+    /// <see cref="Stable"/> was worked out against another head of GitHub's default branch than GitHub has now, or not at all (#452): git
+    /// must be asked again. Only for a build whose commit is known, and with something read on GitHub.
+    /// </summary>
+    internal bool StableIsOutOfDate => Stable is { BuiltFrom: not null } s && GitHub?.DefaultHead?.Sha is { } head && head != s.ComparedWith;
+
     /// <summary>The state pill opens the Changes tab (#444): it says "N changed", and the line has the repository panel the tab is in.</summary>
     public bool HasChangesToShow => GitHub is not null && DirtyCount > 0;
 

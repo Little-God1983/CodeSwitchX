@@ -1,4 +1,5 @@
 using System.Text;
+using CodeSwitchX.Core.GitHub;
 using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.UI.Yard;
 
@@ -368,6 +369,43 @@ public class StableBuildTests : IDisposable
         {
             StableBuildInstall.Read(path).ShouldBe(StableBuildRead.Unknown, "the build writing it, or a scanner, says nothing new");
         }
+    }
+
+    [Theory]
+    [InlineData(StableFreshness.UpToDate, 0, "up to date", "0.1.0.45 was built from main as it is on GitHub now.")]
+    [InlineData(StableFreshness.Outdated, 3, "outdated", "3 commits on main since 0.1.0.45.")]
+    [InlineData(StableFreshness.Outdated, 1, "outdated", "1 commit on main since 0.1.0.45.")]
+    [InlineData(StableFreshness.Outdated, null, "outdated", "main on GitHub has commits newer than 0.1.0.45.")]
+    [InlineData(StableFreshness.Unknown, null, null, "0.1.0.45 - not compared with GitHub yet.")]
+    public void A_stable_build_status_says_its_state_in_words(StableFreshness freshness, int? commits, string? label, string toolTip)
+    {
+        var status = new StableBuildStatus(freshness, "0.1.0.45", commits, "main", "715bed9", new string('a', 40));
+
+        status.Label.ShouldBe(label);
+        status.ToolTip.ShouldBe(toolTip);
+        status.VersionText.ShouldBe("Stable 0.1.0.45");
+    }
+
+    [Fact]
+    public void No_stable_build_has_a_grey_word_and_no_version()
+    {
+        var status = new StableBuildStatus(StableFreshness.NoBuild);
+
+        status.Label.ShouldBe("no stable build");
+        status.ToolTip.ShouldBe("No stable build installed yet.");
+        status.VersionText.ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_line_compared_with_another_head_than_GitHub_has_now_is_out_of_date()
+    {
+        var activity = new RepoActivity(new GitHubRepo("acme", "app"), "me", 0, 0, [], [], DefaultBranch: "main", DefaultHead: new GitHubHead(new string('b', 40), null));
+        var line = new GitLine(null, "main", 0, GitHub: activity, Stable: new StableBuildStatus(StableFreshness.UpToDate, "1.0.0.5", 0, "main", "715bed9", new string('a', 40)));
+
+        line.StableIsOutOfDate.ShouldBeTrue();
+        (line with { Stable = line.Stable! with { ComparedWith = new string('b', 40) } }).StableIsOutOfDate.ShouldBeFalse();
+        (line with { Stable = new StableBuildStatus(StableFreshness.Unknown, "1.0.0.5") }).StableIsOutOfDate.ShouldBeFalse("no commit to compare");
+        (line with { GitHub = null }).StableIsOutOfDate.ShouldBeFalse("nothing read on GitHub");
     }
 
     [Fact]
