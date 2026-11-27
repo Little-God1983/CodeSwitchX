@@ -337,15 +337,65 @@ public sealed record StableBuildStatus(StableFreshness Freshness, string? Versio
     };
 }
 
-/// <summary>One installed app's row under a tile's chats (#452): its version and the pill. Not clickable: a click goes to the tile.</summary>
+/// <summary>
+/// One installed app's row under a tile's chats (#452): its version, its Run and Build buttons (#454) and the pill. A click on the row
+/// outside the buttons goes to the tile.
+/// </summary>
 /// <param name="Title">"Stable 0.1.0.45", with the app's name before it on a tile with several ("App · Stable 0.1.0.45"); the name alone, or null on a lone row, for no build.</param>
-public sealed record StableBuildRow(string? Title, StableBuildStatus Status)
+/// <param name="Buttons">The buttons' state as of the tile's git round (#454); null when the row's repository has no entry.</param>
+/// <param name="Lead">
+/// The dimmed text before the number (#454): "Stable", "App · Stable" on a tile with several, the app's name alone for no build there,
+/// null on a lone row without a version.
+/// </param>
+public sealed record StableBuildRow(string? Title, StableBuildStatus Status, StableBuildButtons? Buttons = null, string? Lead = null)
 {
     internal static string? TitleOf(StableBuildStatus status, string? name) => (name, status.VersionText) switch
     {
         ({ } app, { } version) => $"{app} · {version}",
         var (app, version) => app ?? version,
     };
+
+    internal static string? LeadOf(StableBuildStatus status, string? name) => (name, status.Version) switch
+    {
+        ({ } app, not null) => $"{app} · Stable",
+        ({ } app, _) => app,
+        (_, not null) => "Stable",
+        _ => null,
+    };
+}
+
+/// <summary>
+/// What a stable row's Run and Build buttons show (#454), taken from the tile's entry for the row's repository. Plain values, so an
+/// unchanged round gives an equal row and the list stays (an open tooltip with it); the tile's commands make the entry afresh at the press.
+/// </summary>
+/// <param name="RepoPath">The entry's repository: what the tile's commands find the entry by at the press.</param>
+/// <param name="Name">What the dialogs call the app.</param>
+/// <param name="BuildName">The Build entry's header: "Build new version", or "Build App" on a tile with several.</param>
+/// <param name="BuildBlock">Why Build is greyed; null when it may start.</param>
+/// <param name="RunName">The Run entry's header, its own or that of the entry on the tile that opens the same shortcut; null for no Run.</param>
+/// <param name="RunBlock">Why Run is greyed; null when the shortcut is there.</param>
+public sealed record StableBuildButtons(string RepoPath, string Name, string BuildName, string? BuildBlock, string? RunName, string? RunBlock)
+{
+    public bool CanBuild => BuildBlock is null;
+    public bool CanRun => RunName is not null && RunBlock is null;
+    public bool HasRun => RunName is not null;
+    public string BuildToolTip => BuildBlock ?? BuildName;
+    public string? RunToolTip => RunBlock ?? RunName;
+
+    /// <param name="entry">The entry of the row's repository: its Build.</param>
+    /// <param name="run">The entry whose Run the row shows: <see cref="RunEntryOf"/>.</param>
+    public static StableBuildButtons Of(StableBuildEntry entry, StableBuildEntry run) =>
+        new(entry.RepoPath, entry.Name, entry.BuildHeader, entry.BuildBlock, run.RunHeader, run.RunBlock);
+
+    /// <summary>
+    /// The entry that starts the row's app (#454). The tile's entries give one Run per shortcut, to the first line that has it, and that
+    /// line may have no row: a checkout whose scripts name no install marker, before its worktree whose scripts do. The row then shows
+    /// that entry's Run, so its app can be started from the row as from the menu.
+    /// </summary>
+    public static StableBuildEntry RunEntryOf(IReadOnlyList<StableBuildEntry> entries, StableBuildEntry entry) =>
+        entry.RunHeader is not null
+            ? entry
+            : entries.FirstOrDefault(e => e.RunHeader is not null && string.Equals(e.ShortcutName, entry.ShortcutName, StringComparison.OrdinalIgnoreCase)) ?? entry;
 }
 
 /// <summary>Whether a line's git state lets a stable build start (#423): the user's precheck, before the script's own stricter ones.</summary>
@@ -499,6 +549,12 @@ public sealed partial class StableBuildEntry
 
     /// <summary>The repository's folder name: what the dialog and the headers call the app.</summary>
     public string Name { get; }
+
+    /// <summary>The repository the entry builds: what a stable row's buttons find their entry by (#454).</summary>
+    internal string RepoPath => _repo.RepoPath;
+
+    /// <summary>The shortcut the entry's app is started through: what tells the entries of one app (#454).</summary>
+    internal string ShortcutName => _repo.ShortcutName;
     public string BuildHeader { get; }
 
     /// <summary>Null when the entry has no Run: another one on the tile opens the same shortcut (#425).</summary>

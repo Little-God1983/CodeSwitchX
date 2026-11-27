@@ -68,12 +68,20 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
 
     /// <summary>
     /// The rows follow the lines. A checkout and its worktree install one app: one row. The rows carry the app's name only where there are
-    /// several. The same rows again keep the list, so a tooltip the user has open stays.
+    /// several. The same rows again keep the list, so a tooltip the user has open stays. A row's buttons (#454) take the state of its
+    /// repository's menu entry: the greying follows the round, with no git read of its own.
     /// </summary>
     partial void OnGitLinesChanged(IReadOnlyList<GitLine> value)
     {
         var lines = value.Where(l => l is { Stable: not null, StableBuild.MarkerPath: not null }).DistinctBy(l => PathNormalizer.Normalize(l.StableBuild!.MarkerPath!)).ToList();
-        List<StableBuildRow> rows = [.. lines.Select(l => new StableBuildRow(StableBuildRow.TitleOf(l.Stable!, lines.Count > 1 ? StableBuildEntry.NameOf(l) : null), l.Stable!))];
+        // The entries read GitLines, which holds the new value here already. Made once per round, and only for a tile with rows.
+        IReadOnlyList<StableBuildEntry> entries = lines.Count > 0 ? StableBuildEntries() : [];
+        List<StableBuildRow> rows = [.. lines.Select(l =>
+        {
+            var name = lines.Count > 1 ? StableBuildEntry.NameOf(l) : null;
+            var entry = EntryOf(entries, l.StableBuild!.RepoPath);
+            return new StableBuildRow(StableBuildRow.TitleOf(l.Stable!, name), l.Stable!, entry is null ? null : StableBuildButtons.Of(entry, StableBuildButtons.RunEntryOf(entries, entry)), StableBuildRow.LeadOf(l.Stable!, name));
+        })];
         if (!StableRows.SequenceEqual(rows))
         {
             StableRows = rows;
@@ -617,6 +625,67 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
         var named = lines.Select(l => l.StableBuild!.ShortcutName).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1 ? StableBuildRun.Named : StableBuildRun.Plain;
         return [.. lines.Select(l => new StableBuildEntry(l, named: lines.Count > 1, run: shortcuts.Add(l.StableBuild!.ShortcutName) ? named : StableBuildRun.None,
             _owner.StableBuilds, _owner.Dialogs, _owner.FreshLineAsync))];
+    }
+
+    /// <summary>
+    /// A stable row's Build button (#454): does what the menu's Build entry does, with the entry made at the press, so the lines as they
+    /// are now decide, not the round the row was made in.
+    /// </summary>
+    [RelayCommand]
+    private async Task BuildStableAsync(StableBuildRow? row)
+    {
+        if (row?.Buttons is not { } buttons)
+        {
+            return;
+        }
+
+        if (EntryOf(StableBuildEntries(), buttons.RepoPath) is not { } entry)
+        {
+            _owner.Dialogs.Tell($"Not building {buttons.Name}: its build scripts are not there any more.");
+            return;
+        }
+
+        if (entry.BuildBlock is { } block)
+        {
+            _owner.Dialogs.Tell($"Not building {entry.Name}: {block}.");
+            return;
+        }
+
+        await entry.BuildCommand.ExecuteAsync(null).ConfigureAwait(true);
+    }
+
+    /// <summary>A stable row's Run button (#454): the menu's Run entry, made at the press.</summary>
+    [RelayCommand]
+    private async Task RunStableAsync(StableBuildRow? row)
+    {
+        if (row?.Buttons is not { } buttons)
+        {
+            return;
+        }
+
+        var entries = StableBuildEntries();
+        if (EntryOf(entries, buttons.RepoPath) is not { } own)
+        {
+            _owner.Dialogs.Tell($"Not starting {buttons.Name}: its build scripts are not there any more.");
+            return;
+        }
+
+        // The Run of the row's app may be another line's entry: the one the row showed.
+        var entry = StableBuildButtons.RunEntryOf(entries, own);
+        if (!entry.CanRun)
+        {
+            _owner.Dialogs.Tell($"Not starting {entry.Name}: no stable build yet.");
+            return;
+        }
+
+        await entry.RunCommand.ExecuteAsync(null).ConfigureAwait(true);
+    }
+
+    /// <summary>The entry of the repository at <paramref name="repoPath"/>; null when the entries have none (#454).</summary>
+    private static StableBuildEntry? EntryOf(IReadOnlyList<StableBuildEntry> entries, string repoPath)
+    {
+        var key = PathNormalizer.Normalize(repoPath);
+        return entries.FirstOrDefault(e => PathNormalizer.Normalize(e.RepoPath) == key);
     }
 
     [RelayCommand]
