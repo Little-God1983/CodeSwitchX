@@ -21,7 +21,8 @@ public partial class YardGitHubTests
     /// <paramref name="log"/> as the commits between them.
     /// </summary>
     /// <param name="hasBuildCommit">False: the build was made from a commit this clone has not got.</param>
-    private void GitHasTheBuild(string log, bool hasBuildCommit = true) => _gitRunner = args =>
+    /// <param name="headIsHere">Whether the clone has GitHub's head, asked at each look; always when not given.</param>
+    private void GitHasTheBuild(string log, bool hasBuildCommit = true, Func<bool>? headIsHere = null) => _gitRunner = args =>
     {
         lock (_gitRan)
         {
@@ -29,7 +30,7 @@ public partial class YardGitHubTests
         }
 
         return args.StartsWith("rev-list --no-walk --ignore-missing " + BuiltFrom, StringComparison.Ordinal) ? (hasBuildCommit ? BuiltFromFull : string.Empty) + "\n"
-            : args.StartsWith("rev-list --no-walk", StringComparison.Ordinal) ? args[(args.LastIndexOf(' ') + 1)..] + "\n"
+            : args.StartsWith("rev-list --no-walk", StringComparison.Ordinal) ? (headIsHere?.Invoke() ?? true ? args[(args.LastIndexOf(' ') + 1)..] : string.Empty) + "\n"
             : args.StartsWith("log --format=", StringComparison.Ordinal) ? log
             : string.Empty;
     };
@@ -79,7 +80,7 @@ public partial class YardGitHubTests
 
         var (yard, app, _) = await ComparedStableYard();
 
-        yard.FindTile(app.Id)!.GitLines[0].Stable.ShouldBe(new StableBuildStatus(StableFreshness.UpToDate, "1.0.0.5", 0, "main", BuiltFrom, OnGitHub));
+        yard.FindTile(app.Id)!.GitLines[0].Stable.ShouldBe(new StableBuildStatus(StableFreshness.UpToDate, "1.0.0.5", 0, "main", BuiltFrom, OnGitHub, LookedAt: OnGitHub));
         GitAsked($"log --format=%x1e%H%x1f%s --name-only {BuiltFromFull}..{OnGitHub}").ShouldBeGreaterThan(0, "GitHub's default branch, not the checkout's");
     }
 
@@ -141,7 +142,58 @@ public partial class YardGitHubTests
         await Task.Delay(500, TestContext.Current.CancellationToken);
 
         GitAsked("status").ShouldBe(reads);
-        yard.FindTile(app.Id)!.GitLines[0].Stable.ShouldBe(new StableBuildStatus(StableFreshness.Unknown, "1.0.0.5", BuiltFrom: BuiltFrom));
+        yard.FindTile(app.Id)!.GitLines[0].Stable.ShouldBe(new StableBuildStatus(StableFreshness.Unknown, "1.0.0.5", BuiltFrom: BuiltFrom, LookedAt: OnGitHub));
+    }
+
+    [Fact]
+    public async Task A_build_git_cannot_compare_is_read_again_only_for_a_new_head_on_GitHub()
+    {
+        // Any repository's issue or pull request changing raises the same event: only a head the build was not looked at against asks git.
+        _gh.DefaultHead = OnGitHub;
+        GitHasTheBuild(BumpOnly, hasBuildCommit: false);
+        StableApp(out var app);
+        var yard = Yard(true, app);
+        await yard.InitializeAsync(CancellationToken.None);
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Stable?.LookedAt == OnGitHub);
+        await Quiet();
+        await yard.CurrentGitRefresh;
+        var reads = GitAsked("status");
+        var changes = 0;
+        _activity!.Changed += (_, _) => changes++;
+
+        _gh.Issues = 5;
+        await _activity.RefreshAsync([app.RootPath], TestContext.Current.CancellationToken);
+        await yard.CurrentGitRefresh;
+
+        changes.ShouldBe(1, "the issue count changed");
+        GitAsked("status").ShouldBe(reads, "the same head on GitHub: git would give no answer again");
+
+        var moved = new string('b', 40);
+        _gh.DefaultHead = moved;
+        await _activity.RefreshAsync([app.RootPath], TestContext.Current.CancellationToken);
+
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Stable?.LookedAt == moved);
+        GitAsked("status").ShouldBeGreaterThan(reads);
+    }
+
+    [Fact]
+    public async Task An_outdated_build_without_a_count_is_compared_again()
+    {
+        // GitHub's head was not in the clone: after a fetch or a pull git can count it, or it turns out to be up to date.
+        var headIsHere = false;
+        GitHasTheBuild(BumpOnly + LogRecord("feat: one", "a.cs") + LogRecord("fix: two", "b.cs"), headIsHere: () => headIsHere);
+        var (yard, app, _) = await ComparedStableYard();
+        yard.FindTile(app.Id)!.GitLines[0].Stable.ShouldNotBeNull().NewerCommits.ShouldBeNull();
+        var lookups = GitAsked("rev-list --no-walk --ignore-missing " + OnGitHub);
+
+        headIsHere = true;
+        await yard.RefreshGitAsync(CancellationToken.None);
+
+        var stable = yard.FindTile(app.Id)!.GitLines[0].Stable.ShouldNotBeNull();
+        stable.Freshness.ShouldBe(StableFreshness.Outdated);
+        stable.NewerCommits.ShouldBe(2);
+        GitAsked("rev-list --no-walk --ignore-missing " + OnGitHub).ShouldBeGreaterThan(lookups);
+        GitAsked($"log --format=%x1e%H%x1f%s --name-only {BuiltFromFull}..{OnGitHub}").ShouldBe(1);
     }
 
     [Fact]

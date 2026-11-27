@@ -338,16 +338,47 @@ public class StableBuildTests : IDisposable
     [Theory]
     [InlineData(null)]
     [InlineData("""{"version":"1.2.3.4","complete":false,"commit":"715bed9"}""")]
-    [InlineData("""{"version":"1.2.3.4","commit":"715bed9"}""")]
+    [InlineData("""{"version":"1.2.3.4","complete":"yes","commit":"715bed9"}""")]
     [InlineData("""{"version":"","complete":true,"commit":"715bed9"}""")]
     [InlineData("""{"complete":true,"commit":"715bed9"}""")]
     [InlineData("""{"version":5,"complete":true}""")]
-    [InlineData("not json")]
     public void Read_gives_no_build_for_a_missing_file_an_incomplete_marker_or_no_version(string? text)
     {
         var path = text is null ? Path.Combine(_root, "missing.json") : Marker(text);
 
         StableBuildInstall.Read(path).ShouldBe(StableBuildRead.NoBuild);
+    }
+
+    [Fact]
+    public void Read_takes_a_marker_without_complete_as_a_finished_build()
+    {
+        // An older build script writes no "complete" at all: only one that says otherwise is a build stopped half way.
+        var path = Marker("""{"version":"1.0.0.5","commit":"4b414cb"}""");
+
+        StableBuildInstall.Read(path).ShouldBe(new StableBuildRead(true, new StableBuildInstall("1.0.0.5", "4b414cb")));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("not json")]
+    [InlineData("""{"version":"1.2.3.4","comp""")]
+    public void Read_is_unknown_for_an_empty_or_torn_marker(string text)
+    {
+        // The build script may be writing it this very moment: what was shown stays.
+        var path = Marker(text);
+
+        StableBuildInstall.Read(path).ShouldBe(StableBuildRead.Unknown);
+    }
+
+    [Fact]
+    public void Read_takes_a_marker_another_program_has_open_for_writing()
+    {
+        var path = Marker("""{"version":"1.2.3.4","complete":true,"commit":"715bed9"}""");
+
+        using (new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite))
+        {
+            StableBuildInstall.Read(path).ShouldBe(new StableBuildRead(true, new StableBuildInstall("1.2.3.4", "715bed9")));
+        }
     }
 
     [Fact]
@@ -400,11 +431,14 @@ public class StableBuildTests : IDisposable
     public void A_line_compared_with_another_head_than_GitHub_has_now_is_out_of_date()
     {
         var activity = new RepoActivity(new GitHubRepo("acme", "app"), "me", 0, 0, [], [], DefaultBranch: "main", DefaultHead: new GitHubHead(new string('b', 40), null));
-        var line = new GitLine(null, "main", 0, GitHub: activity, Stable: new StableBuildStatus(StableFreshness.UpToDate, "1.0.0.5", 0, "main", "715bed9", new string('a', 40)));
+        var line = new GitLine(null, "main", 0, GitHub: activity,
+            Stable: new StableBuildStatus(StableFreshness.UpToDate, "1.0.0.5", 0, "main", "715bed9", new string('a', 40), LookedAt: new string('a', 40)));
 
         line.StableIsOutOfDate.ShouldBeTrue();
-        (line with { Stable = line.Stable! with { ComparedWith = new string('b', 40) } }).StableIsOutOfDate.ShouldBeFalse();
+        (line with { Stable = line.Stable! with { ComparedWith = new string('b', 40), LookedAt = new string('b', 40) } }).StableIsOutOfDate.ShouldBeFalse();
         (line with { Stable = new StableBuildStatus(StableFreshness.Unknown, "1.0.0.5") }).StableIsOutOfDate.ShouldBeFalse("no commit to compare");
+        (line with { Stable = new StableBuildStatus(StableFreshness.Unknown, "1.0.0.5", BuiltFrom: "715bed9", LookedAt: new string('b', 40)) }).StableIsOutOfDate
+            .ShouldBeFalse("git gave no answer against the head GitHub has now: asking it again would give none either");
         (line with { GitHub = null }).StableIsOutOfDate.ShouldBeFalse("nothing read on GitHub");
     }
 

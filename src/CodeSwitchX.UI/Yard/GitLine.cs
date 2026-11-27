@@ -29,9 +29,10 @@ public sealed record GitLine(string? Folder, string? Branch, int? DirtyCount, st
 {
     /// <summary>
     /// <see cref="Stable"/> was worked out against another head of GitHub's default branch than GitHub has now, or not at all (#452): git
-    /// must be asked again. Only for a build whose commit is known, and with something read on GitHub.
+    /// must be asked again. Only for a build whose commit is known, and with something read on GitHub. A build git gave no answer for was
+    /// looked at against that head all the same: asking again for the same head would give none either.
     /// </summary>
-    internal bool StableIsOutOfDate => Stable is { BuiltFrom: not null } s && GitHub?.DefaultHead?.Sha is { } head && head != s.ComparedWith;
+    internal bool StableIsOutOfDate => Stable is { BuiltFrom: not null } s && GitHub?.DefaultHead?.Sha is { } head && head != s.LookedAt;
 
     /// <summary>The state pill opens the Changes tab (#444): it says "N changed", and the line has the repository panel the tab is in.</summary>
     public bool HasChangesToShow => GitHub is not null && DirtyCount > 0;

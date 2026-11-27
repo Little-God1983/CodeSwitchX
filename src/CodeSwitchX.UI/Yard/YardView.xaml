@@ -250,7 +250,8 @@
             <ItemsControl ItemsSource="{Binding StableRows}">
               <ItemsControl.ItemTemplate>
                 <DataTemplate DataType="{x:Type yard:StableBuildRow}">
-                  <StackPanel Orientation="Horizontal" Margin="0,1">
+                  <!-- the tooltip on the whole row: a build not compared yet has no pill, and its version says why on hover -->
+                  <StackPanel Orientation="Horizontal" Margin="0,1" ToolTip="{Binding Status.ToolTip}">
                     <TextBlock Text="{Binding Title}" FontSize="12" Opacity="0.8" VerticalAlignment="Center">
                       <TextBlock.Style>
                         <Style TargetType="TextBlock">
@@ -263,7 +264,7 @@
                       </TextBlock.Style>
                     </TextBlock>
                     <!-- styled like the git state pill: green up to date, amber outdated, grey no stable build; none where nothing is known -->
-                    <Border CornerRadius="8" Padding="7,0,7,1" Margin="8,0,0,0" VerticalAlignment="Center" BorderThickness="1" ToolTip="{Binding Status.ToolTip}">
+                    <Border CornerRadius="8" Padding="7,0,7,1" Margin="8,0,0,0" VerticalAlignment="Center" BorderThickness="1">
                       <Border.Style>
                         <Style TargetType="Border">
                           <Setter Property="Background" Value="#14FFFFFF" />

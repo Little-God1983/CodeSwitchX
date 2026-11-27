@@ -221,8 +221,10 @@ public sealed partial record StableBuildRepo(string RepoPath, string ShortcutNam
 public sealed partial record StableBuildInstall(string Version, string? Commit)
 {
     /// <summary>
-    /// What the marker at <paramref name="markerPath"/> says. A marker that is not there, not <c>complete</c> (the build stopped half way)
-    /// or names no version is no build. One another program holds for a moment (the build writing it, a scanner) says nothing new: unknown.
+    /// What the marker at <paramref name="markerPath"/> says. A marker that is not there, says it is not <c>complete</c> (the build stopped
+    /// half way) or names no version is no build; one with no <c>complete</c> at all comes from an older build script, which writes it only
+    /// once the build is done. One another program holds for a moment (a scanner), or that is empty or torn (the build writing it this very
+    /// moment), says nothing new: unknown.
     /// </summary>
     public static StableBuildRead Read(string markerPath)
     {
@@ -233,20 +235,28 @@ public sealed partial record StableBuildInstall(string Version, string? Commit)
                 return StableBuildRead.NoBuild;
             }
 
-            // ReadAllText drops the byte order mark PowerShell 5.1 writes, which JsonDocument would not take.
-            using var json = JsonDocument.Parse(File.ReadAllText(markerPath));
+            string text;
+            // Shared for writing and deleting: the build script must never fail to write it because the Yard reads it. The reader drops
+            // the byte order mark PowerShell 5.1 writes, which JsonDocument would not take.
+            using (var stream = new FileStream(markerPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            using (var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true))
+            {
+                text = reader.ReadToEnd();
+            }
+
+            using var json = JsonDocument.Parse(text);
             var marker = json.RootElement;
             if (marker.ValueKind != JsonValueKind.Object
-                || !marker.TryGetProperty("complete", out var complete) || complete.ValueKind != JsonValueKind.True
+                || (marker.TryGetProperty("complete", out var complete) && complete.ValueKind != JsonValueKind.True)
                 || !marker.TryGetProperty("version", out var version) || version.ValueKind != JsonValueKind.String
-                || version.GetString() is not { Length: > 0 } text)
+                || version.GetString() is not { Length: > 0 } installed)
             {
                 return StableBuildRead.NoBuild;
             }
 
             // The commit goes onto git's command line later: only a hash is taken.
             var commit = marker.TryGetProperty("commit", out var c) && c.ValueKind == JsonValueKind.String && c.GetString() is { } hash && ShortHash().IsMatch(hash) ? hash : null;
-            return new StableBuildRead(true, new StableBuildInstall(text, commit));
+            return new StableBuildRead(true, new StableBuildInstall(installed, commit));
         }
         catch (IOException ex) when (ex.HResult is StableBuildRepo.SharingViolation or StableBuildRepo.LockViolation)
         {
@@ -254,7 +264,8 @@ public sealed partial record StableBuildInstall(string Version, string? Commit)
         }
         catch (JsonException)
         {
-            return StableBuildRead.NoBuild;
+            // Read while the build script writes it: an empty file, or half of one. What was shown stays.
+            return StableBuildRead.Unknown;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -297,7 +308,12 @@ public enum StableFreshness
 /// <param name="Branch">GitHub's default branch the build was compared with.</param>
 /// <param name="BuiltFrom">The commit the build was made from, as its marker has it; null when it names none.</param>
 /// <param name="ComparedWith">GitHub's head, the full hash, that git compared the build with; null when it was not compared.</param>
-public sealed record StableBuildStatus(StableFreshness Freshness, string? Version = null, int? NewerCommits = null, string? Branch = null, string? BuiltFrom = null, string? ComparedWith = null)
+/// <param name="LookedAt">
+/// The head of GitHub's default branch the status was worked out against, also when git gave no answer for it; null when none was read.
+/// Another head on GitHub now is what makes git be asked again (<see cref="GitLine.StableIsOutOfDate"/>).
+/// </param>
+public sealed record StableBuildStatus(StableFreshness Freshness, string? Version = null, int? NewerCommits = null, string? Branch = null, string? BuiltFrom = null, string? ComparedWith = null,
+    string? LookedAt = null)
 {
     /// <summary>The pill's word; null where nothing is known, so no pill rather than a guess.</summary>
     public string? Label => Freshness switch
