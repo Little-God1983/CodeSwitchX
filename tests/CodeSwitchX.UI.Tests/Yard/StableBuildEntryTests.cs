@@ -192,10 +192,82 @@ public class StableBuildEntryTests : IDisposable
         _tile.ShowGit([StableLine(@"c:\repo\app", @"E:\Stable\App\app-install.json", UpToDate)]);
         var rows = _tile.StableRows;
 
-        // An equal line in a new list, as every round makes; GitLines changes when anything else on the line does.
-        _tile.ShowGit([StableLine(@"c:\repo\app", @"E:\Stable\App\app-install.json", UpToDate) with { DirtyCount = 2 }]);
+        // An equal line in a new list, as every round makes; GitLines changes when anything else on the line does. The head moved, which
+        // changes neither the status nor the buttons (#454).
+        _tile.ShowGit([StableLine(@"c:\repo\app", @"E:\Stable\App\app-install.json", UpToDate) with { Head = new string('b', 40) }]);
 
         _tile.StableRows.ShouldBeSameAs(rows, "a new list would rebuild the row and close its tooltip");
+        _tile.StableRows[0].Buttons.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void A_clean_line_on_main_with_a_shortcut_gives_live_buttons()
+    {
+        _tile.ShowGit([StableLine(@"c:\repo\app", @"E:\Stable\App\app-install.json", UpToDate)]);
+
+        var row = _tile.StableRows.ShouldHaveSingleItem();
+        var buttons = row.Buttons.ShouldNotBeNull();
+        buttons.CanBuild.ShouldBeTrue();
+        buttons.CanRun.ShouldBeTrue();
+        buttons.BuildToolTip.ShouldBe("Build new version");
+        buttons.RunToolTip.ShouldBe("Run");
+        row.Lead.ShouldBe("Stable");
+    }
+
+    [Fact]
+    public void A_dirty_line_greys_the_build_button_and_says_why()
+    {
+        _tile.ShowGit([StableLine(@"c:\repo\app", @"E:\Stable\App\app-install.json", UpToDate)]);
+        var rows = _tile.StableRows;
+
+        _tile.ShowGit([StableLine(@"c:\repo\app", @"E:\Stable\App\app-install.json", UpToDate) with { DirtyCount = 2 }]);
+
+        _tile.StableRows.ShouldNotBeSameAs(rows, "the greying follows the round");
+        var buttons = _tile.StableRows.ShouldHaveSingleItem().Buttons.ShouldNotBeNull();
+        buttons.CanBuild.ShouldBeFalse();
+        buttons.BuildToolTip.ShouldBe("2 uncommitted changes - commit or stash first");
+        buttons.CanRun.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void A_missing_shortcut_greys_the_run_button_and_says_why()
+    {
+        _launcher.Shortcuts.Clear();
+
+        _tile.ShowGit([StableLine(@"c:\repo\app", @"E:\Stable\App\app-install.json", UpToDate)]);
+
+        var buttons = _tile.StableRows.ShouldHaveSingleItem().Buttons.ShouldNotBeNull();
+        buttons.CanRun.ShouldBeFalse();
+        buttons.RunToolTip.ShouldBe("No stable build yet");
+    }
+
+    [Fact]
+    public void Two_apps_on_one_tile_name_their_buttons_and_leads()
+    {
+        _tile.ShowGit(
+        [
+            StableLine(@"c:\repo\app", @"E:\Stable\App\app-install.json", UpToDate, "App"),
+            StableLine(@"c:\repo\shop", @"E:\Stable\Shop\shop-install.json", UpToDate with { Version = "2.0.0.1" }, "Shop"),
+        ]);
+
+        _tile.StableRows.Select(r => r.Buttons?.BuildName).ShouldBe(["Build App", "Build Shop"]);
+        _tile.StableRows.Select(r => r.Lead).ShouldBe(["App · Stable", "Shop · Stable"]);
+    }
+
+    [Fact]
+    public void A_named_row_without_a_build_leads_with_the_name_and_a_lone_one_with_nothing()
+    {
+        _tile.ShowGit(
+        [
+            StableLine(@"c:\repo\app", @"E:\Stable\App\app-install.json", UpToDate, "App"),
+            StableLine(@"c:\repo\cart", @"E:\Stable\Cart\cart-install.json", new StableBuildStatus(StableFreshness.NoBuild), "Cart"),
+        ]);
+
+        _tile.StableRows[1].Lead.ShouldBe("Cart");
+
+        _tile.ShowGit([StableLine(@"c:\repo\cart", @"E:\Stable\Cart\cart-install.json", new StableBuildStatus(StableFreshness.NoBuild))]);
+
+        _tile.StableRows.ShouldHaveSingleItem().Lead.ShouldBeNull();
     }
 
     [Fact]
