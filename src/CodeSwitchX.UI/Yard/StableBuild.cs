@@ -358,8 +358,8 @@ public sealed record StableBuildRow(string? Title, StableBuildStatus Status, Sta
     internal static string? LeadOf(StableBuildStatus status, string? name) => (name, status.Version) switch
     {
         ({ } app, not null) => $"{app} · Stable",
-        ({ } app, null) => app,
-        (null, not null) => "Stable",
+        ({ } app, _) => app,
+        (_, not null) => "Stable",
         _ => null,
     };
 }
