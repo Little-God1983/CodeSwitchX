@@ -203,6 +203,41 @@ public class GitInspectorTests : IDisposable
         ran.ShouldBeEmpty("what GitHub sent goes on git's command line only as a full hash");
     }
 
+    [Theory]
+    [InlineData("--all", OnGitHub)]
+    [InlineData("715bed9 --output=x", OnGitHub)]
+    [InlineData("715bed9", "abc")]
+    [InlineData("715bed9", "7d6783b")]
+    public async Task SinceBuild_is_unknown_for_a_built_from_that_is_no_hash_or_an_on_github_that_is_not_full(string builtFrom, string onGitHub)
+    {
+        var ran = new List<string>();
+
+        (await Scripted(ran).SinceBuildAsync(_root, builtFrom, onGitHub, CancellationToken.None)).ShouldBe(SinceBuildAnswer.Unknown);
+
+        ran.ShouldBeEmpty("only hashes go onto git's command line (#452)");
+    }
+
+    [Fact]
+    public async Task SinceBuild_is_unknown_when_git_gives_no_answer()
+    {
+        var ran = new List<string>();
+
+        (await Scripted(ran).SinceBuildAsync(_root, "715bed9", OnGitHub, CancellationToken.None)).ShouldBe(SinceBuildAnswer.Unknown);
+
+        ran.ShouldBe([$"{Probe} 715bed9"]);
+    }
+
+    [Fact]
+    public async Task SinceBuild_is_unknown_when_the_build_commit_is_not_in_the_clone()
+    {
+        // The build was made from another clone: nothing here to count from.
+        var ran = new List<string>();
+
+        (await Scripted(ran, ($"{Probe} 715bed9", "\n")).SinceBuildAsync(_root, "715bed9", OnGitHub, CancellationToken.None)).ShouldBe(SinceBuildAnswer.Unknown);
+
+        ran.ShouldBe([$"{Probe} 715bed9"]);
+    }
+
     [Fact]
     public async Task Inspect_without_git_available_still_reports_the_branch_but_no_dirty_count()
     {

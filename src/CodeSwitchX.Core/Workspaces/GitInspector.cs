@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 using CodeSwitchX.Core.Paths;
 
 namespace CodeSwitchX.Core.Workspaces;
@@ -37,6 +38,21 @@ public readonly record struct BehindAnswer(bool Known, GitBehind? Behind)
     public static BehindAnswer Of(GitBehind behind) => new(true, behind);
 }
 
+/// <summary>What <see cref="GitInspector.SinceBuildAsync"/> found (#452).</summary>
+/// <param name="Known">Git answered. Without an answer neither "up to date" nor "outdated" may be made of it.</param>
+/// <param name="NewerCommits">How many commits GitHub's default branch has since the build, its bump commits left out; null when only "newer" can be told.</param>
+/// <param name="Newer">The default branch has commits the build was not made from.</param>
+public readonly record struct SinceBuildAnswer(bool Known, int? NewerCommits, bool Newer)
+{
+    /// <summary>Git did not answer, a commit was not a hash, or the build's commit is not in this clone.</summary>
+    public static readonly SinceBuildAnswer Unknown = new(false, null, false);
+
+    /// <summary>Nothing on the default branch since the build but the build script's bump commits.</summary>
+    public static readonly SinceBuildAnswer UpToDate = new(true, 0, false);
+
+    public static SinceBuildAnswer Outdated(int? commits) => new(true, commits, true);
+}
+
 /// <param name="Output">Stdout when the process exited with code 0; otherwise null.</param>
 /// <param name="TimedOut">The process was killed because it outlived the timeout.</param>
 /// <param name="Pid">The started process id, when it started.</param>
@@ -54,7 +70,7 @@ public sealed record ProcessRunResult(string? Output, bool TimedOut, int? Pid, i
 /// Cheap git facts for tiles: branch from HEAD (no process), dirty count and commit from one <c>git status --porcelain=v2</c>, and how
 /// far the checkout is behind a commit GitHub named (#426), without a fetch.
 /// </summary>
-public sealed class GitInspector
+public sealed partial class GitInspector
 {
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(5);
 
@@ -213,6 +229,80 @@ public sealed class GitInspector
 
         return BehindAnswer.Of(new GitBehind(total - local));
     }
+
+    /// <summary>
+    /// How many commits GitHub's default branch, at <paramref name="onGitHub"/>, has after <paramref name="builtFrom"/>, the commit a stable
+    /// build was made from (#452). The build script's own bump commits do not count: one follows every build. Nothing is fetched. A head on
+    /// GitHub this clone lacks is the usual case right after a merge there: outdated, by a count nobody knows (bump commits are made in
+    /// this clone, so a commit it lacks is real news). A git that gives no answer is <see cref="SinceBuildAnswer.Unknown"/>.
+    /// </summary>
+    /// <param name="builtFrom">The build's commit as its install marker has it, a short hash.</param>
+    /// <param name="onGitHub">GitHub's default branch's newest commit, the full hash.</param>
+    public async Task<SinceBuildAnswer> SinceBuildAsync(string root, string builtFrom, string onGitHub, CancellationToken ct)
+    {
+        // Both go onto git's command line: only as hashes.
+        if (!AnyHash().IsMatch(builtFrom) || !IsFullHash(onGitHub))
+        {
+            return SinceBuildAnswer.Unknown;
+        }
+
+        // Answers either way, as in BehindAsync: the full hash for a commit that is here, nothing for one that is not.
+        var full = (await _runGit(root, $"rev-list --no-walk --ignore-missing {builtFrom}", ct).ConfigureAwait(false))?.Trim();
+        if (!IsFullHash(full))
+        {
+            // No answer, or the build was made from a commit this clone has not got: nothing to count from.
+            return SinceBuildAnswer.Unknown;
+        }
+
+        if (string.Equals(full, onGitHub, StringComparison.OrdinalIgnoreCase))
+        {
+            return SinceBuildAnswer.UpToDate;
+        }
+
+        var here = (await _runGit(root, $"rev-list --no-walk --ignore-missing {onGitHub}", ct).ConfigureAwait(false))?.Trim();
+        if (here is null)
+        {
+            return SinceBuildAnswer.Unknown;
+        }
+
+        if (here.Length == 0)
+        {
+            return SinceBuildAnswer.Outdated(null);
+        }
+
+        var log = await _runGit(root, $"log --format=%x1e%H%x1f%s --name-only {full}..{onGitHub}", ct).ConfigureAwait(false);
+        if (log is null)
+        {
+            return SinceBuildAnswer.Unknown;
+        }
+
+        var newer = log.Split('\x1e', StringSplitOptions.RemoveEmptyEntries).Count(record => !IsBumpCommit(record));
+        return newer == 0 ? SinceBuildAnswer.UpToDate : SinceBuildAnswer.Outdated(newer);
+    }
+
+    /// <summary>
+    /// One commit of <c>git log --format=%x1e%H%x1f%s --name-only</c> is the build script's bump commit (#452): its subject says so, and
+    /// it changed the version file and nothing else, as <c>Get-UnpushedBump</c> in the scripts tells one.
+    /// </summary>
+    private static bool IsBumpCommit(string record)
+    {
+        var lines = record.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).ToList();
+        if (lines.Count == 0)
+        {
+            // A blank between two records, not a commit.
+            return true;
+        }
+
+        var subject = lines[0].Split('\x1f', 2) is [_, var s] ? s : string.Empty;
+        return BumpSubject().IsMatch(subject) && lines.Skip(1).SequenceEqual(["Directory.Build.props"]);
+    }
+
+    [GeneratedRegex(@"^chore: bump version to \d")]
+    private static partial Regex BumpSubject();
+
+    /// <summary>A commit's hash, short or full: what goes onto git's command line from a file the app did not write.</summary>
+    [GeneratedRegex("^[0-9a-fA-F]{4,40}$")]
+    private static partial Regex AnyHash();
 
     /// <summary>The most of a branch's former tips its own commits are worked out from (#435): its newest ones, a short command line all the same.</summary>
     private const int MostTips = 200;
