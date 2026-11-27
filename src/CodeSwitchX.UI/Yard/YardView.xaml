@@ -144,6 +144,9 @@
       <Setter Property="FontSize" Value="12" />
       <Setter Property="Cursor" Value="Hand" />
       <Setter Property="ToolTipService.ShowOnDisabled" Value="True" />
+      <!-- above the button: under the pointer, the pointer covers the words (#454) -->
+      <Setter Property="ToolTipService.Placement" Value="Top" />
+      <Setter Property="ToolTipService.VerticalOffset" Value="-4" />
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
@@ -337,7 +340,7 @@
                         <!-- A button that cannot be pressed is red, not faint, and says why on hover: a faint one that did nothing on a click
                              was taken for a bug (#454). Red by the row's state, not by IsEnabled: a press under way greys the button too.
                              The tooltip also on a border around it, which is never disabled, so the reason shows over the row's own tooltip. -->
-                        <Border Background="Transparent" ToolTip="{Binding Buttons.RunToolTip}"
+                        <Border Background="Transparent" ToolTip="{Binding Buttons.RunToolTip}" ToolTipService.Placement="Top" ToolTipService.VerticalOffset="-4"
                                 Visibility="{Binding Buttons.HasRun, Converter={StaticResource BoolVisible}}">
                           <Button Content="&#xE768;"
                                   Command="{Binding DataContext.RunStableCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"
@@ -353,7 +356,7 @@
                             </Button.Style>
                           </Button>
                         </Border>
-                        <Border Background="Transparent" ToolTip="{Binding Buttons.BuildToolTip}">
+                        <Border Background="Transparent" ToolTip="{Binding Buttons.BuildToolTip}" ToolTipService.Placement="Top" ToolTipService.VerticalOffset="-4">
                           <Button Content="&#xE90F;"
                                   Command="{Binding DataContext.BuildStableCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"
                                   IsEnabled="{Binding Buttons.CanBuild}" ToolTip="{Binding Buttons.BuildToolTip}" AutomationProperties.Name="{Binding Buttons.BuildName}">
