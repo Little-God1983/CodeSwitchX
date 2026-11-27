@@ -627,6 +627,57 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
             _owner.StableBuilds, _owner.Dialogs, _owner.FreshLineAsync))];
     }
 
+    /// <summary>
+    /// A stable row's Build button (#454): does what the menu's Build entry does, with the entry made at the press, so the lines as they
+    /// are now decide, not the round the row was made in.
+    /// </summary>
+    [RelayCommand]
+    private async Task BuildStableAsync(StableBuildRow? row)
+    {
+        if (row?.Buttons is not { } buttons)
+        {
+            return;
+        }
+
+        if (EntryOf(StableBuildEntries(), buttons.RepoPath) is not { } entry)
+        {
+            _owner.Dialogs.Tell($"Not building {buttons.Name}: its build scripts are not there any more.");
+            return;
+        }
+
+        if (entry.BuildBlock is { } block)
+        {
+            _owner.Dialogs.Tell($"Not building {entry.Name}: {block}.");
+            return;
+        }
+
+        await entry.BuildCommand.ExecuteAsync(null).ConfigureAwait(true);
+    }
+
+    /// <summary>A stable row's Run button (#454): the menu's Run entry, made at the press.</summary>
+    [RelayCommand]
+    private async Task RunStableAsync(StableBuildRow? row)
+    {
+        if (row?.Buttons is not { } buttons)
+        {
+            return;
+        }
+
+        if (EntryOf(StableBuildEntries(), buttons.RepoPath) is not { } entry)
+        {
+            _owner.Dialogs.Tell($"Not starting {buttons.Name}: its build scripts are not there any more.");
+            return;
+        }
+
+        if (!entry.CanRun)
+        {
+            _owner.Dialogs.Tell($"Not starting {entry.Name}: no stable build yet.");
+            return;
+        }
+
+        await entry.RunCommand.ExecuteAsync(null).ConfigureAwait(true);
+    }
+
     /// <summary>The entry of the repository at <paramref name="repoPath"/>; null when the entries have none (#454).</summary>
     private static StableBuildEntry? EntryOf(IReadOnlyList<StableBuildEntry> entries, string repoPath)
     {

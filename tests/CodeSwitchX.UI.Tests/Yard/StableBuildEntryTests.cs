@@ -271,6 +271,83 @@ public class StableBuildEntryTests : IDisposable
     }
 
     [Fact]
+    public async Task The_rows_build_button_asks_first_and_builds_the_repository()
+    {
+        _tile.ShowGit([StableLine(@"c:\repo\app", @"E:\Stable\App\app-install.json", UpToDate)]);
+
+        await _tile.BuildStableCommand.ExecuteAsync(_tile.StableRows[0]);
+
+        _dialogs.Asked.ShouldHaveSingleItem().ShouldStartWith("Build a new version of app?");
+        _launcher.Built.ShouldBe([@"c:\repo\app"]);
+    }
+
+    [Fact]
+    public async Task The_rows_build_button_goes_by_the_lines_as_they_are_at_the_press()
+    {
+        _tile.ShowGit([StableLine(@"c:\repo\app", @"E:\Stable\App\app-install.json", UpToDate)]);
+        var row = _tile.StableRows[0];
+        _tile.ShowGit([StableLine(@"c:\repo\app", @"E:\Stable\App\app-install.json", UpToDate) with { DirtyCount = 2 }]);
+
+        await _tile.BuildStableCommand.ExecuteAsync(row);
+
+        _dialogs.Told.ShouldBe(["Not building app: 2 uncommitted changes - commit or stash first."]);
+        _dialogs.Asked.ShouldBeEmpty();
+        _launcher.Built.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task The_rows_build_button_says_so_when_the_scripts_went_since_the_row_was_made()
+    {
+        _tile.ShowGit([StableLine(@"c:\repo\app", @"E:\Stable\App\app-install.json", UpToDate)]);
+        var row = _tile.StableRows[0];
+        _tile.ShowGit([Line(@"c:\repo\app", scripts: false)]);
+
+        await _tile.BuildStableCommand.ExecuteAsync(row);
+
+        _dialogs.Told.ShouldBe(["Not building app: its build scripts are not there any more."]);
+        _launcher.Built.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task The_rows_run_button_opens_the_shortcut()
+    {
+        _tile.ShowGit([StableLine(@"c:\repo\app", @"E:\Stable\App\app-install.json", UpToDate)]);
+
+        await _tile.RunStableCommand.ExecuteAsync(_tile.StableRows[0]);
+
+        _launcher.Ran.ShouldBe([@"programs\app.lnk"]);
+    }
+
+    [Fact]
+    public async Task The_rows_run_button_says_so_when_the_shortcut_went_since_the_row_was_made()
+    {
+        _tile.ShowGit([StableLine(@"c:\repo\app", @"E:\Stable\App\app-install.json", UpToDate)]);
+        var row = _tile.StableRows[0];
+        _launcher.Shortcuts.Clear();
+
+        await _tile.RunStableCommand.ExecuteAsync(row);
+
+        _dialogs.Told.ShouldBe(["Not starting app: no stable build yet."]);
+        _launcher.Ran.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_row_without_buttons_does_nothing()
+    {
+        _tile.ShowGit([StableLine(@"c:\repo\app", @"E:\Stable\App\app-install.json", UpToDate)]);
+        var row = new StableBuildRow("Stable 1.0.0.5", UpToDate);
+
+        await _tile.BuildStableCommand.ExecuteAsync(row);
+        await _tile.RunStableCommand.ExecuteAsync(row);
+        await _tile.BuildStableCommand.ExecuteAsync(null);
+
+        _dialogs.Asked.ShouldBeEmpty();
+        _dialogs.Told.ShouldBeEmpty();
+        _launcher.Built.ShouldBeEmpty();
+        _launcher.Ran.ShouldBeEmpty();
+    }
+
+    [Fact]
     public void One_repository_gets_the_plain_headers()
     {
         _tile.ShowGit([Line(@"c:\repo\app")]);
