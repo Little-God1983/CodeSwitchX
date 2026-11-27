@@ -1,3 +1,4 @@
+using System.Text;
 using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.UI.Yard;
 
@@ -292,5 +293,90 @@ public class StableBuildTests : IDisposable
     {
         StableBuildCheck.BuildBlock(Line("main", null)).ShouldBe("Git state unknown");
         StableBuildCheck.BuildBlock(Line(null, 0)).ShouldBe("Git state unknown");
+    }
+
+    private const string MarkerSettings = "$script:ShortcutName = 'App.lnk'\n$script:DefaultInstallRoot = 'E:\\Stable'\n$script:AppName = 'App'\n$script:InstallMarkerName = 'app-install.json'\n";
+
+    /// <summary>A marker file with the given text in the test's folder (#452).</summary>
+    private string Marker(string text, Encoding? encoding = null)
+    {
+        Directory.CreateDirectory(_root);
+        var path = Path.Combine(_root, "app-install.json");
+        File.WriteAllText(path, text, encoding ?? new UTF8Encoding(false));
+        return path;
+    }
+
+    [Fact]
+    public void Find_gives_the_marker_path_from_the_three_settings()
+    {
+        var repo = Repo(("build.ps1", "# build"), ("_common.ps1", MarkerSettings));
+
+        StableBuildRepo.Find(repo).ShouldNotBeNull().MarkerPath.ShouldBe(@"E:\Stable\App\app-install.json");
+    }
+
+    [Theory]
+    [InlineData("DefaultInstallRoot", "Stable")]
+    [InlineData("AppName", @"x\App")]
+    [InlineData("InstallMarkerName", "install.txt")]
+    public void Find_has_no_marker_path_for_a_relative_root_a_name_with_a_folder_or_a_marker_not_json(string name, string value)
+    {
+        var repo = Repo(("build.ps1", "# build"), ("_common.ps1", MarkerSettings + $"$script:{name} = '{value}'\n"));
+
+        StableBuildRepo.Find(repo).ShouldNotBeNull("the scripts are still there to build and run").MarkerPath.ShouldBeNull();
+    }
+
+    [Fact]
+    public void Read_gives_version_and_commit_of_a_complete_marker_with_a_bom()
+    {
+        // PowerShell 5.1's Set-Content -Encoding UTF8 writes a byte order mark.
+        var path = Marker("""{"app":"App","version":"1.2.3.4","complete":true,"installedAt":"2026-11-26 20:51:16","commit":"715bed9","note":"x"}""", new UTF8Encoding(true));
+
+        StableBuildInstall.Read(path).ShouldBe(new StableBuildRead(true, new StableBuildInstall("1.2.3.4", "715bed9")));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("""{"version":"1.2.3.4","complete":false,"commit":"715bed9"}""")]
+    [InlineData("""{"version":"1.2.3.4","commit":"715bed9"}""")]
+    [InlineData("""{"version":"","complete":true,"commit":"715bed9"}""")]
+    [InlineData("""{"complete":true,"commit":"715bed9"}""")]
+    [InlineData("""{"version":5,"complete":true}""")]
+    [InlineData("not json")]
+    public void Read_gives_no_build_for_a_missing_file_an_incomplete_marker_or_no_version(string? text)
+    {
+        var path = text is null ? Path.Combine(_root, "missing.json") : Marker(text);
+
+        StableBuildInstall.Read(path).ShouldBe(StableBuildRead.NoBuild);
+    }
+
+    [Fact]
+    public void Read_keeps_a_null_commit()
+    {
+        // Git was not there when the build ran.
+        var install = StableBuildInstall.Read(Marker("""{"version":"1.2.3.4","complete":true,"commit":null}""")).Install.ShouldNotBeNull();
+
+        install.Version.ShouldBe("1.2.3.4");
+        install.Commit.ShouldBeNull();
+    }
+
+    [Fact]
+    public void Read_is_unknown_while_another_program_holds_the_file()
+    {
+        var path = Marker("""{"version":"1.2.3.4","complete":true,"commit":"715bed9"}""");
+
+        using (new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            StableBuildInstall.Read(path).ShouldBe(StableBuildRead.Unknown, "the build writing it, or a scanner, says nothing new");
+        }
+    }
+
+    [Fact]
+    public void Read_drops_a_commit_that_is_not_a_short_hash()
+    {
+        // The commit goes onto git's command line later: only a hash passes.
+        var install = StableBuildInstall.Read(Marker("""{"version":"1.2.3.4","complete":true,"commit":"--all"}""")).Install.ShouldNotBeNull();
+
+        install.Version.ShouldBe("1.2.3.4");
+        install.Commit.ShouldBeNull();
     }
 }

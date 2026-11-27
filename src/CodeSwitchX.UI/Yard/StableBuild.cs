@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using CodeSwitchX.Core.Paths;
 using CodeSwitchX.UI.Infrastructure;
@@ -16,12 +17,16 @@ namespace CodeSwitchX.UI.Yard;
 /// <param name="RepoPath">The repository's top folder, where its scripts folder is.</param>
 /// <param name="ShortcutName">The shortcut's bare file name in the Start Menu's Programs folder, e.g. "Some App.lnk".</param>
 /// <param name="ReleaseBranch">The branch the script builds from (<c>$script:ReleaseBranch</c>); null when the file names none.</param>
-public sealed partial record StableBuildRepo(string RepoPath, string ShortcutName, string? ReleaseBranch = null)
+/// <param name="MarkerPath">
+/// The install marker the build writes into the current version's folder (#452): <c>&lt;DefaultInstallRoot&gt;\&lt;AppName&gt;\&lt;InstallMarkerName&gt;</c>;
+/// null when the file does not name all three plainly.
+/// </param>
+public sealed partial record StableBuildRepo(string RepoPath, string ShortcutName, string? ReleaseBranch = null, string? MarkerPath = null)
 {
     public string BuildScript => Path.Combine(RepoPath, "scripts", "build.ps1");
 
     /// <summary>Windows' "another program has the file open" and "has part of it locked": a refusal for a moment, not for good.</summary>
-    private const int SharingViolation = unchecked((int)0x80070020), LockViolation = unchecked((int)0x80070021);
+    internal const int SharingViolation = unchecked((int)0x80070020), LockViolation = unchecked((int)0x80070021);
 
     /// <summary>
     /// The scripts of the repository whose top is <paramref name="top"/> (git found it, <see cref="Core.Workspaces.GitInfo.Top"/>); null
@@ -48,7 +53,7 @@ public sealed partial record StableBuildRepo(string RepoPath, string ShortcutNam
                 return null;
             }
 
-            return new StableBuildRepo(top, shortcut, Setting(text, "ReleaseBranch"));
+            return new StableBuildRepo(top, shortcut, Setting(text, "ReleaseBranch"), MarkerPathOf(text));
         }
         catch (IOException ex) when (ex.HResult is SharingViolation or LockViolation)
         {
@@ -61,6 +66,24 @@ public sealed partial record StableBuildRepo(string RepoPath, string ShortcutNam
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// Where the marker is (#452), from the three settings the scripts make its path of. Only a root that names a drive or a share, a bare
+    /// app name and a bare .json file name: the path must not depend on where the app was started, nor lead out of the install folder.
+    /// The marker's name is read, not made of the app's: a renamed app may keep its old marker name.
+    /// </summary>
+    private static string? MarkerPathOf(string text)
+    {
+        if (Setting(text, "DefaultInstallRoot") is not { } root || !Path.IsPathFullyQualified(root)
+            || Setting(text, "AppName") is not { } app || app != Path.GetFileName(app)
+            || Setting(text, "InstallMarkerName") is not { } marker || marker != Path.GetFileName(marker)
+            || !marker.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return Path.Combine(root, app, marker);
     }
 
     /// <summary>
@@ -190,6 +213,66 @@ public sealed partial record StableBuildRepo(string RepoPath, string ShortcutNam
     /// <summary><c>$script:Name = 'value'</c> or <c>"value"</c> at a line's start; PowerShell takes the scope in any casing.</summary>
     [GeneratedRegex("""^\s*\$script:(?<name>\w+)\s*=\s*(?:'(?<single>(?:[^']|'')*)'|"(?<double>[^"]*)")""", RegexOptions.Multiline | RegexOptions.IgnoreCase)]
     private static partial Regex SettingLine();
+}
+
+/// <summary>The stable build installed now (#452), as its marker says.</summary>
+/// <param name="Version">The version the build gave the app.</param>
+/// <param name="Commit">The (short) hash the build was made from; null when git was not there at build time, or the marker holds no hash.</param>
+public sealed partial record StableBuildInstall(string Version, string? Commit)
+{
+    /// <summary>
+    /// What the marker at <paramref name="markerPath"/> says. A marker that is not there, not <c>complete</c> (the build stopped half way)
+    /// or names no version is no build. One another program holds for a moment (the build writing it, a scanner) says nothing new: unknown.
+    /// </summary>
+    public static StableBuildRead Read(string markerPath)
+    {
+        try
+        {
+            if (!File.Exists(markerPath))
+            {
+                return StableBuildRead.NoBuild;
+            }
+
+            // ReadAllText drops the byte order mark PowerShell 5.1 writes, which JsonDocument would not take.
+            using var json = JsonDocument.Parse(File.ReadAllText(markerPath));
+            var marker = json.RootElement;
+            if (marker.ValueKind != JsonValueKind.Object
+                || !marker.TryGetProperty("complete", out var complete) || complete.ValueKind != JsonValueKind.True
+                || !marker.TryGetProperty("version", out var version) || version.ValueKind != JsonValueKind.String
+                || version.GetString() is not { Length: > 0 } text)
+            {
+                return StableBuildRead.NoBuild;
+            }
+
+            // The commit goes onto git's command line later: only a hash is taken.
+            var commit = marker.TryGetProperty("commit", out var c) && c.ValueKind == JsonValueKind.String && c.GetString() is { } hash && ShortHash().IsMatch(hash) ? hash : null;
+            return new StableBuildRead(true, new StableBuildInstall(text, commit));
+        }
+        catch (IOException ex) when (ex.HResult is StableBuildRepo.SharingViolation or StableBuildRepo.LockViolation)
+        {
+            return StableBuildRead.Unknown;
+        }
+        catch (JsonException)
+        {
+            return StableBuildRead.NoBuild;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return StableBuildRead.Unknown;
+        }
+    }
+
+    [GeneratedRegex("^[0-9a-fA-F]{4,40}$")]
+    private static partial Regex ShortHash();
+}
+
+/// <summary>What reading a stable build's marker found (#452).</summary>
+/// <param name="Known">The marker could be read, or is not there; false while another program holds it.</param>
+/// <param name="Install">The build it names; null for no build, or when not known.</param>
+public readonly record struct StableBuildRead(bool Known, StableBuildInstall? Install)
+{
+    public static readonly StableBuildRead Unknown = new(false, null);
+    public static readonly StableBuildRead NoBuild = new(true, null);
 }
 
 /// <summary>Whether a line's git state lets a stable build start (#423): the user's precheck, before the script's own stricter ones.</summary>
