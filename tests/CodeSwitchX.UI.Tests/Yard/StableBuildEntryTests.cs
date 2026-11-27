@@ -255,6 +255,37 @@ public class StableBuildEntryTests : IDisposable
     }
 
     [Fact]
+    public async Task On_a_tile_with_two_apps_a_rows_buttons_act_on_its_own_app()
+    {
+        _launcher.Shortcuts.Add(@"programs\shop.lnk");
+        _tile.ShowGit(
+        [
+            StableLine(@"c:\repo\app", @"E:\Stable\App\app-install.json", UpToDate, "App"),
+            StableLine(@"c:\repo\shop", @"E:\Stable\Shop\shop-install.json", UpToDate with { Version = "2.0.0.1" }, "Shop"),
+        ]);
+
+        await _tile.BuildStableCommand.ExecuteAsync(_tile.StableRows[1]);
+        await _tile.RunStableCommand.ExecuteAsync(_tile.StableRows[1]);
+
+        _launcher.Built.ShouldBe([@"c:\repo\shop"]);
+        _launcher.Ran.ShouldBe([@"programs\shop.lnk"]);
+    }
+
+    [Fact]
+    public void A_checkout_and_its_worktree_share_a_row_whose_buttons_are_the_checkouts()
+    {
+        // One app, one shortcut, one marker: the row's buttons act on the first line, and Run is there (#454).
+        var checkout = StableLine(@"c:\repo\app", @"E:\Stable\App\app-install.json", UpToDate, "app");
+        var worktree = StableLine(@"c:\repo\app-wt", @"E:\Stable\App\app-install.json", UpToDate, "app-wt");
+        _tile.ShowGit([checkout, worktree with { StableBuild = worktree.StableBuild! with { ShortcutName = "app.lnk" } }]);
+
+        var buttons = _tile.StableRows.ShouldHaveSingleItem().Buttons.ShouldNotBeNull();
+        buttons.RepoPath.ShouldBe(@"c:\repo\app");
+        buttons.HasRun.ShouldBeTrue();
+        buttons.RunName.ShouldBe("Run");
+    }
+
+    [Fact]
     public void A_named_row_without_a_build_leads_with_the_name_and_a_lone_one_with_nothing()
     {
         _tile.ShowGit(

@@ -331,7 +331,7 @@
                     <DockPanel HorizontalAlignment="Left" LastChildFill="True">
                       <!-- A press on a greyed button, or between the two, is taken here, so it does not open the window (#454). The arrow, as
                            such a press does nothing; a live button shows its own hand. -->
-                      <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Background="Transparent" Margin="6,0,0,0" Cursor="Arrow" VerticalAlignment="Center"
+                      <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Background="Transparent" Cursor="Arrow" VerticalAlignment="Center"
                                   MouseLeftButtonDown="OnStableButtonsMouseDown" Visibility="{Binding Buttons, Converter={StaticResource NullToCollapsed}}">
                         <Button Style="{StaticResource StableRowButton}" Content="&#xE768;"
                                 Command="{Binding DataContext.RunStableCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"
@@ -341,7 +341,7 @@
                                 Command="{Binding DataContext.BuildStableCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"
                                 IsEnabled="{Binding Buttons.CanBuild}" ToolTip="{Binding Buttons.BuildToolTip}" AutomationProperties.Name="{Binding Buttons.BuildName}" />
                       </StackPanel>
-                      <TextBlock DockPanel.Dock="Right" Text="{Binding Status.Version}" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center"
+                      <TextBlock DockPanel.Dock="Right" Text="{Binding Status.Version}" FontSize="13" FontWeight="SemiBold" Margin="0,0,4,0" VerticalAlignment="Center"
                                  Visibility="{Binding Status.Version, Converter={StaticResource NullToCollapsed}}" />
                       <!-- The 4 px before the number sit on the lead, so a row without one starts at the edge. Read out as the whole title. -->
                       <TextBlock Text="{Binding Lead}" FontSize="13" Opacity="0.7" Margin="0,0,4,0" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
