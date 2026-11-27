@@ -30,6 +30,12 @@ public partial class YardView : UserControl
         e.Handled = true;
     }
 
+    /// <summary>
+    /// A press on a stable row's buttons (#454): a greyed button takes no press, so it, or one between the two, would reach the tile and
+    /// open the window. A live button handles its own press already.
+    /// </summary>
+    private void OnStableButtonsMouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e) => e.Handled = true;
+
     private void OnBoardMouseMove(object sender, System.Windows.Input.MouseEventArgs e) => (DataContext as YardViewModel)?.HoldOrder();
 
     /// <summary>

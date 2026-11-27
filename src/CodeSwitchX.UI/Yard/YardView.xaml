@@ -130,6 +130,39 @@
          green when clean, amber with uncommitted changes, none when git could not tell -->
     <!-- GitLineTemplate is in App.xaml: Raven's chat header shows the same lines. -->
 
+    <!-- A stable row's Run and Build buttons (#454): a glyph on a quiet square that lights up under the mouse, faint when greyed; the
+         tooltip says why on a greyed one. The text colour is set: a style of its own leaves the theme's button colours behind. -->
+    <Style x:Key="StableRowButton" TargetType="Button">
+      <Setter Property="Width" Value="22" />
+      <Setter Property="Height" Value="20" />
+      <Setter Property="Margin" Value="2,0,0,0" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}" />
+      <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets" />
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="ToolTipService.ShowOnDisabled" Value="True" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Face" CornerRadius="4" Background="{TemplateBinding Background}">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Face" Property="Background" Value="#22FFFFFF" />
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="Face" Property="Opacity" Value="0.35" />
+                <Setter Property="Cursor" Value="Arrow" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
     <DataTemplate x:Key="TileTemplate" DataType="{x:Type yard:WorkspaceTileViewModel}">
       <!-- the Tile size slider sizes the tile and the Font size slider its text, each apart from the other (#295) -->
       <Border x:Name="TileBorder" Margin="8" Padding="12" CornerRadius="10" BorderThickness="2"
@@ -235,7 +268,8 @@
               </Style>
             </TextBlock.Style>
           </TextBlock>
-          <!-- the installed stable builds under a line (#452): version and pill, no click of their own (a click opens the window, as one on the tile does) -->
+          <!-- the installed stable builds under a line (#452): version, Run and Build buttons (#454) and pill; a click on the row
+               outside the buttons opens the window, as one on the tile does -->
           <StackPanel>
             <StackPanel.Style>
               <Style TargetType="StackPanel">
@@ -250,21 +284,11 @@
             <ItemsControl ItemsSource="{Binding StableRows}">
               <ItemsControl.ItemTemplate>
                 <DataTemplate DataType="{x:Type yard:StableBuildRow}">
-                  <!-- the tooltip on the whole row: a build not compared yet has no pill, and its version says why on hover -->
-                  <StackPanel Orientation="Horizontal" Margin="0,1" ToolTip="{Binding Status.ToolTip}">
-                    <TextBlock Text="{Binding Title}" FontSize="12" Opacity="0.8" VerticalAlignment="Center">
-                      <TextBlock.Style>
-                        <Style TargetType="TextBlock">
-                          <Style.Triggers>
-                            <DataTrigger Binding="{Binding Title}" Value="{x:Null}">
-                              <Setter Property="Visibility" Value="Collapsed" />
-                            </DataTrigger>
-                          </Style.Triggers>
-                        </Style>
-                      </TextBlock.Style>
-                    </TextBlock>
+                  <!-- the tooltip on the whole row: a build not compared yet has no pill, and its version says why on hover.
+                       The pill at the right edge; at the left the lead, the version and right after it the buttons (#454). -->
+                  <DockPanel Margin="0,1" LastChildFill="True" ToolTip="{Binding Status.ToolTip}">
                     <!-- styled like the git state pill: green up to date, amber outdated, grey no stable build; none where nothing is known -->
-                    <Border CornerRadius="8" Padding="7,0,7,1" Margin="8,0,0,0" VerticalAlignment="Center" BorderThickness="1">
+                    <Border DockPanel.Dock="Right" CornerRadius="8" Padding="7,0,7,1" Margin="8,0,0,0" VerticalAlignment="Center" BorderThickness="1">
                       <Border.Style>
                         <Style TargetType="Border">
                           <Setter Property="Background" Value="#14FFFFFF" />
@@ -302,7 +326,28 @@
                         </TextBlock.Style>
                       </TextBlock>
                     </Border>
-                  </StackPanel>
+                    <!-- Left-aligned, so the buttons sit right after the version while there is room; where there is not, the lead trims and the
+                         version and the buttons stay whole (#454). -->
+                    <DockPanel HorizontalAlignment="Left" LastChildFill="True">
+                      <!-- A press on a greyed button, or between the two, is taken here, so it does not open the window (#454). The arrow, as
+                           such a press does nothing; a live button shows its own hand. -->
+                      <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Background="Transparent" Margin="6,0,0,0" Cursor="Arrow" VerticalAlignment="Center"
+                                  MouseLeftButtonDown="OnStableButtonsMouseDown" Visibility="{Binding Buttons, Converter={StaticResource NullToCollapsed}}">
+                        <Button Style="{StaticResource StableRowButton}" Content="&#xE768;"
+                                Command="{Binding DataContext.RunStableCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"
+                                IsEnabled="{Binding Buttons.CanRun}" ToolTip="{Binding Buttons.RunToolTip}" AutomationProperties.Name="{Binding Buttons.RunName}"
+                                Visibility="{Binding Buttons.HasRun, Converter={StaticResource BoolVisible}}" />
+                        <Button Style="{StaticResource StableRowButton}" Content="&#xE90F;"
+                                Command="{Binding DataContext.BuildStableCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"
+                                IsEnabled="{Binding Buttons.CanBuild}" ToolTip="{Binding Buttons.BuildToolTip}" AutomationProperties.Name="{Binding Buttons.BuildName}" />
+                      </StackPanel>
+                      <TextBlock DockPanel.Dock="Right" Text="{Binding Status.Version}" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center"
+                                 Visibility="{Binding Status.Version, Converter={StaticResource NullToCollapsed}}" />
+                      <!-- The 4 px before the number sit on the lead, so a row without one starts at the edge. Read out as the whole title. -->
+                      <TextBlock Text="{Binding Lead}" FontSize="13" Opacity="0.7" Margin="0,0,4,0" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                                 AutomationProperties.Name="{Binding Title}" Visibility="{Binding Lead, Converter={StaticResource NullToCollapsed}}" />
+                    </DockPanel>
+                  </DockPanel>
                 </DataTemplate>
               </ItemsControl.ItemTemplate>
             </ItemsControl>
