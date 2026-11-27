@@ -286,6 +286,24 @@ public class StableBuildEntryTests : IDisposable
     }
 
     [Fact]
+    public async Task A_row_whose_apps_run_is_another_lines_shows_and_starts_it()
+    {
+        // The checkout's scripts name no install marker (no row), its worktree's do: the menu's Run is the checkout's entry (#454).
+        var worktree = StableLine(@"c:\repo\app-wt", @"E:\Stable\App\app-install.json", UpToDate, "app-wt");
+        _tile.ShowGit([Line(@"c:\repo\app"), worktree with { StableBuild = worktree.StableBuild! with { ShortcutName = "app.lnk" } }]);
+
+        var row = _tile.StableRows.ShouldHaveSingleItem();
+        await _tile.RunStableCommand.ExecuteAsync(row);
+
+        var buttons = row.Buttons.ShouldNotBeNull();
+        buttons.RepoPath.ShouldBe(@"c:\repo\app-wt");
+        buttons.RunName.ShouldBe("Run");
+        buttons.CanRun.ShouldBeTrue();
+        _launcher.Ran.ShouldBe([@"programs\app.lnk"]);
+        _dialogs.Told.ShouldBeEmpty();
+    }
+
+    [Fact]
     public void A_named_row_without_a_build_leads_with_the_name_and_a_lone_one_with_nothing()
     {
         _tile.ShowGit(

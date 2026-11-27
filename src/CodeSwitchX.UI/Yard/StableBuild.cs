@@ -372,7 +372,7 @@ public sealed record StableBuildRow(string? Title, StableBuildStatus Status, Sta
 /// <param name="Name">What the dialogs call the app.</param>
 /// <param name="BuildName">The Build entry's header: "Build new version", or "Build App" on a tile with several.</param>
 /// <param name="BuildBlock">Why Build is greyed; null when it may start.</param>
-/// <param name="RunName">The Run entry's header; null for no Run (another repository on the tile opens the same shortcut).</param>
+/// <param name="RunName">The Run entry's header, its own or that of the entry on the tile that opens the same shortcut; null for no Run.</param>
 /// <param name="RunBlock">Why Run is greyed; null when the shortcut is there.</param>
 public sealed record StableBuildButtons(string RepoPath, string Name, string BuildName, string? BuildBlock, string? RunName, string? RunBlock)
 {
@@ -382,8 +382,20 @@ public sealed record StableBuildButtons(string RepoPath, string Name, string Bui
     public string BuildToolTip => BuildBlock ?? BuildName;
     public string? RunToolTip => RunBlock ?? RunName;
 
-    public static StableBuildButtons Of(StableBuildEntry entry) =>
-        new(entry.RepoPath, entry.Name, entry.BuildHeader, entry.BuildBlock, entry.RunHeader, entry.RunBlock);
+    /// <param name="entry">The entry of the row's repository: its Build.</param>
+    /// <param name="run">The entry whose Run the row shows: <see cref="RunEntryOf"/>.</param>
+    public static StableBuildButtons Of(StableBuildEntry entry, StableBuildEntry run) =>
+        new(entry.RepoPath, entry.Name, entry.BuildHeader, entry.BuildBlock, run.RunHeader, run.RunBlock);
+
+    /// <summary>
+    /// The entry that starts the row's app (#454). The tile's entries give one Run per shortcut, to the first line that has it, and that
+    /// line may have no row: a checkout whose scripts name no install marker, before its worktree whose scripts do. The row then shows
+    /// that entry's Run, so its app can be started from the row as from the menu.
+    /// </summary>
+    public static StableBuildEntry RunEntryOf(IReadOnlyList<StableBuildEntry> entries, StableBuildEntry entry) =>
+        entry.RunHeader is not null
+            ? entry
+            : entries.FirstOrDefault(e => e.RunHeader is not null && string.Equals(e.ShortcutName, entry.ShortcutName, StringComparison.OrdinalIgnoreCase)) ?? entry;
 }
 
 /// <summary>Whether a line's git state lets a stable build start (#423): the user's precheck, before the script's own stricter ones.</summary>
@@ -540,6 +552,9 @@ public sealed partial class StableBuildEntry
 
     /// <summary>The repository the entry builds: what a stable row's buttons find their entry by (#454).</summary>
     internal string RepoPath => _repo.RepoPath;
+
+    /// <summary>The shortcut the entry's app is started through: what tells the entries of one app (#454).</summary>
+    internal string ShortcutName => _repo.ShortcutName;
     public string BuildHeader { get; }
 
     /// <summary>Null when the entry has no Run: another one on the tile opens the same shortcut (#425).</summary>

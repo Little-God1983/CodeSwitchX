@@ -80,7 +80,7 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
         {
             var name = lines.Count > 1 ? StableBuildEntry.NameOf(l) : null;
             var entry = EntryOf(entries, l.StableBuild!.RepoPath);
-            return new StableBuildRow(StableBuildRow.TitleOf(l.Stable!, name), l.Stable!, entry is null ? null : StableBuildButtons.Of(entry), StableBuildRow.LeadOf(l.Stable!, name));
+            return new StableBuildRow(StableBuildRow.TitleOf(l.Stable!, name), l.Stable!, entry is null ? null : StableBuildButtons.Of(entry, StableBuildButtons.RunEntryOf(entries, entry)), StableBuildRow.LeadOf(l.Stable!, name));
         })];
         if (!StableRows.SequenceEqual(rows))
         {
@@ -663,12 +663,15 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
             return;
         }
 
-        if (EntryOf(StableBuildEntries(), buttons.RepoPath) is not { } entry)
+        var entries = StableBuildEntries();
+        if (EntryOf(entries, buttons.RepoPath) is not { } own)
         {
             _owner.Dialogs.Tell($"Not starting {buttons.Name}: its build scripts are not there any more.");
             return;
         }
 
+        // The Run of the row's app may be another line's entry: the one the row showed.
+        var entry = StableBuildButtons.RunEntryOf(entries, own);
         if (!entry.CanRun)
         {
             _owner.Dialogs.Tell($"Not starting {entry.Name}: no stable build yet.");
