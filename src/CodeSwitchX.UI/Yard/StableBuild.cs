@@ -321,6 +321,17 @@ public sealed record StableBuildStatus(StableFreshness Freshness, string? Versio
     };
 }
 
+/// <summary>One installed app's row under a tile's chats (#452): its version and the pill. Not clickable: a click goes to the tile.</summary>
+/// <param name="Title">"Stable 0.1.0.45", with the app's name before it on a tile with several ("App · Stable 0.1.0.45"); the name alone, or null on a lone row, for no build.</param>
+public sealed record StableBuildRow(string? Title, StableBuildStatus Status)
+{
+    internal static string? TitleOf(StableBuildStatus status, string? name) => (name, status.VersionText) switch
+    {
+        ({ } app, { } version) => $"{app} · {version}",
+        var (app, version) => app ?? version,
+    };
+}
+
 /// <summary>Whether a line's git state lets a stable build start (#423): the user's precheck, before the script's own stricter ones.</summary>
 public static class StableBuildCheck
 {
@@ -447,9 +458,7 @@ public sealed partial class StableBuildEntry
         _launcher = launcher;
         _dialogs = dialogs;
         _freshLine = freshLine;
-        var folder = Path.TrimEndingDirectorySeparator(repo.RepoPath);
-        // The name the tile's line shows (a workspace file's label), else the folder's; a drive root has no folder name: "E:\".
-        Name = line.Folder ?? (Path.GetFileName(folder) is { Length: > 0 } name ? name : folder);
+        Name = NameOf(line);
         BuildHeader = named ? $"Build {Name}" : "Build new version";
         RunHeader = run switch
         {
@@ -460,6 +469,16 @@ public sealed partial class StableBuildEntry
         BuildBlock = StableBuildCheck.BuildBlock(line);
         _shortcutPath = launcher.ShortcutPath(repo.ShortcutName);
         RunBlock = launcher.ShortcutExists(_shortcutPath) ? null : "No stable build yet";
+    }
+
+    /// <summary>
+    /// What the entries call the app of a line with stable-build scripts, and so does its stable build's row (#452): the name the tile's
+    /// line shows (a workspace file's label), else the folder's; a drive root has no folder name: "E:\".
+    /// </summary>
+    internal static string NameOf(GitLine line)
+    {
+        var folder = Path.TrimEndingDirectorySeparator(line.StableBuild?.RepoPath ?? line.Path ?? string.Empty);
+        return line.Folder ?? (Path.GetFileName(folder) is { Length: > 0 } name ? name : folder);
     }
 
     /// <summary>The repository's folder name: what the dialog and the headers call the app.</summary>

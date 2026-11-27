@@ -63,6 +63,23 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     /// <summary>The tile's git lines: one per repository its folders are in, the root folder's first; see <see cref="GitLine"/>.</summary>
     [ObservableProperty] private IReadOnlyList<GitLine> _gitLines = [GitLine.Unknown];
 
+    /// <summary>The installed stable builds under the chats (#452): one row per app the lines' scripts install, in the order of the lines.</summary>
+    [ObservableProperty] private IReadOnlyList<StableBuildRow> _stableRows = [];
+
+    /// <summary>
+    /// The rows follow the lines. A checkout and its worktree install one app: one row. The rows carry the app's name only where there are
+    /// several. The same rows again keep the list, so a tooltip the user has open stays.
+    /// </summary>
+    partial void OnGitLinesChanged(IReadOnlyList<GitLine> value)
+    {
+        var lines = value.Where(l => l is { Stable: not null, StableBuild.MarkerPath: not null }).DistinctBy(l => PathNormalizer.Normalize(l.StableBuild!.MarkerPath!)).ToList();
+        List<StableBuildRow> rows = [.. lines.Select(l => new StableBuildRow(StableBuildRow.TitleOf(l.Stable!, lines.Count > 1 ? StableBuildEntry.NameOf(l) : null), l.Stable!))];
+        if (!StableRows.SequenceEqual(rows))
+        {
+            StableRows = rows;
+        }
+    }
+
     public WorkspaceTileViewModel(Workspace workspace, YardViewModel owner)
     {
         Workspace = workspace;
