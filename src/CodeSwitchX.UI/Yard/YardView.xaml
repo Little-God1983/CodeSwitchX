@@ -130,8 +130,9 @@
          green when clean, amber with uncommitted changes, none when git could not tell -->
     <!-- GitLineTemplate is in App.xaml: Raven's chat header shows the same lines. -->
 
-    <!-- A stable row's Run and Build buttons (#454): a glyph on a quiet square that lights up under the mouse, faint when greyed; the
-         tooltip says why on a greyed one. The text colour is set: a style of its own leaves the theme's button colours behind. -->
+    <!-- A stable row's Run and Build buttons (#454): a glyph on a quiet square that lights up under the mouse, a little dimmed when disabled; the
+         tooltip says why on one that cannot be pressed, which is red. The text colour is set: a style of its own leaves the theme's button colours behind. -->
+    <SolidColorBrush x:Key="StableRowBlocked" Color="#F87171" />
     <Style x:Key="StableRowButton" TargetType="Button">
       <Setter Property="Width" Value="22" />
       <Setter Property="Height" Value="20" />
@@ -154,7 +155,7 @@
                 <Setter TargetName="Face" Property="Background" Value="#22FFFFFF" />
               </Trigger>
               <Trigger Property="IsEnabled" Value="False">
-                <Setter TargetName="Face" Property="Opacity" Value="0.35" />
+                <Setter TargetName="Face" Property="Opacity" Value="0.8" />
                 <Setter Property="Cursor" Value="Arrow" />
               </Trigger>
             </ControlTemplate.Triggers>
@@ -333,13 +334,40 @@
                            such a press does nothing; a live button shows its own hand. -->
                       <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Background="Transparent" Cursor="Arrow" VerticalAlignment="Center"
                                   MouseLeftButtonDown="OnStableButtonsMouseDown" Visibility="{Binding Buttons, Converter={StaticResource NullToCollapsed}}">
-                        <Button Style="{StaticResource StableRowButton}" Content="&#xE768;"
-                                Command="{Binding DataContext.RunStableCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"
-                                IsEnabled="{Binding Buttons.CanRun}" ToolTip="{Binding Buttons.RunToolTip}" AutomationProperties.Name="{Binding Buttons.RunName}"
-                                Visibility="{Binding Buttons.HasRun, Converter={StaticResource BoolVisible}}" />
-                        <Button Style="{StaticResource StableRowButton}" Content="&#xE90F;"
-                                Command="{Binding DataContext.BuildStableCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"
-                                IsEnabled="{Binding Buttons.CanBuild}" ToolTip="{Binding Buttons.BuildToolTip}" AutomationProperties.Name="{Binding Buttons.BuildName}" />
+                        <!-- A button that cannot be pressed is red, not faint, and says why on hover: a faint one that did nothing on a click
+                             was taken for a bug (#454). Red by the row's state, not by IsEnabled: a press under way greys the button too.
+                             The tooltip also on a border around it, which is never disabled, so the reason shows over the row's own tooltip. -->
+                        <Border Background="Transparent" ToolTip="{Binding Buttons.RunToolTip}"
+                                Visibility="{Binding Buttons.HasRun, Converter={StaticResource BoolVisible}}">
+                          <Button Content="&#xE768;"
+                                  Command="{Binding DataContext.RunStableCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"
+                                  IsEnabled="{Binding Buttons.CanRun}" ToolTip="{Binding Buttons.RunToolTip}" AutomationProperties.Name="{Binding Buttons.RunName}">
+                            <Button.Style>
+                              <Style TargetType="Button" BasedOn="{StaticResource StableRowButton}">
+                                <Style.Triggers>
+                                  <DataTrigger Binding="{Binding Buttons.CanRun}" Value="False">
+                                    <Setter Property="Foreground" Value="{StaticResource StableRowBlocked}" />
+                                  </DataTrigger>
+                                </Style.Triggers>
+                              </Style>
+                            </Button.Style>
+                          </Button>
+                        </Border>
+                        <Border Background="Transparent" ToolTip="{Binding Buttons.BuildToolTip}">
+                          <Button Content="&#xE90F;"
+                                  Command="{Binding DataContext.BuildStableCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"
+                                  IsEnabled="{Binding Buttons.CanBuild}" ToolTip="{Binding Buttons.BuildToolTip}" AutomationProperties.Name="{Binding Buttons.BuildName}">
+                            <Button.Style>
+                              <Style TargetType="Button" BasedOn="{StaticResource StableRowButton}">
+                                <Style.Triggers>
+                                  <DataTrigger Binding="{Binding Buttons.CanBuild}" Value="False">
+                                    <Setter Property="Foreground" Value="{StaticResource StableRowBlocked}" />
+                                  </DataTrigger>
+                                </Style.Triggers>
+                              </Style>
+                            </Button.Style>
+                          </Button>
+                        </Border>
                       </StackPanel>
                       <TextBlock DockPanel.Dock="Right" Text="{Binding Status.Version}" FontSize="13" FontWeight="SemiBold" Margin="0,0,4,0" VerticalAlignment="Center"
                                  Visibility="{Binding Status.Version, Converter={StaticResource NullToCollapsed}}" />
