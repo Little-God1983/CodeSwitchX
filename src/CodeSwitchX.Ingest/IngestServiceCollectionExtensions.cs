@@ -1,5 +1,6 @@
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Ingest.Api;
+using CodeSwitchX.Ingest.ClaudeSettings;
 using CodeSwitchX.Ingest.Hooks;
 using CodeSwitchX.Ingest.Transcripts;
 using Microsoft.Extensions.DependencyInjection;
@@ -13,7 +14,7 @@ namespace CodeSwitchX.Ingest;
 /// </summary>
 public static class IngestServiceCollectionExtensions
 {
-    /// <summary>The Event API (the hook pipe and its token), the stops it hands the hooks, the asks it holds, and the hook installer.</summary>
+    /// <summary>The Event API (the hook pipe and its token), the stops it hands the hooks, the asks it holds, the hook installer, and Claude Code's idle compaction setting.</summary>
     public static IServiceCollection AddCodeSwitchXEventApi(this IServiceCollection services, Action<EventApiOptions>? configure = null)
     {
         var options = new EventApiOptions();
@@ -25,6 +26,7 @@ public static class IngestServiceCollectionExtensions
         services.AddSingleton<EventApiService>();
         services.AddHostedService(sp => sp.GetRequiredService<EventApiService>());
         services.AddSingleton<ClaudeHookInstaller>();
+        services.AddSingleton<IdleCompactionSetting>();
         return services;
     }
 

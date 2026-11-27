@@ -1,11 +1,13 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using CodeSwitchX.Conductor;
 using CodeSwitchX.Core;
 using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Core.Yard;
 using CodeSwitchX.Data;
+using CodeSwitchX.Ingest.ClaudeSettings;
 using CodeSwitchX.Ingest.Hooks;
 using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Voice;
@@ -19,6 +21,7 @@ using LittleGod.Speech.Sidecar;
 using LittleGod.Speech.Speaking;
 using LittleGod.Speech.Whisper;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Path = System.IO.Path;
 
 namespace CodeSwitchX.UI.Settings;
@@ -40,7 +43,28 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly SoundLibrary _library;
     private readonly ISoundFilePicker? _soundFiles;
     private readonly AudioLevels _levels;
+    private readonly IdleCompactionSetting _idleCompactionSetting;
     private bool _loading;
+
+    /// <summary>Set while the page shows what settings.json says, so showing it is not taken for a change to save (#450).</summary>
+    private bool _showingIdleCompaction;
+
+    /// <summary>
+    /// Idle compaction saves queued or running (review of #450). While any is, the page is not shown from the file, which
+    /// may not hold them yet. Interlocked: the count drops after an await, on the UI thread in the app, on a pool thread in tests.
+    /// </summary>
+    private int _idleCompactionSaves;
+
+    /// <summary>The idle compaction writes, each behind the one before, on the pool only. Under <see cref="_saveGate"/>.</summary>
+    private Task _idleCompactionWrites = Task.CompletedTask;
+
+    /// <summary>
+    /// A save of the run under way failed (review of #450): its message stays, and a save behind it that succeeds does not
+    /// put "saved" over it, or the control that jumps back to the file would have no reason on screen. Read and set only
+    /// where a save tells its outcome, which happens one save after another.
+    /// </summary>
+    private bool _idleCompactionSaveFailed;
+
     private readonly Lock _saveGate = new();
     private readonly Dictionary<string, Func<CancellationToken, Task>> _pendingSaves = [];
     private Task _drain = Task.CompletedTask;
@@ -190,6 +214,47 @@ public sealed partial class SettingsViewModel : ObservableObject
     public static string HideIdleText(int hours) => hours == 0 ? "Never" : hours == 1 ? "1 hour" : $"{hours} hours";
 
     /// <summary>
+    /// Whether Claude Code compacts a chat that went idle before its cache runs out (#450): its own <c>idleCompaction</c>,
+    /// read from and written to its settings.json only; CodeSwitchX stores nothing of it.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IdleCompactionSizeEnabled))]
+    private bool _idleCompaction = true;
+
+    /// <summary>
+    /// The chat size, in tokens, from which Claude Code compacts an idle chat (#450): one of <see cref="IdleCompactionChoices"/>,
+    /// or 0, no selection, while the file holds a size the page cannot be sure how Claude Code reads.
+    /// </summary>
+    [ObservableProperty] private int _idleCompactionMinTokens = IdleCompactionSetting.DefaultMinTokens;
+
+    /// <summary>The sizes the Yard page offers (#450): <see cref="IdleCompactionSizes"/>, and the file's own size, in order, when it is none of them.</summary>
+    [ObservableProperty] private IReadOnlyList<SettingChoice> _idleCompactionChoices = IdleCompactionChoicesWith(IdleCompactionSetting.DefaultMinTokens);
+
+    /// <summary>Why settings.json could not be read (#450); null when it could. The card is disabled meanwhile.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IdleCompactionReadable))]
+    [NotifyPropertyChangedFor(nameof(IdleCompactionSizeEnabled))]
+    private string? _idleCompactionProblem;
+
+    /// <summary>The idle compaction sizes the Yard page offers (#450).</summary>
+    public static readonly IReadOnlyList<int> IdleCompactionSizes = [100_000, 150_000, 200_000, 300_000, 400_000];
+
+    /// <summary>"200,000 tokens": invariant culture, whatever the Windows locale (#450).</summary>
+    public static string TokensText(int tokens) => string.Create(CultureInfo.InvariantCulture, $"{tokens:N0} tokens");
+
+    public bool IdleCompactionReadable => IdleCompactionProblem is null;
+
+    /// <summary>The size matters only while the switch is on (#450).</summary>
+    public bool IdleCompactionSizeEnabled => IdleCompactionReadable && IdleCompaction;
+
+    /// <summary>Done once every idle compaction change so far is written, or failed (#450); it never faults. For tests.</summary>
+    internal Task IdleCompactionSaved { get; private set; } = Task.CompletedTask;
+
+    /// <summary>The listed sizes, and <paramref name="minTokens"/> among them when it is none; null adds nothing.</summary>
+    private static IReadOnlyList<SettingChoice> IdleCompactionChoicesWith(int? minTokens) =>
+        [.. IdleCompactionSizes.Concat(minTokens is { } own ? [own] : []).Distinct().Order().Select(t => new SettingChoice(t, TokensText(t)))];
+
+    /// <summary>
     /// The sidebar shows only the pages' icons, so a narrow window keeps room for the page (#162); the shell sets it from
     /// the window's width.
     /// </summary>
@@ -271,7 +336,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         ChatSettings chats, SpeechSettings speech, SpeechEngines engines, IWhisperModelStore whisper, VoiceStatusViewModel voice, AppPaths paths,
         ClaudeCodePaths claude, IVoiceSamples samples, IUiDispatcher ui, ILogger<SettingsViewModel> logger, ChatHotkeys? shortcuts = null,
         IChatSounds? sounds = null, AudioLevels? levels = null, SoundPicks? picks = null, SoundLibrary? library = null,
-        ISoundFilePicker? soundFiles = null, GitHubPageViewModel? gitHub = null)
+        ISoundFilePicker? soundFiles = null, GitHubPageViewModel? gitHub = null, IdleCompactionSetting? idleCompaction = null)
     {
         GitHub = gitHub;
         _sounds = sounds;
@@ -297,6 +362,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         DataFolder = paths.Root;
         LogsFolder = paths.LogsDirectory;
         SettingsFile = claude.SettingsFile;
+        _idleCompactionSetting = idleCompaction ?? new IdleCompactionSetting(claude, NullLogger<IdleCompactionSetting>.Instance);
         _relayExecutable = DefaultRelayExecutable;
         Pages = [.. SettingsPageItem.All];
         WhisperRows =
@@ -604,6 +670,45 @@ public sealed partial class SettingsViewModel : ObservableObject
             HookInstallState.Unreadable => $"Unknown: {status.Problem}",
             _ => "Not installed. Tile states fall back to transcript inference.",
         };
+        ShowIdleCompaction();
+    }
+
+    /// <summary>
+    /// What settings.json says now (#450), read on the calling thread as the hook status is. Unreadable, the card is disabled
+    /// and keeps what it showed; nothing is written until the user changes something. Not while a save is queued or running:
+    /// the last of them shows the file once it is done (review of #450).
+    /// </summary>
+    private void ShowIdleCompaction()
+    {
+        if (Volatile.Read(ref _idleCompactionSaves) > 0)
+        {
+            return;
+        }
+
+        _showingIdleCompaction = true;
+        try
+        {
+            var value = _idleCompactionSetting.Read();
+            var choices = IdleCompactionChoicesWith(value.MinTokens);
+            // The same sizes keep the list: a picker whose items are replaced under it drops its selection for a moment.
+            if (!choices.Select(c => c.Value).SequenceEqual(IdleCompactionChoices.Select(c => c.Value)))
+            {
+                IdleCompactionChoices = choices;
+            }
+
+            IdleCompaction = value.Enabled;
+            // A size the page cannot be sure of is no selection: 0 matches no choice (review of #450).
+            IdleCompactionMinTokens = value.MinTokens ?? 0;
+            IdleCompactionProblem = null;
+        }
+        catch (ClaudeSettingsException ex)
+        {
+            IdleCompactionProblem = ex.Message;
+        }
+        finally
+        {
+            _showingIdleCompaction = false;
+        }
     }
 
     /// <summary>Off the UI thread: the installer retries the file replace for about half a second while another process holds settings.json.</summary>
@@ -890,6 +995,97 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     partial void OnYardMaxChatsChanged(int value) => Persist(SettingKeys.YardMaxChats, value);
 
+    partial void OnIdleCompactionChanged(bool value) => SaveIdleCompaction(value, null);
+
+    /// <summary>
+    /// A picker whose items change under it sets its value to 0 for a moment, and 0 is what the page shows for a size it cannot
+    /// read: no size Claude Code takes, so not saved.
+    /// </summary>
+    partial void OnIdleCompactionMinTokensChanged(int value)
+    {
+        if (value >= IdleCompactionSetting.LowestMinTokens)
+        {
+            SaveIdleCompaction(null, value);
+        }
+    }
+
+    /// <summary>
+    /// Queues a write of the value the user changed, and only that one (#450, review): the other may have changed in the file
+    /// since the page read it. Behind the writes before it, so two quick changes land in order. Showing the file is no change.
+    /// </summary>
+    private void SaveIdleCompaction(bool? enabled, int? minTokens)
+    {
+        if (_showingIdleCompaction || _loading)
+        {
+            return;
+        }
+
+        Interlocked.Increment(ref _idleCompactionSaves);
+        Task<(bool Written, Exception? Failure)> write;
+        lock (_saveGate)
+        {
+            write = WriteIdleCompactionAsync(_idleCompactionWrites, enabled, minTokens);
+            _idleCompactionWrites = write;
+        }
+
+        IdleCompactionSaved = ShowIdleCompactionSavedAsync(IdleCompactionSaved, write);
+    }
+
+    /// <summary>
+    /// The write itself, behind the one before it and off the UI thread from start to end, as the hook install is: the file
+    /// replace is retried for about half a second while another process holds settings.json. It never needs the UI thread,
+    /// which the app's exit blocks while it waits for this, and never faults, so the write behind it always runs.
+    /// </summary>
+    private async Task<(bool Written, Exception? Failure)> WriteIdleCompactionAsync(Task before, bool? enabled, int? minTokens)
+    {
+        await before.ConfigureAwait(false);
+        try
+        {
+            return (await Task.Run(() => _idleCompactionSetting.Write(enabled, minTokens)).ConfigureAwait(false), null);
+        }
+        catch (Exception ex)
+        {
+            return (false, ex);
+        }
+    }
+
+    /// <summary>
+    /// What a write came to, told on the UI thread, in the order the changes were made. A failure says why. The last save of
+    /// a run shows the file, after success as after failure, so the controls never claim what it does not hold, and a failed
+    /// save does not reset them under one still queued (review of #450). It never faults.
+    /// </summary>
+    private async Task ShowIdleCompactionSavedAsync(Task before, Task<(bool Written, Exception? Failure)> write)
+    {
+        try
+        {
+            await before;
+            var (written, failure) = await write;
+            if (failure is ClaudeSettingsException)
+            {
+                _idleCompactionSaveFailed = true;
+                LastMessage = failure.Message;
+            }
+            else if (failure is not null)
+            {
+                _idleCompactionSaveFailed = true;
+                _logger.LogError(failure, "Saving idle compaction failed");
+                LastMessage = "Idle compaction could not be saved. The log says why.";
+            }
+            else if (written && !_idleCompactionSaveFailed)
+            {
+                LastMessage = $"Idle compaction saved to {SettingsFile}.";
+            }
+        }
+        finally
+        {
+            if (Interlocked.Decrement(ref _idleCompactionSaves) == 0)
+            {
+                _idleCompactionSaveFailed = false;
+                ShowIdleCompaction();
+            }
+        }
+    }
+
     partial void OnRavenMutedWindowsChanged(IReadOnlyList<Guid> value) => Persist(SettingKeys.RavenMutedWindows, value);
 
     partial void OnRavenCatchUpChanged(bool value) => Persist(SettingKeys.RavenCatchUp, value);
@@ -1068,17 +1264,22 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     /// <summary>
     /// Waits for the saves queued so far. The app's exit calls this before the host stops, so a value changed right
-    /// before the exit is in the database at the next start, the way the view and the writer already had it.
+    /// before the exit is in the database at the next start, the way the view and the writer already had it. The idle
+    /// compaction writes too, so a switch flipped right before the exit is in Claude Code's settings.json (review of #450):
+    /// the writes, not <see cref="IdleCompactionSaved"/>, whose last step needs the UI thread the exit is blocking.
     /// </summary>
     public async Task FlushSavesAsync(CancellationToken ct)
     {
         Task drain;
+        Task idleCompaction;
         lock (_saveGate)
         {
             drain = _drain;
+            idleCompaction = _idleCompactionWrites;
         }
 
         await drain.WaitAsync(ct).ConfigureAwait(false);
+        await idleCompaction.WaitAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>

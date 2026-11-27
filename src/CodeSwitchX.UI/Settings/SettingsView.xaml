@@ -1282,6 +1282,35 @@
               </DockPanel>
             </StackPanel>
           </Border>
+          <!-- Claude Code's idle compaction, kept in its settings.json only (#450) -->
+          <Border Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Style="{StaticResource H3}" Text="Compaction while idle" />
+              <TextBlock Style="{StaticResource Help}"
+                         Text="Claude Code's own doing, set here: these two are saved in its settings file, not in CodeSwitchX." />
+              <TextBlock Text="{Binding IdleCompactionProblem}" Foreground="#F59E0B" FontSize="12.5" TextWrapping="Wrap" Margin="0,8,0,0"
+                         Visibility="{Binding IdleCompactionProblem, Converter={StaticResource NullToCollapsed}}" />
+              <DockPanel Margin="0,16,0,0">
+                <CheckBox DockPanel.Dock="Right" Style="{StaticResource Switch}" IsChecked="{Binding IdleCompaction}" IsEnabled="{Binding IdleCompactionReadable}"
+                          AutomationProperties.Name="Compact a chat before its cache runs out" Margin="16,0,0,0" />
+                <StackPanel>
+                  <TextBlock Text="Compact a chat before its cache runs out" FontSize="14.5" FontWeight="SemiBold" />
+                  <TextBlock Style="{StaticResource Help}" Margin="0,3,0,0"
+                             Text="After 54 idle minutes Claude Code writes a summary while the chat's cache is still warm. Back after the hour, the chat carries on from the summary. Back sooner, it keeps its whole conversation." />
+                </StackPanel>
+              </DockPanel>
+              <DockPanel Margin="0,16,0,0">
+                <ComboBox DockPanel.Dock="Right" Width="170" FontSize="14" Margin="16,0,0,0" VerticalAlignment="Center" AutomationProperties.Name="Idle compaction for chats from"
+                          ItemsSource="{Binding IdleCompactionChoices}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding IdleCompactionMinTokens}"
+                          IsEnabled="{Binding IdleCompactionSizeEnabled}" />
+                <StackPanel>
+                  <TextBlock Text="For chats from" FontSize="14.5" FontWeight="SemiBold" />
+                  <TextBlock Style="{StaticResource Help}" Margin="0,3,0,0"
+                             Text="Smaller chats are left alone. Claude Code goes no lower than 100,000. A change applies to chats opened after it." />
+                </StackPanel>
+              </DockPanel>
+            </StackPanel>
+          </Border>
         </StackPanel>
 
         <!-- GitHub -->
